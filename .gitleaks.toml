@@ -1,0 +1,21 @@
+title = "agent-balancer"
+
+[extend]
+useDefault = true
+
+# The default rules match only two API key prefixes; this one covers the whole token family.
+[[rules]]
+id = "anthropic-token-family"
+description = "Token of the sk-ant- family"
+regex = '''sk-ant-[A-Za-z0-9_-]{16,}'''
+keywords = ["sk-ant-"]
+
+[allowlist]
+description = "Local and generated folders are not part of the repository"
+paths = [
+  '''^\.build/''',
+  '''^build/''',
+  '''^\.claude/''',
+  '''^\.claude-working/''',
+  '''^\.swiftpm/''',
+]

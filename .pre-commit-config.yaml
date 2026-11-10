@@ -1,0 +1,9 @@
+# Optional. Contributors who use pre-commit can run the same gate before each commit.
+repos:
+  - repo: local
+    hooks:
+      - id: check
+        name: scripts/check.sh
+        entry: scripts/check.sh
+        language: system
+        pass_filenames: false

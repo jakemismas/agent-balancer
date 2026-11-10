@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <title>agent-balancer icon: splitter tile (chosen)</title>
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#DE8160"/>
+      <stop offset="1" stop-color="#B9583A"/>
+    </linearGradient>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#tile)"/>
+  <g fill="#FBF3E8">
+    <rect x="290" y="205" width="150" height="290" rx="34"/>
+    <rect x="584" y="205" width="150" height="290" rx="34"/>
+    <rect x="437" y="560" width="150" height="260" rx="34"/>
+    <rect x="262" y="455" width="500" height="150" rx="48"/>
+  </g>
+  <g fill="none" stroke="#C4643F" stroke-width="26" stroke-linecap="round" stroke-linejoin="round">
+    <polyline points="325,345 365,305 405,345"/>
+    <polyline points="619,345 659,305 699,345"/>
+    <polyline points="472,745 512,705 552,745"/>
+  </g>
+  <g fill="#C4643F">
+    <circle cx="315" cy="530" r="17"/>
+    <circle cx="709" cy="530" r="17"/>
+  </g>
+</svg>

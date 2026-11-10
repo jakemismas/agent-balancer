@@ -1,0 +1,670 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>agent-balancer render</title>
+<style>
+  :root {
+    --page-bg: #efe9e2;
+    --page-text: #2a2420;
+    --page-text-2: #6b625b;
+    --card-bg: #fbf8f4;
+    --card-border: rgba(60, 40, 30, 0.12);
+    --wall: radial-gradient(120% 90% at 85% 0%, #f6d3b8 0%, #ec9f7c 32%, #c7684b 62%, #6d3b33 100%);
+    --menubar-bg: rgba(255, 255, 255, 0.28);
+    --menubar-text: #1d1916;
+    --menubar-pressed: rgba(0, 0, 0, 0.12);
+    --panel-bg: rgba(250, 247, 243, 0.86);
+    --panel-border: rgba(0, 0, 0, 0.14);
+    --panel-shadow: 0 22px 60px rgba(45, 20, 10, 0.38), 0 2px 8px rgba(45, 20, 10, 0.18);
+    --text-1: #1c1916;
+    --text-2: #5a524b;
+    --text-3: #8b837b;
+    --sep: rgba(0, 0, 0, 0.09);
+    --hover: rgba(0, 0, 0, 0.055);
+    --accent: #c4613d;
+    --track: rgba(196, 97, 61, 0.20);
+    --estimate: rgba(196, 97, 61, 0.75);
+    --line-mark: #2b2420;
+    --warn: #fab219;
+    --warn-ink: #8a5a00;
+    --crit: #d03b3b;
+    --good: #0ca30c;
+    --badge-bg: rgba(0, 0, 0, 0.06);
+    --badge-main-bg: rgba(196, 97, 61, 0.15);
+    --badge-main-ink: #94431f;
+    --next-bg: rgba(196, 97, 61, 0.10);
+    --focus: #2f6fdb;
+  }
+  :root[data-theme="dark"] {
+    --page-bg: #171412;
+    --page-text: #efe8e1;
+    --page-text-2: #a99f96;
+    --card-bg: #221e1b;
+    --card-border: rgba(255, 255, 255, 0.10);
+    --wall: radial-gradient(120% 90% at 85% 0%, #6a3a2c 0%, #4a2a22 35%, #2a1b18 70%, #120e0d 100%);
+    --menubar-bg: rgba(20, 16, 14, 0.30);
+    --menubar-text: #f6f1ec;
+    --menubar-pressed: rgba(255, 255, 255, 0.16);
+    --panel-bg: rgba(40, 35, 32, 0.84);
+    --panel-border: rgba(255, 255, 255, 0.13);
+    --panel-shadow: 0 22px 60px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.35);
+    --text-1: #f4efe9;
+    --text-2: #bdb4ab;
+    --text-3: #8f867e;
+    --sep: rgba(255, 255, 255, 0.09);
+    --hover: rgba(255, 255, 255, 0.07);
+    --accent: #e57d55;
+    --track: rgba(229, 125, 85, 0.24);
+    --estimate: rgba(229, 125, 85, 0.85);
+    --line-mark: #f4efe9;
+    --warn-ink: #fab219;
+    --badge-bg: rgba(255, 255, 255, 0.08);
+    --badge-main-bg: rgba(229, 125, 85, 0.20);
+    --badge-main-ink: #f2a385;
+    --next-bg: rgba(229, 125, 85, 0.12);
+    --focus: #6ea0ff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { color-scheme: dark; }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--page-bg);
+    color: var(--page-text);
+    font: 13px/1.38 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .page { max-width: 1180px; margin: 0 auto; padding: 22px 16px 40px; }
+  .page-head { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 14px; }
+  .page-head h1 { font-size: 17px; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+  .page-head p { margin: 0; color: var(--page-text-2); font-size: 12px; flex: 1 1 320px; }
+  .seg { display: inline-flex; border: 1px solid var(--card-border); border-radius: 8px; overflow: hidden; background: var(--card-bg); }
+  .seg button, .file-btn {
+    font: inherit; font-size: 12px; border: 0; background: transparent; color: var(--page-text);
+    padding: 5px 11px; cursor: pointer;
+  }
+  .seg button[aria-pressed="true"] { background: var(--accent); color: #fff; }
+  .file-btn { border: 1px solid var(--card-border); border-radius: 8px; background: var(--card-bg); }
+  .file-btn:hover, .seg button:hover { filter: brightness(0.97); }
+  button:focus-visible, .row:focus-visible, .act:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+  /* desktop mock */
+  .desktop {
+    position: relative; height: 960px; border-radius: 14px; overflow: hidden;
+    background: var(--wall); border: 1px solid var(--card-border);
+  }
+  .menubar {
+    position: absolute; inset: 0 0 auto 0; height: 26px; display: flex; align-items: center;
+    padding: 0 10px; gap: 2px; color: var(--menubar-text); background: var(--menubar-bg);
+    -webkit-backdrop-filter: blur(24px) saturate(160%); backdrop-filter: blur(24px) saturate(160%);
+    font-size: 13px;
+  }
+  .menubar .m { padding: 2px 9px; border-radius: 5px; white-space: nowrap; }
+  .menubar .m.app { font-weight: 650; }
+  .menubar .spacer { flex: 1; }
+  .menubar .si { height: 22px; min-width: 26px; padding: 0 6px; border-radius: 5px; display: inline-flex; align-items: center; justify-content: center; }
+  .menubar .si.ours { background: var(--menubar-pressed); }
+  .menubar .si img.tmpl { width: 17px; height: 17px; display: block; }
+  :root[data-theme="dark"] img.tmpl { filter: invert(1); }
+  .menubar svg { display: block; }
+  .clock { padding: 0 6px 0 8px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+  .panel {
+    position: absolute; top: 31px; right: 168px; width: 404px; border-radius: 13px;
+    background: var(--panel-bg); border: 0.5px solid var(--panel-border); box-shadow: var(--panel-shadow);
+    -webkit-backdrop-filter: blur(40px) saturate(185%); backdrop-filter: blur(40px) saturate(185%);
+    color: var(--text-1); padding: 10px 6px 6px; max-height: 920px; overflow: auto;
+  }
+  .p-head { display: flex; align-items: center; gap: 9px; padding: 2px 10px 8px; }
+  .p-head img { width: 27px; height: 27px; border-radius: 6px; }
+  .p-head .title { font-weight: 650; }
+  .p-head .spacer { flex: 1; }
+  .p-head .upd { color: var(--text-3); font-size: 11px; }
+  .icon-btn { border: 0; background: transparent; color: var(--text-2); width: 24px; height: 24px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
+  .icon-btn:hover { background: var(--hover); color: var(--text-1); }
+
+  .next { margin: 0 6px 6px; padding: 8px 10px; border-radius: 9px; background: var(--next-bg); }
+  .next .l1 { display: flex; align-items: baseline; gap: 6px; }
+  .next .k { color: var(--text-2); font-size: 11px; width: 74px; flex: none; }
+  .next .v { font-weight: 650; }
+  .next .why { color: var(--text-2); font-size: 11px; margin: 1px 0 4px 80px; }
+  .next .why:last-child { margin-bottom: 0; }
+  .reserve-note { margin: 0 16px 6px; font-size: 11px; color: var(--text-2); }
+  .reserve-note b { color: var(--text-1); font-weight: 600; }
+
+  .sep { height: 1px; background: var(--sep); margin: 6px 10px; }
+  .row { padding: 8px 10px 9px; border-radius: 8px; cursor: default; }
+  .row:hover { background: var(--hover); }
+  .r1 { display: flex; align-items: center; gap: 6px; }
+  .r1 .label { font-weight: 650; font-size: 13px; }
+  .badge { font-size: 10px; font-weight: 600; letter-spacing: 0.02em; padding: 1px 6px; border-radius: 5px; background: var(--badge-bg); color: var(--text-2); text-transform: uppercase; }
+  .badge.main { background: var(--badge-main-bg); color: var(--badge-main-ink); }
+  .badge.ends { background: rgba(250, 178, 25, 0.18); color: var(--warn-ink); display: inline-flex; align-items: center; gap: 3px; }
+  .r1 .spacer { flex: 1; }
+  .inuse { font-size: 11px; color: var(--text-2); display: inline-flex; align-items: center; gap: 5px; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--good); box-shadow: 0 0 0 2px rgba(12, 163, 12, 0.18); }
+  .r1 .email { color: var(--text-2); font-size: 11px; margin-left: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .meta { font-size: 10.5px; color: var(--text-3); margin: 4px 0 0 72px; }
+  .mrow { display: grid; grid-template-columns: 64px 1fr 124px; align-items: center; gap: 8px; margin-top: 4px; }
+  .mrow .mk { font-size: 11px; color: var(--text-2); }
+  .mrow .mv { font-size: 11px; color: var(--text-1); text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .mrow .mv.est { color: var(--text-2); }
+  .meter { position: relative; height: 6px; border-radius: 3px; background: var(--track); }
+  .meter .fill { position: absolute; inset: 0 auto 0 0; border-radius: 3px; background: var(--accent); }
+  .meter .fill.warn { background: var(--warn); }
+  .meter .fill.crit { background: var(--crit); }
+  .meter.est { background: transparent; box-shadow: inset 0 0 0 1px var(--track); }
+  .meter .poss { position: absolute; inset: -1px auto -1px 0; border-radius: 3px; background: transparent;
+    border: 1.5px dashed var(--estimate); }
+  .meter .free { position: absolute; inset: 0 0 0 auto; border-radius: 0 3px 3px 0; background: var(--track); }
+  .meter .line { position: absolute; top: -4px; bottom: -4px; width: 2px; border-radius: 1px; background: var(--line-mark); }
+  .meter .line::after { content: attr(data-cap); position: absolute; top: -13px; left: 50%; transform: translateX(-50%); font-size: 9.5px; color: var(--text-2); white-space: nowrap; }
+  .mrow.has-line { margin-top: 15px; }
+  .err { display: flex; gap: 8px; align-items: flex-start; margin-top: 4px; padding: 7px 9px; border-radius: 8px; background: rgba(208, 59, 59, 0.10); }
+  .err .t { font-size: 11.5px; }
+  .err .t b { color: var(--crit); }
+  .err .fix { margin-left: auto; font: inherit; font-size: 11px; border: 0.5px solid var(--panel-border); background: var(--card-bg); color: var(--text-1); border-radius: 6px; padding: 3px 8px; cursor: pointer; white-space: nowrap; }
+  .err .fix:hover { filter: brightness(0.96); }
+
+  .acts { padding: 2px 0 0; }
+  .act { display: flex; align-items: center; gap: 8px; padding: 4px 10px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+  .act:hover { background: var(--accent); color: #fff; }
+  .act:hover .sc { color: rgba(255, 255, 255, 0.85); }
+  .act .sc { margin-left: auto; color: var(--text-3); font-size: 12px; }
+
+  .legend { position: absolute; left: 22px; bottom: 20px; max-width: 360px; color: #fff; font-size: 12px; text-shadow: 0 1px 2px rgba(0,0,0,0.35); }
+  .legend b { font-weight: 650; }
+
+  /* manage accounts window (frame only) */
+  :root {
+    --win-bg: #f6f3ee; --win-side: #ece7e0; --win-bar: #e9e4dd;
+    --field-bg: #ffffff; --field-border: rgba(0, 0, 0, 0.17); --btn-bg: #ffffff;
+  }
+  :root[data-theme="dark"] {
+    --win-bg: #2a2623; --win-side: #221f1c; --win-bar: #34302c;
+    --field-bg: #1d1a18; --field-border: rgba(255, 255, 255, 0.17); --btn-bg: #3d3834;
+  }
+  .manage h2 { font-size: 15px; margin: 28px 0 4px; }
+  .manage .sub { color: var(--page-text-2); font-size: 12px; margin: 0 0 12px; max-width: 920px; }
+  .desk2 {
+    display: flex; gap: 24px; align-items: flex-start; padding: 30px 28px 34px; border-radius: 14px;
+    background: var(--wall); border: 1px solid var(--card-border);
+  }
+  .win, .sheet {
+    border-radius: 11px; background: var(--win-bg); color: var(--text-1);
+    border: 0.5px solid var(--panel-border); box-shadow: var(--panel-shadow); overflow: hidden;
+  }
+  .win { flex: 0 0 648px; min-width: 0; }
+  .win-bar {
+    height: 38px; display: flex; align-items: center; justify-content: center; gap: 7px; position: relative;
+    background: var(--win-bar); border-bottom: 1px solid var(--sep); font-weight: 650;
+  }
+  .win-bar img { width: 18px; height: 18px; border-radius: 4px; }
+  .lights { position: absolute; left: 13px; top: 13px; display: flex; gap: 8px; }
+  .lights i { width: 12px; height: 12px; border-radius: 50%; display: block; }
+  .lights i:nth-child(1) { background: #ff5f57; }
+  .lights i:nth-child(2) { background: #febc2e; }
+  .lights i:nth-child(3) { background: #28c840; }
+  .win-body { display: grid; grid-template-columns: 196px 1fr; }
+  .side { background: var(--win-side); border-right: 1px solid var(--sep); display: flex; flex-direction: column; padding: 8px 6px 0; }
+  .acct { display: flex; gap: 8px; align-items: center; padding: 6px 8px; border-radius: 7px; cursor: default; }
+  .acct[aria-selected="true"] { background: var(--accent); color: #fff; }
+  .acct .st { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--good); }
+  .acct .st.out { background: var(--crit); }
+  .acct[aria-selected="true"] .st { box-shadow: 0 0 0 1.5px rgba(255, 255, 255, 0.9); }
+  .acct .nm { font-weight: 600; }
+  .acct .sb { font-size: 10.5px; color: var(--text-2); }
+  .acct[aria-selected="true"] .sb { color: rgba(255, 255, 255, 0.88); }
+  .acct .badge { margin-left: auto; }
+  .acct[aria-selected="true"] .badge { background: rgba(255, 255, 255, 0.22); color: #fff; }
+  .side .grow { flex: 1; min-height: 14px; }
+  .pm { display: flex; border-top: 1px solid var(--sep); margin: 0 -6px; }
+  .pm button { width: 32px; height: 26px; border: 0; border-right: 1px solid var(--sep); background: transparent; color: var(--text-1); font-size: 16px; line-height: 1; cursor: pointer; }
+  .pm button:hover { background: var(--hover); }
+  .detail { padding: 14px 18px 12px; min-width: 0; }
+  .d-head { display: flex; align-items: center; gap: 7px; }
+  .d-head .label { font-size: 16px; font-weight: 650; }
+  .d-email { color: var(--text-2); font-size: 12px; margin: 1px 0 10px; }
+  .grp { border-top: 1px solid var(--sep); padding: 9px 0 10px; }
+  .grp h3 { margin: 0 0 5px; font-size: 11px; font-weight: 600; color: var(--text-2); }
+  .ln { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .ln .spacer { flex: 1; }
+  .ln .st { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--good); }
+  .ln .st.out { background: var(--crit); }
+  .help { font-size: 11px; color: var(--text-2); margin-top: 3px; }
+  .btn {
+    font: inherit; font-size: 12px; padding: 3px 11px; border-radius: 6px; border: 0.5px solid var(--field-border);
+    background: var(--btn-bg); color: var(--text-1); cursor: pointer; white-space: nowrap; box-shadow: 0 0.5px 1px rgba(0, 0, 0, 0.08);
+  }
+  .btn:hover { filter: brightness(0.97); }
+  .btn.primary { background: var(--accent); border-color: transparent; color: #fff; }
+  .btn.danger { color: var(--crit); }
+  .btn.small { font-size: 11px; padding: 1px 8px; }
+  .btn[disabled] { opacity: 0.45; cursor: default; }
+  .mono { font: 11px/1.45 ui-monospace, "SF Mono", Menlo, monospace; }
+  .path { background: var(--field-bg); border: 0.5px solid var(--field-border); border-radius: 5px; padding: 2px 7px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .radio { display: flex; gap: 7px; align-items: baseline; padding: 2px 0; }
+  .radio .rb { width: 13px; height: 13px; border-radius: 50%; border: 1px solid var(--field-border); background: var(--field-bg); flex: none; position: relative; top: 2px; }
+  .radio .rb.on { border-color: var(--accent); background: radial-gradient(circle, #fff 0 2.5px, var(--accent) 3px); }
+  .radio .d { color: var(--text-2); font-size: 11px; }
+  .field { font: inherit; font-size: 12px; padding: 2px 7px; border-radius: 5px; border: 0.5px solid var(--field-border); background: var(--field-bg); color: var(--text-1); min-width: 0; }
+  .field.off { color: var(--text-3); }
+  .win-foot { border-top: 1px solid var(--sep); padding: 7px 14px; font-size: 11px; color: var(--text-2); display: flex; gap: 8px; align-items: center; background: var(--win-bar); min-width: 0; }
+  .win-foot .ok { color: var(--good); font-weight: 650; }
+  .sheets { flex: 1 1 0; min-width: 0; display: grid; gap: 18px; }
+  .sheet { padding: 14px 16px 12px; }
+  .sheet h3 { margin: 0 0 9px; font-size: 13px; font-weight: 650; display: flex; gap: 8px; align-items: center; }
+  .sheet h3 img { width: 22px; height: 22px; border-radius: 5px; }
+  .sheet p { margin: 0 0 8px; font-size: 12px; color: var(--text-2); }
+  .form { display: grid; grid-template-columns: 44px 1fr; gap: 6px 8px; align-items: center; }
+  .form label { color: var(--text-2); font-size: 12px; text-align: right; }
+  .steps { margin: 10px 0 0; padding: 9px 0 0; border-top: 1px solid var(--sep); display: grid; gap: 7px; }
+  .step { display: grid; grid-template-columns: 18px 1fr auto; gap: 7px; align-items: start; font-size: 12px; }
+  .step .n { width: 16px; height: 16px; border-radius: 50%; border: 1px solid var(--field-border); font-size: 10px; display: inline-flex; align-items: center; justify-content: center; color: var(--text-2); margin-top: 1px; }
+  .step .n.done { background: var(--good); border-color: transparent; color: #fff; }
+  .step .d { color: var(--text-2); font-size: 11px; }
+  .btns { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+  .frame-tag { font-size: 10px; font-weight: 650; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-3); margin-left: auto; }
+  body[data-only="manage"] .desktop { display: none; }
+  body[data-only="menu"] .manage { display: none; }
+  .tip { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; border-radius: 50%; border: 1px solid var(--text-3); color: var(--text-3); font-size: 9px; font-weight: 700; cursor: help; flex: none; margin-left: 5px; vertical-align: middle; }
+  .tip:focus { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .tip .tipbox { display: none; position: absolute; left: 50%; bottom: calc(100% + 7px); transform: translateX(-50%); width: 230px; padding: 7px 9px; border-radius: 7px; background: var(--text-1); color: var(--card-bg); font-size: 11px; font-weight: 400; line-height: 1.4; text-align: left; z-index: 20; box-shadow: 0 6px 18px rgba(0,0,0,0.25); white-space: normal; }
+  .tip.show .tipbox { bottom: auto; top: calc(100% + 7px); }
+  .tip.right .tipbox { left: auto; right: -8px; transform: none; }
+  .tip:hover .tipbox, .tip:focus .tipbox, .tip.show .tipbox { display: block; }
+  body[data-only="tokens"] .desktop, body[data-only="tokens"] .manage:not(#manage-tokens) { display: none; }
+  body[data-only="folders"] .desktop, body[data-only="folders"] .manage:not(#manage-folders) { display: none; }
+  @media (max-width: 1100px) {
+    .desk2 { flex-direction: column; padding: 20px 8px; }
+    .win { flex: none; width: 100%; }
+    .sheets { width: 100%; }
+  }
+  @media (max-width: 760px) {
+    .win-body { grid-template-columns: 1fr; }
+    .side { border-right: 0; border-bottom: 1px solid var(--sep); }
+    .desktop { height: auto; padding: 34px 0 16px; }
+    .panel { position: relative; top: 0; right: auto; margin: 0 auto; width: calc(100% - 16px); max-height: none; }
+    .menubar .m:not(.app) { display: none; }
+    .legend { position: static; margin: 12px 16px 0; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="page-head">
+    <h1>agent-balancer render</h1>
+    <p>Look-first mock of the menu bar app with its dropdown open, then the Manage accounts window. Mock data uses labels and example.com addresses.</p>
+    <div class="seg" role="group" aria-label="Appearance">
+      <button type="button" data-set-theme="light" aria-pressed="true">Light</button>
+      <button type="button" data-set-theme="dark" aria-pressed="false">Dark</button>
+    </div>
+    <label class="file-btn" title="Load a status.json written by agent-balancer status --json">
+      Load status.json <input type="file" accept="application/json" id="loadStatus" hidden>
+    </label>
+  </div>
+
+  <section class="desktop" aria-label="macOS desktop mock">
+    <div class="menubar">
+      <span class="m app">Finder</span><span class="m">File</span><span class="m">Edit</span><span class="m">View</span><span class="m">Go</span><span class="m">Window</span><span class="m">Help</span>
+      <span class="spacer"></span>
+      <span class="si" aria-hidden="true">
+        <svg width="17" height="13" viewBox="0 0 17 13"><path d="M8.5 11.6 L6.4 9.5 a3 3 0 0 1 4.2 0 Z M3.8 6.9 a6.7 6.7 0 0 1 9.4 0 l-1.3 1.3 a4.9 4.9 0 0 0 -6.8 0 Z M1.2 4.3 a10.4 10.4 0 0 1 14.6 0 l-1.3 1.3 a8.6 8.6 0 0 0 -12 0 Z" fill="currentColor"/></svg>
+      </span>
+      <span class="si" aria-hidden="true">
+        <svg width="26" height="12" viewBox="0 0 26 12"><rect x="0.5" y="0.5" width="22" height="11" rx="3" fill="none" stroke="currentColor" stroke-opacity="0.55"/><rect x="2" y="2" width="15" height="8" rx="1.6" fill="currentColor"/><rect x="23.5" y="4" width="1.8" height="4" rx="0.9" fill="currentColor" fill-opacity="0.55"/></svg>
+      </span>
+      <span class="si ours" title="agent-balancer"><img class="tmpl" id="barIcon" src="icons/splitter-tile-menu.svg" alt="agent-balancer menu"></span>
+      <span class="si" aria-hidden="true">
+        <svg width="16" height="14" viewBox="0 0 16 14"><rect x="1" y="1" width="6" height="5" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.3"/><rect x="9" y="1" width="6" height="5" rx="2.5" fill="currentColor"/><rect x="1" y="8" width="14" height="5" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>
+      </span>
+      <span class="clock">Mon Nov 9&nbsp;&nbsp;1:13 PM</span>
+    </div>
+
+    <div class="panel" id="panel" role="dialog" aria-label="agent-balancer">
+      <div class="p-head">
+        <img src="icons/splitter-tile-color.svg" alt="" id="panelIcon">
+        <span class="title">agent-balancer</span>
+        <span class="spacer"></span>
+        <span class="upd" id="updated">Updated 2 min ago</span>
+        <button class="icon-btn" type="button" aria-label="Refresh now" title="Refresh now">
+          <svg width="14" height="14" viewBox="0 0 14 14"><path d="M11.6 5.2 A5 5 0 1 0 12 8.2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M12.4 1.8 V5.4 H8.8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+      </div>
+      <div class="next" id="next"></div>
+      <div class="sep"></div>
+      <div id="rows"></div>
+      <div class="sep"></div>
+      <div class="acts" role="menu">
+        <div class="act" role="menuitem" tabindex="0">Refresh now<span class="sc">&#8984;R</span></div>
+        <div class="act" role="menuitem" tabindex="0">Manage accounts&#8230;<span class="sc">&#8984;,</span></div>
+        <div class="act" role="menuitem" tabindex="0">Open usage page<span class="sc">&#8599;</span></div>
+        <div class="sep"></div>
+        <div class="act" role="menuitemcheckbox" aria-checked="true" tabindex="0">Open at login<span class="sc">&#10003;</span></div>
+        <div class="act" role="menuitem" tabindex="0">Quit agent-balancer<span class="sc">&#8984;Q</span></div>
+      </div>
+    </div>
+
+    <div class="legend">
+      <b>Reading the meters.</b> All models: weekly use.
+      Fable: weekly Fable use, read once a day. Before an account's first Fable reading, the dashed span is what might already be used and the label states the most that may be used.
+    </div>
+  </section>
+
+  <section class="manage" id="manage-tokens" aria-label="Manage accounts window mock, token account">
+    <h2>Manage accounts: token account</h2>
+    <p class="sub">One window. The right side shows the panel for the selected account's kind.</p>
+    <div class="desk2">
+      <div class="win" role="dialog" aria-label="Manage accounts, token-file version">
+        <div class="win-bar">
+          <span class="lights" aria-hidden="true"><i></i><i></i><i></i></span>
+          <img src="icons/splitter-tile-color.svg" alt="">
+          <span>Manage accounts</span>
+        </div>
+        <div class="win-body">
+          <div class="side" role="listbox" aria-label="Accounts">
+            <div class="acct" role="option" aria-selected="false"><span class="st"></span><div><div class="nm">main</div><div class="sb">Your login</div></div><span class="badge main">main</span></div>
+            <div class="acct" role="option" aria-selected="false"><span class="st"></span><div><div class="nm">personal</div><div class="sb">351 days left</div></div></div>
+            <div class="acct" role="option" aria-selected="false"><span class="st"></span><div><div class="nm">lab</div><div class="sb">365 days left</div></div></div>
+            <div class="acct" role="option" aria-selected="false"><span class="st"></span><div><div class="nm">spare-a</div><div class="sb">Ends Nov 16</div></div></div>
+            <div class="acct" role="option" aria-selected="true"><span class="st out"></span><div><div class="nm">spare-b</div><div class="sb">Signed out</div></div></div>
+            <div class="grow"></div>
+            <div class="pm"><button type="button" aria-label="Add account" title="Add account">+</button><button type="button" aria-label="Remove account" title="Remove account">&#8722;</button></div>
+          </div>
+          <div class="detail">
+            <div class="d-head"><span class="label">spare-b</span><span class="badge">pool</span></div>
+            <div class="d-email">spare-b@example.com<span class="tip" tabindex="0" aria-label="More info">?<span class="tipbox" role="tooltip">Typed when you added it. A token cannot report its email, so this is not checked.</span></span></div>
+
+            <div class="grp">
+              <h3>Sign-in</h3>
+              <div class="ln"><span class="st out"></span><span>Signed out at 12:40 PM</span><span class="tip show" tabindex="0" aria-label="More info">?<span class="tipbox" role="tooltip">Opens your browser for a new one-year token. Sign in as spare-b@example.com.</span></span><span class="spacer"></span><button class="btn primary" type="button">Sign in again&#8230;</button></div>
+            </div>
+
+            <div class="grp">
+              <h3>Token</h3>
+              <div class="ln"><span>Expires Mar 2, 2027</span><span class="tip" tabindex="0" aria-label="More info">?<span class="tipbox" role="tooltip">Saved in ~/.agent-balancer/tokens/spare-b.json. Only you can read it.</span></span></div>
+            </div>
+
+            <div class="grp">
+              <h3>Ends</h3>
+              <div class="radio"><span class="rb"></span><span>Never</span></div>
+              <div class="radio"><span class="rb on"></span><span>Soon, date unknown</span><span class="tip" tabindex="0" aria-label="More info">?<span class="tipbox" role="tooltip">Used up first, then treated as ended once its plan drops.</span></span></div>
+              <div class="radio"><span class="rb"></span><span>On</span><span class="field off">Nov 16, 2026</span></div>
+            </div>
+
+            <div class="grp" style="padding-bottom:2px">
+              <div class="ln"><span class="spacer"></span><button class="btn danger" type="button">Remove account&#8230;</button></div>
+            </div>
+          </div>
+        </div>
+        <div class="win-foot"><span class="ok">&#10003;</span><span>Last change, 1:12 PM:</span><span class="mono path" style="flex:1">agent-balancer config set spare-b ending-soon true</span></div>
+      </div>
+
+      <div class="sheets">
+        <div class="sheet" role="dialog" aria-label="Add account sheet, token-file version">
+          <h3><img src="icons/splitter-tile-color.svg" alt="">Add an account<span class="frame-tag">Add sheet</span></h3>
+          <div class="form">
+            <label>Label</label><span class="field">spare</span>
+            <label>Email</label><span class="field">spare@example.com</span>
+            <label>Kind</label><span class="ln"><span class="radio"><span class="rb on"></span><span>Token</span></span><span class="radio"><span class="rb"></span><span>Folder</span></span></span>
+            <label>Ends</label><span class="ln"><span class="rb-inline radio"><span class="rb on"></span><span>Never</span></span><span class="radio"><span class="rb"></span><span>Soon</span></span><span class="radio"><span class="rb"></span><span>On a date</span></span></span>
+          </div>
+          <div class="btns"><button class="btn" type="button">Cancel</button><button class="btn primary" type="button">Sign in and add&#8230;</button><span class="tip right" tabindex="0" aria-label="More info">?<span class="tipbox" role="tooltip">Opens your browser. The token goes straight to its file and is never shown, then one short check reads its use.</span></span></div>
+        </div>
+
+        <div class="sheet" role="dialog" aria-label="Remove account sheet, token-file version">
+          <h3><img src="icons/splitter-tile-color.svg" alt="">Remove "spare-a"?<span class="frame-tag">Remove sheet</span></h3>
+          <p>It stops getting workers. Its chats stay.</p>
+          <div class="form" style="grid-template-columns: auto 1fr">
+            <label>Type the label to confirm</label><span class="field">spare-a</span>
+          </div>
+          <div class="btns"><button class="btn" type="button">Cancel</button><button class="btn danger" type="button">Remove</button></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="manage" id="manage-folders" aria-label="Manage accounts window mock, folder account">
+    <h2>Manage accounts: folder account</h2>
+    <p class="sub">The same window with a folder account selected; its panel has the extra sign-in and folder groups.</p>
+    <div class="desk2">
+      <div class="win" role="dialog" aria-label="Manage accounts, folder account">
+        <div class="win-bar">
+          <span class="lights" aria-hidden="true"><i></i><i></i><i></i></span>
+          <img src="icons/splitter-tile-color.svg" alt="">
+          <span>Manage accounts</span>
+        </div>
+        <div class="win-body">
+          <div class="side" role="listbox" aria-label="Accounts">
+            <div class="acct" role="option" aria-selected="false"><span class="st"></span><div><div class="nm">main</div><div class="sb">Signed in</div></div><span class="badge main">main</span></div>
+            <div class="acct" role="option" aria-selected="false"><span class="st"></span><div><div class="nm">personal</div><div class="sb">Signed in</div></div></div>
+            <div class="acct" role="option" aria-selected="false"><span class="st"></span><div><div class="nm">lab</div><div class="sb">Signed in</div></div></div>
+            <div class="acct" role="option" aria-selected="false"><span class="st"></span><div><div class="nm">spare-a</div><div class="sb">Signed in · ends Nov 16</div></div></div>
+            <div class="acct" role="option" aria-selected="true"><span class="st out"></span><div><div class="nm">spare-b</div><div class="sb">Signed out · ending soon</div></div></div>
+            <div class="grow"></div>
+            <div class="pm"><button type="button" aria-label="Add account" title="Add account">+</button><button type="button" aria-label="Remove account" title="Remove account">&#8722;</button></div>
+          </div>
+          <div class="detail">
+            <div class="d-head"><span class="label">spare-b</span><span class="badge">pool</span></div>
+            <div class="d-email">spare-b@example.com · Ultra</div>
+
+            <div class="grp">
+              <h3>Sign-in</h3>
+              <div class="ln"><span class="st out"></span><span>Signed out since today, 12:40 PM</span><span class="tip show" tabindex="0" aria-label="More info">?<span class="tipbox" role="tooltip">Opens your browser. Sign in as spare-b@example.com.</span></span><span class="spacer"></span><button class="btn primary" type="button">Sign in again&#8230;</button></div>
+            </div>
+
+            <div class="grp">
+              <h3>Folder</h3>
+              <div class="ln"><span class="mono path">~/.agent-balancer/accounts/spare-b/.claude</span><button class="btn small" type="button">Copy</button></div>
+            </div>
+
+            <div class="grp">
+              <h3>Shared settings</h3>
+              <div class="ln"><span class="st"></span><span>Linked · checked 2 min ago</span><span class="tip" tabindex="0" aria-label="More info">?<span class="tipbox" role="tooltip">Approve linking in Terminal: <span class="mono">agent-balancer link spare-b</span></span></span></div>
+            </div>
+
+            <div class="grp">
+              <h3>Ends</h3>
+              <div class="radio"><span class="rb"></span><span>Never</span></div>
+              <div class="radio"><span class="rb on"></span><span>Soon, date unknown</span><span class="tip" tabindex="0" aria-label="More info">?<span class="tipbox" role="tooltip">Used up first, then treated as ended once its plan drops.</span></span></div>
+              <div class="radio"><span class="rb"></span><span>On</span><span class="field off">Nov 16, 2026</span></div>
+            </div>
+
+            <div class="grp" style="padding-bottom:2px">
+              <div class="ln"><span class="spacer"></span><button class="btn danger" type="button">Remove account&#8230;</button></div>
+            </div>
+          </div>
+        </div>
+        <div class="win-foot"><span class="ok">&#10003;</span><span>Last change, 1:12 PM:</span><span class="mono path" style="flex:1">agent-balancer config set spare-b ending-soon true</span></div>
+      </div>
+
+      <div class="sheets">
+        <div class="sheet" role="dialog" aria-label="Add account sheet, folder account">
+          <h3><img src="icons/splitter-tile-color.svg" alt="">Add an account<span class="frame-tag">Add sheet</span></h3>
+          <div class="form">
+            <label>Label</label><span class="field">spare</span>
+            <label>Email</label><span class="field">spare@example.com</span>
+            <label>Kind</label><span class="ln"><span class="radio"><span class="rb"></span><span>Token</span></span><span class="radio"><span class="rb on"></span><span>Folder</span></span><span class="tip right" tabindex="0" aria-label="More info">?<span class="tipbox" role="tooltip">Full sign-in in its own folder. Needed for connectors and Remote Control.</span></span></span>
+            <label>Ends</label><span class="ln"><span class="rb-inline radio"><span class="rb on"></span><span>Never</span></span><span class="radio"><span class="rb"></span><span>Soon</span></span><span class="radio"><span class="rb"></span><span>On a date</span></span></span>
+          </div>
+          <div class="steps">
+            <div class="step"><span class="n done">&#10003;</span><div>Create the folder<div class="d mono">agent-balancer add spare --email spare@example.com</div></div><span></span></div>
+            <div class="step"><span class="n">2</span><div>Share settings, in Terminal<div class="d mono">agent-balancer link spare</div></div><button class="btn small" type="button">Copy</button></div>
+            <div class="step"><span class="n">3</span><div>Sign in</div><button class="btn small" type="button" disabled>Sign in&#8230;</button></div>
+            <div class="step"><span class="n">4</span><div>Trust each project once, in Terminal<div class="d mono">agent-balancer run spare</div></div><button class="btn small" type="button">Copy</button></div>
+          </div>
+          <div class="btns"><button class="btn" type="button">Close</button><button class="btn primary" type="button" disabled>Create folder</button></div>
+        </div>
+
+        <div class="sheet" role="dialog" aria-label="Remove account sheet, folder account">
+          <h3><img src="icons/splitter-tile-color.svg" alt="">Remove "spare-a"?<span class="frame-tag">Remove sheet</span></h3>
+          <p>It stops getting workers. Its chats stay.</p>
+          <div class="form" style="grid-template-columns: auto 1fr">
+            <label>Type the label to confirm</label><span class="field">spare-a</span>
+          </div>
+          <div class="btns"><button class="btn" type="button">Cancel</button><button class="btn danger" type="button">Remove</button></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</div>
+
+<script>
+  const MOCK = {
+    schemaVersion: 1,
+    generatedAt: "2026-11-09T21:11:00Z",
+    pick: {
+      all: { label: "personal", reason: "Soonest weekly reset with room: Tue 9:00 AM, 48% room." },
+      fable: { label: "lab", reason: "personal: Fable 93% used; lab resets next." }
+    },
+    accounts: [
+      { label: "main", email: "main@example.com", kind: "main", state: "ok", error: null, warnings: [],
+        weekly: { usedPercent: 41.0, resetsAt: "2026-11-13T17:00:00Z", source: "probe", readAt: "2026-11-09T21:12:40Z" },
+        fable: { usedPercent: 12.0, resetsAt: "2026-11-13T17:00:00Z", guaranteedLeftPercentOfCap: null, possibleLeftPercentOfCap: null, source: "probe" },
+        inUse: { count: 1, sessions: [{ name: "build-1" }] }, endsAt: null,
+        reserve: { linePercent: 66.0, marginPercent: 5, launchAllowed: true, daysLeft: 3.8 } },
+      { label: "personal", email: "personal@example.com", kind: "pool", state: "ok", error: null, warnings: [],
+        weekly: { usedPercent: 47.0, resetsAt: "2026-11-10T17:00:00Z", source: "probe", readAt: "2026-11-09T21:05:02Z" },
+        fable: { usedPercent: 93.0, resetsAt: "2026-11-10T17:00:00Z", guaranteedLeftPercentOfCap: null, possibleLeftPercentOfCap: null, source: "probe" },
+        inUse: { count: 0, sessions: [] }, endsAt: null, reserve: null },
+      { label: "lab", email: "lab@example.com", kind: "pool", state: "ok", error: null, warnings: [],
+        weekly: { usedPercent: 22.0, resetsAt: "2026-11-12T02:00:00Z", source: "snapshot", readAt: "2026-11-09T21:11:58Z" },
+        fable: { usedPercent: 8.0, resetsAt: "2026-11-12T02:00:00Z", guaranteedLeftPercentOfCap: null, possibleLeftPercentOfCap: null, source: "probe" },
+        inUse: { count: 2, sessions: [{ name: "qa-2" }, { name: "build-2" }] }, endsAt: null, reserve: null },
+      { label: "spare-a", email: "spare-a@example.com", kind: "pool", state: "ok", error: null, warnings: [],
+        weekly: { usedPercent: 61.0, resetsAt: "2026-11-12T22:00:00Z", source: "probe", readAt: "2026-11-09T20:58:30Z" },
+        fable: { usedPercent: null, guaranteedLeftPercentOfCap: 0.0, possibleLeftPercentOfCap: 78.0, source: "estimate" },
+        inUse: { count: 0, sessions: [] }, endsAt: "2026-11-16", reserve: null },
+      { label: "spare-b", email: "spare-b@example.com", kind: "pool", state: "error",
+        error: { code: "login_rejected", text: "This account's folder is logged out. Run agent-balancer login spare-b in Terminal." },
+        warnings: [], weekly: null, fable: null, inUse: { count: 0, sessions: [] }, endsAt: null, endingSoon: true, reserve: null }
+    ]
+  };
+
+  const DAY = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  function when(iso) {
+    const d = new Date(iso);
+    let h = d.getHours(); const m = d.getMinutes(); const ap = h >= 12 ? "PM" : "AM";
+    h = h % 12 || 12;
+    return DAY[d.getDay()] + " " + h + ":" + String(m).padStart(2, "0") + " " + ap;
+  }
+  function dayOnly(isoDate) {
+    const [y, mo, da] = isoDate.split("-").map(Number);
+    const d = new Date(y, mo - 1, da);
+    return MON[d.getMonth()] + " " + d.getDate();
+  }
+  function ago(iso, nowIso) {
+    const s = Math.max(0, (new Date(nowIso) - new Date(iso)) / 1000);
+    if (s < 90) return "just now";
+    if (s < 3600) return Math.round(s / 60) + " min ago";
+    return Math.round(s / 3600) + " h ago";
+  }
+  const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const pct = (n) => (Math.round(n * 10) / 10).toString().replace(/\.0$/, "") + "%";
+
+  function severity(acct) {
+    const u = acct.weekly.usedPercent;
+    if (u >= 95) return "crit";
+    if (acct.reserve && u + acct.reserve.marginPercent > acct.reserve.linePercent) return "warn";
+    if (u >= 80) return "warn";
+    return "";
+  }
+
+  function weeklyMeter(acct) {
+    const w = acct.weekly; const sev = severity(acct);
+    const line = "";
+    const label = acct.label + ", all models, " + pct(w.usedPercent) + " used, resets " + when(w.resetsAt);
+    return '<div class="mrow"><span class="mk">All models</span>' +
+      '<div class="meter" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + w.usedPercent + '" aria-label="' + esc(label) + '">' +
+      '<div class="fill ' + sev + '" style="width:' + w.usedPercent + '%"></div>' + line + '</div>' +
+      '<span class="mv">' + pct(w.usedPercent) + ' used</span></div>';
+  }
+
+  function fableMeter(acct) {
+    const f = acct.fable;
+    if (f.usedPercent !== null && f.usedPercent !== undefined) {
+      return '<div class="mrow"><span class="mk">Fable</span><div class="meter" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + f.usedPercent + '" aria-label="' + esc(acct.label + ", Fable, " + pct(f.usedPercent) + " of the Fable cap used") + '"><div class="fill" style="width:' + f.usedPercent + '%"></div></div><span class="mv">' + pct(f.usedPercent) + ' used</span></div>';
+    }
+    const possiblyUsed = 100 - f.guaranteedLeftPercentOfCap;
+    const text = "up to " + pct(possiblyUsed) + " used (est.)";
+    const label = acct.label + ", Fable, estimate, " + text + " of the Fable cap";
+    return '<div class="mrow"><span class="mk">Fable</span>' +
+      '<div class="meter est" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuetext="' + esc(text) + '" aria-label="' + esc(label) + '">' +
+      '<div class="free" style="width:' + f.guaranteedLeftPercentOfCap + '%"></div>' +
+      '<div class="poss" style="width:' + possiblyUsed + '%" title="Fable use not readable yet: might be used up to here"></div></div>' +
+      '<span class="mv est">' + esc(text) + '</span></div>';
+  }
+
+  function warnIcon(color) {
+    return '<svg width="11" height="10" viewBox="0 0 11 10" aria-hidden="true"><path d="M5.5 0.8 L10.3 9.2 H0.7 Z" fill="' + color + '"/><rect x="5" y="3.6" width="1" height="3" rx="0.5" fill="#fff"/><circle cx="5.5" cy="7.7" r="0.6" fill="#fff"/></svg>';
+  }
+
+  function rowHtml(acct, now) {
+    const kind = acct.kind === "main" ? '<span class="badge main">main</span>' : '<span class="badge">pool</span>';
+    const ends = acct.endsAt ? '<span class="badge ends">' + warnIcon("#c98a00") + 'ends ' + dayOnly(acct.endsAt) + '</span>'
+      : acct.endingSoon ? '<span class="badge ends">' + warnIcon("#c98a00") + 'ending soon</span>' : "";
+    const inUse = acct.inUse && acct.inUse.count > 0
+      ? '<span class="inuse" title="' + esc(acct.inUse.sessions.map((s) => s.name).join(", ")) + '"><span class="dot"></span>' + acct.inUse.count + ' in use</span>' : "";
+    let body = "";
+    if (acct.state === "error" || !acct.weekly) {
+      body = '<div class="err">' + warnIcon("#d03b3b") + '<div class="t"><b>' + esc(((acct.error && acct.error.code) || "error").replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase())) + '</b><br>' + esc(acct.error ? acct.error.text : "No reading yet.") + '</div><button class="fix" type="button">Show steps</button></div>';
+    } else {
+      body = weeklyMeter(acct) + fableMeter(acct) +
+        '<div class="meta">Resets ' + when(acct.weekly.resetsAt) + '</div>';
+    }
+    return '<div class="row" tabindex="0">' +
+      '<div class="r1"><span class="label">' + esc(acct.label) + '</span>' + kind + ends +
+      '<span class="email">' + esc(acct.email || "") + '</span><span class="spacer"></span>' + inUse + '</div>' +
+      body + '</div>';
+  }
+
+  function render(data) {
+    const now = data.generatedAt;
+    document.getElementById("rows").innerHTML = data.accounts.map((a) => rowHtml(a, now)).join("");
+    const p = data.pick;
+    const next = document.getElementById("next");
+    if (p) {
+      next.style.display = "";
+      next.innerHTML =
+        '<div class="l1"><span class="k">Next launch</span><span class="v">' + esc(p.all.label || "none") + '</span></div><div class="why">' + esc(p.all.reason) + '</div>' +
+        '<div class="l1"><span class="k">Next Fable</span><span class="v">' + esc(p.fable.label || "none") + '</span></div><div class="why">' + esc(p.fable.reason) + '</div>';
+    } else {
+      next.style.display = "none";
+    }
+  }
+
+  function setTheme(t) {
+    document.documentElement.setAttribute("data-theme", t);
+    document.querySelectorAll("[data-set-theme]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.setTheme === t)));
+    try { localStorage.setItem("ab-theme", t); } catch (err) { /* storage may be blocked */ }
+  }
+  document.querySelectorAll("[data-set-theme]").forEach((b) => b.addEventListener("click", () => setTheme(b.dataset.setTheme)));
+
+  document.getElementById("loadStatus").addEventListener("change", (e) => {
+    const file = e.target.files && e.target.files[0]; if (!file) return;
+    file.text().then((txt) => {
+      const data = JSON.parse(txt);
+      if (!data || !Array.isArray(data.accounts)) throw new Error("Not a status.json file");
+      render({ generatedAt: data.generatedAt || new Date().toISOString(), accounts: data.accounts, pick: data.next || null });
+      document.getElementById("updated").textContent = "Loaded " + file.name;
+    }).catch((err) => { document.getElementById("updated").textContent = "Could not read file: " + err.message; });
+  });
+
+  (function init() {
+    const params = new URLSearchParams(location.search);
+    const only = params.get("only");
+    if (only === "manage" || only === "menu" || only === "tokens" || only === "folders") document.body.setAttribute("data-only", only);
+    let t = params.get("theme");
+    if (!t) { try { t = localStorage.getItem("ab-theme"); } catch (err) { t = null; } }
+    if (!t) t = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    setTheme(t);
+    render(MOCK);
+  })();
+</script>
+</body>
+</html>

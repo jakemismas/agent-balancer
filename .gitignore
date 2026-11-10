@@ -1,0 +1,8 @@
+CLAUDE.md
+.claude/
+.vscode/
+.DS_Store
+.slice-build-state.json
+.build/
+build/
+*.xcuserstate

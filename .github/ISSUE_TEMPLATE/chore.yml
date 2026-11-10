@@ -1,0 +1,11 @@
+name: Chore
+description: Maintenance, dependency or version bumps
+labels: ["type: chore"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: Description
+      description: What needs doing and why.
+    validations:
+      required: true

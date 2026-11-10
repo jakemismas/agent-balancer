@@ -288,6 +288,7 @@ import Testing
             Plant(rule: "layout", path: "Sources/Other/O.swift", body: "let a = 1\n"),
             Plant(rule: "layout", path: "Tests/OtherTests/O.swift", body: "let a = 1\n"),
             Plant(rule: "layout", path: "Tests/CoreTests/a.m", body: "int a;\n"),
+            Plant(rule: "layout", path: "Tests/Fixtures/F.swift", body: "let a = 1\n"),
             Plant(
                 rule: "manifest", path: "Package.swift",
                 body: "import PackageDescription\nlet p = Package(targets: [.plu"
@@ -378,6 +379,19 @@ import Testing
         for (path, body) in pieces {
             try Self.write(Plant(rule: "none", path: path, body: body), into: root)
         }
+        let result = try Self.runScript(root: root)
+        #expect(result.status == 0, "\(String(decoding: result.stdout, as: UTF8.self))")
+    }
+
+    @Test func fixturesFolderPasses() throws {
+        let root = try Support.makeTempDir()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Self.write(
+            Plant(rule: "none", path: "Tests/Fixtures/bin/claude", body: "#!/bin/sh\nexit 0\n"),
+            into: root)
+        try Self.write(
+            Plant(rule: "none", path: "Tests/Fixtures/auth/a.json", body: "{\"loggedIn\":true}\n"),
+            into: root)
         let result = try Self.runScript(root: root)
         #expect(result.status == 0, "\(String(decoding: result.stdout, as: UTF8.self))")
     }

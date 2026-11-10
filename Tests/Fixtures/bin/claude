@@ -1,0 +1,35 @@
+#!/bin/sh
+# Fake claude for tests. Its behavior comes from files under $HOME/.ab-fake, written by the test.
+dir="$HOME/.ab-fake"
+mkdir -p "$dir"
+printf '%s\n' "$*" >> "$dir/args.log"
+env | cut -d= -f1 | sort > "$dir/env-names.txt"
+printf '%s\n' "${CLAUDE_CONFIG_DIR-unset}" > "$dir/config-dir.txt"
+
+if [ -f "$dir/delay" ]; then sleep "$(cat "$dir/delay")"; fi
+if [ -f "$dir/stderr.txt" ]; then cat "$dir/stderr.txt" >&2; fi
+
+case "$1" in
+  --version)
+    if [ -f "$dir/version.txt" ]; then cat "$dir/version.txt"; else echo "2.1.0 (Claude Code)"; fi
+    exit 0
+    ;;
+  --help)
+    echo "Usage: claude [options] [command]"
+    exit 0
+    ;;
+  auth)
+    if [ -f "$dir/auth.json" ]; then cat "$dir/auth.json"; fi
+    if [ -f "$dir/auth.exit" ]; then exit "$(cat "$dir/auth.exit")"; fi
+    exit 0
+    ;;
+  -p)
+    if [ -f "$dir/unknown-option" ]; then
+      echo "error: unknown option '--safe-mode'" >&2
+      exit 1
+    fi
+    if [ -f "$dir/probe.json" ]; then cat "$dir/probe.json"; fi
+    exit 0
+    ;;
+esac
+exit 2

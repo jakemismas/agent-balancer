@@ -100,6 +100,18 @@ agent-balancer/
     Fixtures/                recorded auth and probe outputs (no real tokens)
 ```
 
+Access rules that follow from the module map: every read and write of a file goes through the
+`Paths` module (`NoFollowReader.swift` and `NoFollowWriter.swift`), which `HookRecord`,
+`ConfigStore` and the readers call; the environment is read only in `Env/` (`Env.swift` and
+`ProtectedEnv.swift`); `Process` appears only in `Runner/`. The Claude Code token variable name in
+`ProtectedEnv.swift` is joined from two halves so the text scan, which keeps that name inside the
+`Tokens` module, still passes over this one shared list.
+
+Build notes: run `scripts/check-safety.sh` after each module. CLI tests use
+`Support.builtBinary()` and a fake `claude` at `.local/bin/claude` under a temporary `HOME`, fail
+with a clear message when the binary is missing, and never run the real `claude`. The test command
+stays `scripts/check.sh` and the install check stays unchanged.
+
 Data flow: readers run `claude` (auth status, probe) and write one reading file per account. Every
 command that writes under the data folder ends by rebuilding `state/status.json` atomically.
 `status --cached` rebuilds it from saved readings without starting a child process. `pick` reads

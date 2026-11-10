@@ -92,7 +92,10 @@ layout_hits="$layout_hits$(find . $PRUNE -o -type l -print 2>/dev/null | sed 's|
 "
 layout_hits="$layout_hits$(find . $PRUNE -o -type f -name '*.swift' -print 2>/dev/null | sed 's|^\./||' | grep -Ev '^(Sources/|Tests/|Package\.swift$)' | sed 's|$|:1|' || true)
 "
-for pair in "Sources:Core agent-balancer AgentBalancerBar" "Tests:CoreTests CLITests"; do
+# Fixtures hold recorded data and the fake program, never Swift.
+layout_hits="$layout_hits$(find Tests/Fixtures -type f -name '*.swift' -print 2>/dev/null | sed 's|$|:1|')
+"
+for pair in "Sources:Core agent-balancer AgentBalancerBar" "Tests:CoreTests CLITests Fixtures"; do
   top=${pair%%:*}
   allowed=" ${pair#*:} "
   [ -d "$top" ] || continue

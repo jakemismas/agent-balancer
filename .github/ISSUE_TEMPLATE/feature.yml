@@ -1,7 +1,11 @@
 name: Feature request
 description: Suggest a new capability
-labels: ["type: feature"]
+labels: ["type: feature", "needs-triage"]
 body:
+  - type: markdown
+    attributes:
+      value: |
+        Keep tokens, email addresses and organization IDs out of this request. For a question, use the Discussions link on the previous page.
   - type: textarea
     id: outcome
     attributes:

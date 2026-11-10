@@ -1,24 +1,70 @@
 name: Bug report
-description: Report something broken or behaving incorrectly
-labels: ["type: bug", "priority: med"]
+description: Report something that is broken or behaves incorrectly
+labels: ["type: bug", "needs-triage"]
 body:
+  - type: markdown
+    attributes:
+      value: |
+        **Keep secrets out of this report.** This tool works with Claude logins. Never paste a setup-token, an API key, an email address, an organization ID, or any file from `~/.agent-balancer/` (including `tokens/` and `launch/`). Read `agent-balancer doctor` output before you paste it, and remove anything personal.
+
+        To report a security problem, use [private vulnerability reporting](https://github.com/jakemismas/agent-balancer/security/advisories/new) instead of this form.
+  - type: checkboxes
+    id: no-secrets
+    attributes:
+      label: Before you submit
+      options:
+        - label: I removed every token, key, email address, organization ID and personal path from this report.
+          required: true
   - type: textarea
     id: what-happened
     attributes:
       label: What happened?
-      description: Expected behavior versus what actually occurred.
+      description: What you expected, and what happened instead.
     validations:
       required: true
   - type: textarea
     id: repro
     attributes:
       label: Steps to reproduce
+      description: The commands you ran or the clicks you made, in order.
     validations:
       required: true
   - type: input
     id: version
     attributes:
-      label: Version
-      description: Output of `agent-balancer --version`, and your macOS version.
+      label: agent-balancer version
+      description: Output of `agent-balancer --version`.
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How did you install it?
+      options:
+        - Homebrew
+        - Release zip
+        - Built from source
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version and Mac
+      description: For example, macOS 26.1 on Apple silicon.
+    validations:
+      required: true
+  - type: input
+    id: claude-version
+    attributes:
+      label: Claude Code version
+      description: Output of `claude --version`.
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: agent-balancer doctor output
+      description: Run `agent-balancer doctor`, check the output for personal data, then paste it.
+      render: text
     validations:
       required: false

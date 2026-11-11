@@ -53,18 +53,26 @@ public struct PickService: Sendable {
         // Settings of the default folder: hook record, and key names (never values).
         let hooks = HookRecord(context: context)
         var settingsIssue: String?
+        var settingsKind: String?
         var carriesKey = false
         do {
             let facts = try hooks.readSettings()
             carriesKey = facts.carriesKey
             switch hooks.status(current: facts) {
-            case .missing: settingsIssue = Messages.hookRecordMissing
-            case .changed: settingsIssue = Messages.settingsChanged
+            case .missing:
+                settingsIssue = Messages.hookRecordMissing
+                settingsKind = "missing"
+            case .changed:
+                settingsIssue = Messages.settingsChanged
+                settingsKind = "changed"
             case .matches: break
             }
         } catch {
             settingsIssue = "settings.json could not be read or parsed."
+            settingsKind = "changed"
         }
+        var observations = StatusObservations()
+        observations.settings = SettingsObservation(issue: settingsKind, carriesKey: carriesKey)
 
         // Skips settled before any probe.
         var skips: [String: String] = [:]
@@ -72,7 +80,8 @@ public struct PickService: Sendable {
         for account in config.accounts {
             if let reason = preSkip(
                 account, request: request, ambientConfigDir: ambientConfigDir,
-                settingsIssue: settingsIssue, carriesKey: carriesKey, runner: runner)
+                settingsIssue: settingsIssue, carriesKey: carriesKey, runner: runner,
+                observations: &observations)
             {
                 skips[account.label] = reason
             }
@@ -94,6 +103,7 @@ public struct PickService: Sendable {
         let results = refresher.refresh(
             accounts: live, force: false, forced: forced,
             fable: model == .fable ? .forPick : .none, deadline: remaining)
+        observations.add(results)
         for result in results {
             if case .failed(let issue) = result.status {
                 switch issue.code {
@@ -115,7 +125,9 @@ public struct PickService: Sendable {
         let now = clock()
         let leaseStore = LeaseStore(context: context)
         var leases = try leaseStore.current(now: now, leaseMinutes: config.picker.leaseMinutes)
-        LaunchFiles.upkeep(context: context, keepDays: config.launch.keepDays, now: now)
+        Upkeep.run(
+            context: context, snapshot: SessionsReader.read(context: context), openLeases: leases,
+            leaseMinutes: config.picker.leaseMinutes, keepDays: config.launch.keepDays, now: now)
 
         var decision: PickDecision
         var leaseId: String?
@@ -180,6 +192,8 @@ public struct PickService: Sendable {
             }
         }
         if !request.dryRun { logPick(result, leaseId: leaseId, writer: writer) }
+        lock.release()
+        StatusBuilder.rebuildQuietly(context: context, observations: observations)
         return result
     }
 
@@ -188,7 +202,7 @@ public struct PickService: Sendable {
     /// A reason to leave an account out before any probe, or nil.
     private func preSkip(
         _ account: Account, request: PickRequest, ambientConfigDir: Bool, settingsIssue: String?,
-        carriesKey: Bool, runner: ClaudeRunner
+        carriesKey: Bool, runner: ClaudeRunner, observations: inout StatusObservations
     ) -> String? {
         if request.exclude.contains(account.label) { return "excluded by caller" }
         if let ends = Picker.endsAtEnd(account.endsAt), clock() >= ends { return "account ended" }
@@ -208,6 +222,7 @@ public struct PickService: Sendable {
         }
         if account.kind == Kind.login, let handler = AccountKinds.handler(for: Kind.login) {
             let check = handler.check(account: account, runner: runner, now: clock())
+            observations.auth[account.label] = AuthObservation(check)
             if let issue = check.issues.first(where: { $0.severity == .error }) {
                 return Display.safe(issue.text, limit: 200)
             }

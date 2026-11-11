@@ -26,3 +26,9 @@ public enum Display {
         return out
     }
 }
+
+/// The time zone the short times in texts are written in. It is the person's own zone; tests set
+/// one fixed zone so golden files do not depend on the machine.
+public enum LocalTime {
+    nonisolated(unsafe) public static var zone: TimeZone = .current
+}

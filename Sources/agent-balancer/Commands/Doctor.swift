@@ -62,6 +62,17 @@ struct DoctorCommand: ParsableCommand {
             if check.hasError { failed = true }
         }
 
+        let sessions = SessionsReader.read(context: context)
+        if !sessions.clean {
+            print("sessions: some session records could not be read, so in-use is unknown")
+        }
+        for session in sessions.live
+        where session.refs.contains(where: { !LaunchFiles.exists(context: context, ref: $0) }) {
+            print(
+                "Warning launch_file_missing: session \(Display.safe(String(session.id.prefix(8)), limit: 8)) names a launch file that is gone."
+            )
+        }
+
         let hooks = HookRecord(context: context)
         do {
             let facts = try hooks.readSettings()
@@ -88,7 +99,8 @@ struct DoctorCommand: ParsableCommand {
 
         let protectedNames = context.ambient.keys.filter(ProtectedEnv.isProtected).sorted()
         for name in protectedNames {
-            print("Warning: \(name) is set in this shell. Child processes never receive it.")
+            let shown = Display.safe(Scrubber.scrubText(name), limit: 64)
+            print("Warning: \(shown) is set in this shell. Child processes never receive it.")
         }
 
         if failed { throw ExitCode.failure }

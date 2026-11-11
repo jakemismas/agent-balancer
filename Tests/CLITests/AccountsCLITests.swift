@@ -64,7 +64,9 @@ private let refusal = "Run this in your own terminal, outside a Claude Code sess
         let out = try h.run(["init", "--label", "main"])
         #expect(out.status == 0)
         #expect(!(text(out.stdout) + text(out.stderr)).contains(mail))
-        for url in h.dataEntries() where url.lastPathComponent != "config.json" {
+        // The status document is status output, so it may carry the email too.
+        for url in h.dataEntries()
+        where !["config.json", "status.json"].contains(url.lastPathComponent) {
             let body = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
             #expect(!body.contains(mail), "\(url.lastPathComponent)")
         }
@@ -222,6 +224,15 @@ private let refusal = "Run this in your own terminal, outside a Claude Code sess
         // The child never saw them.
         let seen = h.fakeRecord("env-names.txt")
         #expect(!seen.contains("ANTHROPIC_API_KEY") && !seen.contains("CLAUDE_CONFIG_DIR"))
+    }
+
+    @Test func doctorPrintsAProtectedNameWithControlCharactersEscaped() throws {
+        let h = try ready()
+        defer { h.cleanup() }
+        let out = try h.run(["doctor"], env: ["ANTHROPIC_\u{1B}]0;x\u{07}X": "1"])
+        let s = text(out.stdout)
+        #expect(s.contains(#"ANTHROPIC_\u{1b}]0;x\u{7}X"#))
+        #expect(!s.contains("\u{1B}") && !s.contains("\u{07}"))
     }
 
     @Test func doctorReportsAMissingHookRecord() throws {

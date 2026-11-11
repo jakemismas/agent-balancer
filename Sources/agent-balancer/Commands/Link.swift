@@ -45,5 +45,9 @@ struct LinkCommand: ParsableCommand {
         }
         try hooks.record(facts)
         print("Recorded \(facts.hooks.count) hook entries.")
+        Shared.rebuildStatus(
+            context,
+            observations: StatusObservations(
+                settings: SettingsObservation(issue: nil, carriesKey: facts.carriesKey)))
     }
 }

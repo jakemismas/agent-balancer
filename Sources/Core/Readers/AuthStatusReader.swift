@@ -39,11 +39,19 @@ public enum AuthStatusReader {
             guard let s = object[key] as? String, !s.isEmpty else { return nil }
             return s
         }
+        // A plan tier of another shape reads as unknown, like one that is not a string.
         return AuthStatus(
-            loggedIn: loggedIn, email: string("email"), planTier: string("planTier"),
-            subscriptionType: string("subscriptionType"),
+            loggedIn: loggedIn, email: string("email"),
+            planTier: string("planTier").flatMap { isPlainTier($0) ? $0 : nil },
+            subscriptionType: string("subscriptionType").map { Display.safe($0, limit: 64) },
             loginExpiresAt: date(object["loginExpiresAt"]),
             configDirectory: string("configDirectory"))
+    }
+
+    /// The shape a stored and printed plan tier has: 1 to 64 letters, digits, dots, underscores
+    /// or hyphens, starting with a letter or digit.
+    static func isPlainTier(_ tier: String) -> Bool {
+        tier.range(of: #"\A[A-Za-z0-9][A-Za-z0-9._-]{0,63}\z"#, options: .regularExpression) != nil
     }
 
     /// The calendar range a reported date must fall in. Anything else is unknown, so a huge or

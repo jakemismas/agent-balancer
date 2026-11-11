@@ -18,4 +18,12 @@ enum Shared {
         fflush(stdout)
         return readLine()?.trimmingCharacters(in: .whitespaces)
     }
+
+    /// Ends a command that wrote under the data folder: rebuilds `state/status.json`. A failure is
+    /// logged and never changes the command's output or exit code.
+    static func rebuildStatus(
+        _ context: ToolContext, observations: StatusObservations = StatusObservations()
+    ) {
+        StatusBuilder.rebuildQuietly(context: context, observations: observations)
+    }
 }

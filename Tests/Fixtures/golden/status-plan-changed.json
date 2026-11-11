@@ -1,0 +1,69 @@
+{
+  "accounts" : [
+    {
+      "accountKey" : "key-main",
+      "configDir" : null,
+      "email" : "main@example.com",
+      "endingSoon" : false,
+      "endsAt" : null,
+      "error" : {
+        "code" : "plan_changed",
+        "text" : "Plan is max_5x, expected max_20x."
+      },
+      "fable" : {
+        "guaranteedLeftPercentOfCap" : 56,
+        "possibleLeftPercentOfCap" : 100,
+        "resetsAt" : null,
+        "source" : "estimate",
+        "usedPercent" : null
+      },
+      "fiveHour" : {
+        "readAt" : "2026-11-09T21:06:00Z",
+        "resetsAt" : "2026-11-09T23:40:00Z",
+        "source" : "probe",
+        "usedPercent" : 9
+      },
+      "fullLogin" : true,
+      "inUse" : {
+        "count" : 0,
+        "sessions" : [
+
+        ]
+      },
+      "kind" : "login",
+      "label" : "main",
+      "limited" : null,
+      "linked" : null,
+      "loginExpiresAt" : null,
+      "loginExpiresSource" : null,
+      "planTier" : "max_20x",
+      "readingsAge" : 240,
+      "reserve" : null,
+      "role" : "pool",
+      "state" : "error",
+      "stateSince" : "2026-11-09T21:10:00Z",
+      "warnings" : [
+
+      ],
+      "weekly" : {
+        "readAt" : "2026-11-09T21:06:00Z",
+        "resetsAt" : "2026-11-11T21:10:00Z",
+        "source" : "probe",
+        "usedPercent" : 22
+      }
+    }
+  ],
+  "banner" : null,
+  "generatedAt" : "2026-11-09T21:10:00Z",
+  "next" : {
+    "all" : {
+      "label" : null,
+      "reason" : "No account has room. main: Plan is max_5x, expected max_20x."
+    },
+    "fable" : {
+      "label" : null,
+      "reason" : "No account has room. main: Plan is max_5x, expected max_20x."
+    }
+  },
+  "schemaVersion" : 1
+}

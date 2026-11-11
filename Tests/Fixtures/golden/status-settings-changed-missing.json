@@ -1,0 +1,119 @@
+{
+  "accounts" : [
+    {
+      "accountKey" : "key-main",
+      "configDir" : null,
+      "email" : "main@example.com",
+      "endingSoon" : false,
+      "endsAt" : null,
+      "error" : {
+        "code" : "settings_changed",
+        "text" : "Hook record missing. Run `agent-balancer link --accept-source-change` in Terminal."
+      },
+      "fable" : {
+        "guaranteedLeftPercentOfCap" : 56,
+        "possibleLeftPercentOfCap" : 100,
+        "resetsAt" : null,
+        "source" : "estimate",
+        "usedPercent" : null
+      },
+      "fiveHour" : {
+        "readAt" : "2026-11-09T21:06:00Z",
+        "resetsAt" : "2026-11-09T23:40:00Z",
+        "source" : "probe",
+        "usedPercent" : 9
+      },
+      "fullLogin" : true,
+      "inUse" : {
+        "count" : 0,
+        "sessions" : [
+
+        ]
+      },
+      "kind" : "login",
+      "label" : "main",
+      "limited" : null,
+      "linked" : null,
+      "loginExpiresAt" : null,
+      "loginExpiresSource" : null,
+      "planTier" : null,
+      "readingsAge" : 240,
+      "reserve" : null,
+      "role" : "pool",
+      "state" : "error",
+      "stateSince" : "2026-11-09T21:10:00Z",
+      "warnings" : [
+
+      ],
+      "weekly" : {
+        "readAt" : "2026-11-09T21:06:00Z",
+        "resetsAt" : "2026-11-11T21:10:00Z",
+        "source" : "probe",
+        "usedPercent" : 22
+      }
+    },
+    {
+      "accountKey" : "key-pool-a",
+      "configDir" : null,
+      "email" : "pool-a@example.com",
+      "endingSoon" : false,
+      "endsAt" : null,
+      "error" : {
+        "code" : "settings_changed",
+        "text" : "Hook record missing. Run `agent-balancer link --accept-source-change` in Terminal."
+      },
+      "fable" : {
+        "guaranteedLeftPercentOfCap" : null,
+        "possibleLeftPercentOfCap" : null,
+        "resetsAt" : null,
+        "source" : "none",
+        "usedPercent" : null
+      },
+      "fiveHour" : null,
+      "fullLogin" : false,
+      "inUse" : {
+        "count" : 0,
+        "sessions" : [
+
+        ]
+      },
+      "kind" : "token",
+      "label" : "pool-a",
+      "limited" : null,
+      "linked" : null,
+      "loginExpiresAt" : "2027-11-09T21:10:00Z",
+      "loginExpiresSource" : "estimate",
+      "planTier" : null,
+      "readingsAge" : null,
+      "reserve" : null,
+      "role" : "pool",
+      "state" : "error",
+      "stateSince" : "2026-11-09T21:10:00Z",
+      "warnings" : [
+
+      ],
+      "weekly" : {
+        "readAt" : null,
+        "resetsAt" : null,
+        "source" : "none",
+        "usedPercent" : null
+      }
+    }
+  ],
+  "banner" : {
+    "code" : "settings_changed",
+    "text" : "Hook record missing. Run `agent-balancer link --accept-source-change` in Terminal."
+  },
+  "generatedAt" : "2026-11-09T21:10:00Z",
+  "next" : {
+    "all" : {
+      "label" : null,
+      "reason" : "No account has room. main: Hook record missing. Run `agent-balancer link --accept-source-change` in Terminal. pool-a: Hook record missing. Run `agent-balancer link --accept-source-change` in Terminal."
+    },
+    "fable" : {
+      "label" : null,
+      "reason" : "No account has room. main: Hook record missing. Run `agent-balancer link --accept-source-change` in Terminal. pool-a: Hook record missing. Run `agent-balancer link --accept-source-change` in Terminal."
+    }
+  },
+  "schemaVersion" : 1
+}

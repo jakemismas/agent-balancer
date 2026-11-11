@@ -48,6 +48,10 @@ struct RefreshCommand: ParsableCommand {
             }
             if result.failed { failed = true }
         }
+        Upkeep.runLocked(context: context, config: config)
+        var observations = StatusObservations()
+        observations.add(results)
+        Shared.rebuildStatus(context, observations: observations)
         if failed { throw ExitCode.failure }
     }
 

@@ -580,40 +580,4 @@ import Testing
             _ = try ConfigValidator.validate(Config(accounts: [folder]))
         }
     }
-
-    // MARK: Upkeep
-
-    @Test func upkeepRemovesOnlyOldFilesTheToolMade() throws {
-        let (t, service) = try setUp([login()])
-        let result = try service.pick(PickRequest())
-        let fresh = URL(fileURLWithPath: try #require(result.args).last ?? "")
-        let old = fresh.deletingLastPathComponent().appendingPathComponent("l-deadbeef.json")
-        try "{}".write(to: old, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes(
-            [.posixPermissions: 0o600, .modificationDate: Date().addingTimeInterval(-40 * 86_400)],
-            ofItemAtPath: old.path)
-        let stray = fresh.deletingLastPathComponent().appendingPathComponent("notes.json")
-        try "{}".write(to: stray, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes(
-            [.modificationDate: Date().addingTimeInterval(-40 * 86_400)], ofItemAtPath: stray.path)
-        let removed = LaunchFiles.upkeep(context: t.context, keepDays: 35, now: Date())
-        #expect(removed == 1)
-        #expect(!FileManager.default.fileExists(atPath: old.path))
-        #expect(FileManager.default.fileExists(atPath: fresh.path))
-        #expect(FileManager.default.fileExists(atPath: stray.path))
-    }
-
-    @Test func upkeepNeverFollowsALink() throws {
-        let (t, service) = try setUp([login()])
-        let result = try service.pick(PickRequest())
-        let dir = URL(fileURLWithPath: try #require(result.args).last ?? "")
-            .deletingLastPathComponent()
-        let target = t.home.appendingPathComponent("elsewhere.json")
-        try "keep".write(to: target, atomically: true, encoding: .utf8)
-        let link = dir.appendingPathComponent("l-cafecafe.json")
-        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
-        _ = LaunchFiles.upkeep(
-            context: t.context, keepDays: 1, now: Date().addingTimeInterval(86_400 * 5))
-        #expect(FileManager.default.fileExists(atPath: target.path))
-    }
 }

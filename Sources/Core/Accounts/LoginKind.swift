@@ -57,6 +57,7 @@ public struct LoginKind: AccountKindHandler {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "MMM d"
+        formatter.timeZone = LocalTime.zone
         return formatter.string(from: date)
     }
 }

@@ -1,0 +1,67 @@
+{
+  "accounts" : [
+    {
+      "accountKey" : "key-pool-a",
+      "configDir" : null,
+      "email" : "pool-a@example.com",
+      "endingSoon" : false,
+      "endsAt" : null,
+      "error" : null,
+      "fable" : {
+        "guaranteedLeftPercentOfCap" : null,
+        "possibleLeftPercentOfCap" : null,
+        "resetsAt" : null,
+        "source" : "none",
+        "usedPercent" : null
+      },
+      "fiveHour" : null,
+      "fullLogin" : false,
+      "inUse" : {
+        "count" : 1,
+        "sessions" : [
+          {
+            "id" : "s-1",
+            "name" : "w1"
+          }
+        ]
+      },
+      "kind" : "token",
+      "label" : "pool-a",
+      "limited" : null,
+      "linked" : null,
+      "loginExpiresAt" : "2027-11-09T21:10:00Z",
+      "loginExpiresSource" : "estimate",
+      "planTier" : null,
+      "readingsAge" : null,
+      "reserve" : null,
+      "role" : "pool",
+      "state" : "ok",
+      "stateSince" : null,
+      "warnings" : [
+        {
+          "code" : "launch_file_missing",
+          "text" : "1 live session names a launch file that is gone."
+        }
+      ],
+      "weekly" : {
+        "readAt" : null,
+        "resetsAt" : null,
+        "source" : "none",
+        "usedPercent" : null
+      }
+    }
+  ],
+  "banner" : null,
+  "generatedAt" : "2026-11-09T21:10:00Z",
+  "next" : {
+    "all" : {
+      "label" : null,
+      "reason" : "No account has room. pool-a: no weekly reading"
+    },
+    "fable" : {
+      "label" : null,
+      "reason" : "No account has room. pool-a: no weekly reading"
+    }
+  },
+  "schemaVersion" : 1
+}

@@ -1,0 +1,44 @@
+{
+  "accounts" : [
+    {
+      "label" : "main",
+      "readings" : [
+        {
+          "at" : "2026-11-09T19:10:00Z",
+          "fable" : null,
+          "fiveHour" : null,
+          "source" : "probe",
+          "state" : "ok",
+          "weekly" : {
+            "resetsAt" : "2026-11-10T19:10:00Z",
+            "usedPercent" : 10
+          }
+        },
+        {
+          "at" : "2026-11-09T20:10:00Z",
+          "fable" : null,
+          "fiveHour" : null,
+          "source" : "probe",
+          "state" : "ok",
+          "weekly" : {
+            "resetsAt" : "2026-11-10T20:10:00Z",
+            "usedPercent" : 40
+          }
+        },
+        {
+          "at" : "2026-11-09T21:00:00Z",
+          "fable" : null,
+          "fiveHour" : null,
+          "source" : "probe",
+          "state" : "limited",
+          "weekly" : {
+            "resetsAt" : "2026-11-10T21:00:00Z",
+            "usedPercent" : 97
+          }
+        }
+      ]
+    }
+  ],
+  "generatedAt" : "2026-11-09T21:10:00Z",
+  "schemaVersion" : 1
+}

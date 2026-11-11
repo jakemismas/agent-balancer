@@ -17,6 +17,8 @@ public enum StateCode: String, Codable, Sendable {
     case possibleDuplicate = "possible_duplicate"
     case keyInSettings = "key_in_settings"
     case stale
+    /// A live session names a launch file that is gone. A count only: no event, no path.
+    case launchFileMissing = "launch_file_missing"
 }
 
 public enum Severity: String, Sendable {

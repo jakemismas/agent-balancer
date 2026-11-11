@@ -1,0 +1,41 @@
+{
+  "cursor" : 3,
+  "events" : [
+    {
+      "at" : "2026-11-09T21:10:00Z",
+      "label" : "pool-a",
+      "notBefore" : "2026-11-09T21:10:00Z",
+      "resetsAt" : "2026-11-10T21:10:00Z",
+      "seq" : 1,
+      "text" : "Limited until Tue 9:00 PM.",
+      "type" : "limited",
+      "window" : "weekly"
+    },
+    {
+      "at" : "2026-11-09T21:10:00Z",
+      "label" : "pool-b",
+      "notBefore" : null,
+      "resetsAt" : null,
+      "seq" : 2,
+      "text" : "Limited until Wed 6:00 PM.",
+      "type" : "error",
+      "window" : "weekly"
+    },
+    {
+      "at" : "2026-11-09T21:20:00Z",
+      "label" : "pool-a",
+      "notBefore" : null,
+      "resetsAt" : null,
+      "seq" : 3,
+      "text" : "Limited until Wed 6:00 PM.",
+      "type" : "limit_cleared",
+      "window" : "weekly"
+    }
+  ],
+  "gap" : false,
+  "generatedAt" : "2026-11-09T21:10:00Z",
+  "more" : false,
+  "oldestSeq" : 1,
+  "recordId" : "r-golden",
+  "schemaVersion" : 1
+}

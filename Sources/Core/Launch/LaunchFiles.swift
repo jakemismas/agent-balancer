@@ -1,5 +1,16 @@
 import Foundation
 
+/// One launch file a session record names: the label and the lease id from its path.
+public struct LaunchRef: Hashable, Sendable {
+    public let label: String
+    public let leaseId: String
+
+    public init(label: String, leaseId: String) {
+        self.label = label
+        self.leaseId = leaseId
+    }
+}
+
 /// Launch files: `launch/<label>/<leaseId>.json`, mode 0600, one per pick (docs/ARCHITECTURE.md
 /// section 4A.2). This module and `Tokens` are the only code that opens the `launch` folder.
 public enum LaunchFiles {
@@ -15,7 +26,7 @@ public enum LaunchFiles {
     static func fileName(leaseId: String) -> String { leaseId + ".json" }
 
     static func isValidLeaseId(_ id: String) -> Bool {
-        id.range(of: "^l-[0-9a-f]{8}$", options: .regularExpression) != nil
+        id.range(of: #"\Al-[0-9a-f]{8}\z"#, options: .regularExpression) != nil
     }
 
     static func makeLeaseId() -> String { "l-" + Paths.randomHex(4) }
@@ -60,37 +71,6 @@ public enum LaunchFiles {
             folders: folders(label: label), name: fileName(leaseId: leaseId))
         return info != nil
     }
-
-    /// Removes launch files this tool made that are older than `launch.keepDays`. Session
-    /// entries are not read in this version, so the rule of section 4A.6 for unreadable session
-    /// entries applies to every file. Only a regular file owned by the user is removed, through
-    /// the no-follow writer. Returns the number removed.
-    @discardableResult
-    public static func upkeep(context: ToolContext, keepDays: Int, now: Date) -> Int {
-        let writer = NoFollowWriter(root: context.dataRoot)
-        guard let labels = try? writer.listNames(folders: [folder]) else { return 0 }
-        let limit = Double(max(1, keepDays)) * 86_400
-        var removed = 0
-        for label in labels where ConfigValidator.isValidLabel(label) {
-            guard let names = try? writer.listNames(folders: folders(label: label)) else {
-                continue
-            }
-            for name in names where name.hasSuffix(".json") {
-                let id = String(name.dropLast(5))
-                guard isValidLeaseId(id),
-                    let info = try? writer.info(folders: folders(label: label), name: name),
-                    info.isRegularFile, info.ownedByUser,
-                    now.timeIntervalSince(info.modified) > limit
-                else { continue }
-                if (try? writer.removeOwnRegularFile(folders: folders(label: label), name: name))
-                    == true
-                {
-                    removed += 1
-                }
-            }
-        }
-        return removed
-    }
 }
 
 extension LaunchFiles {
@@ -99,5 +79,32 @@ extension LaunchFiles {
     static func discard(context: ToolContext, label: String, leaseId: String) {
         _ = try? NoFollowWriter(root: context.dataRoot).removeOwnRegularFile(
             folders: folders(label: label), name: fileName(leaseId: leaseId))
+    }
+}
+
+extension LaunchFiles {
+    private static let referencePattern = try? NSRegularExpression(
+        pattern: "launch/([a-z0-9][a-z0-9-]{0,31})/(l-[0-9a-f]{8})\\.json")
+
+    /// The launch files a piece of record text names, by the shape `launch/<label>/l-<8 hex>.json`
+    /// after `\/` is unescaped. The label comes from the path, never from anything else, and the
+    /// text is never kept.
+    public static func references(in text: String) -> [LaunchRef] {
+        guard text.contains("launch"), let pattern = referencePattern else { return [] }
+        let plain = text.replacingOccurrences(of: "\\/", with: "/")
+        let whole = NSRange(plain.startIndex..., in: plain)
+        var found: [LaunchRef] = []
+        for match in pattern.matches(in: plain, range: whole) {
+            guard let label = Range(match.range(at: 1), in: plain),
+                let id = Range(match.range(at: 2), in: plain)
+            else { continue }
+            found.append(LaunchRef(label: String(plain[label]), leaseId: String(plain[id])))
+        }
+        return found
+    }
+
+    /// True when the named launch file exists as a directory entry. Nothing is read.
+    public static func exists(context: ToolContext, ref: LaunchRef) -> Bool {
+        exists(context: context, label: ref.label, leaseId: ref.leaseId)
     }
 }

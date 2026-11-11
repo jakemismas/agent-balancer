@@ -33,3 +33,9 @@
   (mode 0600, holding the token for a token account) and a lease, and logs one line. It answers
   with the launch recipe for a typed line or a launcher, and exits 2 when no account is eligible.
   A recipe that cannot be typed safely is refused before any file or lease is written.
+- Add `status [--json]`, `events [--json]` and `history [--json]`. A status rebuild under
+  `locks/history.lock` writes `state/status.json`, the numbered events record
+  (`state/events.jsonl`) and a per-account readings history, and keeps `state/current.json`
+  unchanged when the events cannot be saved so the transitions are detected again. Add in-use
+  session counts from live session records and launch file upkeep. `pick` never reads the events
+  record or `current.json`.

@@ -26,7 +26,10 @@ public struct ReadingStore: Sendable {
             let data = try reader.read(
                 folders: Layout.readingsFolders, name: Layout.readingName(label))
         else { return nil }
-        return (try? Reading.decoder().decode(Reading.self, from: data))?.sanitized()
+        guard let reading = try? Reading.decoder().decode(Reading.self, from: data),
+            reading.source == ReadingSource.probe || reading.source == ReadingSource.estimate
+        else { return nil }
+        return reading.sanitized()
     }
 
     public func save(_ reading: Reading, label: String) throws {

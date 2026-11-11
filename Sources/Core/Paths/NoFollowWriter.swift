@@ -92,7 +92,7 @@ public struct NoFollowWriter: Sendable {
 
     /// Opens an existing file for reading without following a link on the final name.
     static func openFileNoFollow(in dir: Int32, name: String) -> Int32 {
-        openat(dir, name, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        openat(dir, name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
     }
 
     private static func verifyFolder(_ fd: Int32) throws {
@@ -130,7 +130,14 @@ extension NoFollowWriter {
         try Paths.checkName(name)
         let dir = try NoFollowWriter.openFolder(root: root, folders: folders, create: true)
         defer { close(dir) }
-        let fd = openat(dir, name, O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0o600)
+        // Callers creating the same lock file at once can see a transient ENOENT, so retry a few times.
+        var fd = openat(dir, name, O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0o600)
+        var tries = 0
+        while fd < 0 && (errno == ENOENT || errno == EEXIST) && tries < 20 {
+            tries += 1
+            usleep(10_000)
+            fd = openat(dir, name, O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0o600)
+        }
         guard fd >= 0 else { throw ToolError("Could not open the lock file \(name).") }
         var st = stat()
         guard fstat(fd, &st) == 0, (st.st_mode & S_IFMT) == S_IFREG, st.st_uid == getuid() else {

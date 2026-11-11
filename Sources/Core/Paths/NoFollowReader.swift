@@ -28,13 +28,50 @@ public struct NoFollowReader: Sendable {
     /// Reads a file outside the data folder, such as a settings file. Links are followed, because
     /// a user may keep such a file in a dotfiles folder. Returns nil when the file is missing.
     public static func readOutside(_ url: URL, limit: Int = defaultLimit) throws -> Data? {
-        let fd = open(url.path, O_RDONLY | O_CLOEXEC)
+        let fd = open(url.path, O_RDONLY | O_NONBLOCK | O_CLOEXEC)
         if fd < 0 {
             if errno == ENOENT || errno == ENOTDIR { return nil }
             throw ToolError("Could not read \(url.lastPathComponent).")
         }
         defer { close(fd) }
         return try readAll(fd, name: url.lastPathComponent, limit: limit)
+    }
+
+    /// The names in a folder outside the data folder, such as another tool's `sessions/` folder,
+    /// or nil when it does not exist. Nothing is opened inside the folder.
+    public static func listOutside(_ url: URL) throws -> [String]? {
+        guard let stream = opendir(url.path) else {
+            if errno == ENOENT || errno == ENOTDIR { return nil }
+            throw ToolError("Could not list \(url.lastPathComponent).")
+        }
+        defer { closedir(stream) }
+        var names: [String] = []
+        while let entry = readdir(stream) {
+            let name = withUnsafePointer(to: &entry.pointee.d_name) {
+                $0.withMemoryRebound(to: CChar.self, capacity: Int(NAME_MAX) + 1) {
+                    String(cString: $0)
+                }
+            }
+            if name != "." && name != ".." { names.append(name) }
+        }
+        return names.sorted()
+    }
+
+    /// Reads one file directly in a folder outside the data folder without following a link on the
+    /// final name. Returns nil when the file is missing. A link, a file that is not a regular
+    /// file, or one over `limit` bytes throws.
+    public static func readEntryOutside(folder: URL, name: String, limit: Int = defaultLimit) throws
+        -> Data?
+    {
+        try Paths.checkName(name)
+        let path = folder.appendingPathComponent(name).path
+        let fd = open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+        if fd < 0 {
+            if errno == ENOENT || errno == ENOTDIR { return nil }
+            throw ToolError("Could not read \(name).")
+        }
+        defer { close(fd) }
+        return try readAll(fd, name: name, limit: limit)
     }
 
     private static func readAll(_ fd: Int32, name: String, limit: Int) throws -> Data {

@@ -1,0 +1,70 @@
+{
+  "accounts" : [
+    {
+      "accountKey" : "key-main",
+      "configDir" : null,
+      "email" : "main@example.com",
+      "endingSoon" : false,
+      "endsAt" : null,
+      "error" : null,
+      "fable" : {
+        "guaranteedLeftPercentOfCap" : 0,
+        "possibleLeftPercentOfCap" : 100,
+        "resetsAt" : null,
+        "source" : "estimate",
+        "usedPercent" : null
+      },
+      "fiveHour" : {
+        "readAt" : "2026-11-09T21:06:00Z",
+        "resetsAt" : "2026-11-09T23:40:00Z",
+        "source" : "probe",
+        "usedPercent" : 96
+      },
+      "fullLogin" : true,
+      "inUse" : {
+        "count" : 0,
+        "sessions" : [
+
+        ]
+      },
+      "kind" : "login",
+      "label" : "main",
+      "limited" : {
+        "since" : "2026-11-09T21:10:00Z",
+        "until" : "2026-11-11T21:10:00Z",
+        "window" : "weekly"
+      },
+      "linked" : null,
+      "loginExpiresAt" : null,
+      "loginExpiresSource" : null,
+      "planTier" : null,
+      "readingsAge" : 240,
+      "reserve" : null,
+      "role" : "pool",
+      "state" : "limited",
+      "stateSince" : "2026-11-09T21:10:00Z",
+      "warnings" : [
+
+      ],
+      "weekly" : {
+        "readAt" : "2026-11-09T21:06:00Z",
+        "resetsAt" : "2026-11-11T21:10:00Z",
+        "source" : "probe",
+        "usedPercent" : 97
+      }
+    }
+  ],
+  "banner" : null,
+  "generatedAt" : "2026-11-09T21:10:00Z",
+  "next" : {
+    "all" : {
+      "label" : null,
+      "reason" : "No account has room. main: Limited until Wed 9:10 PM."
+    },
+    "fable" : {
+      "label" : null,
+      "reason" : "No account has room. main: Limited until Wed 9:10 PM."
+    }
+  },
+  "schemaVersion" : 1
+}

@@ -297,6 +297,7 @@ public enum Picker {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "EEE h:mm a"
+        formatter.timeZone = LocalTime.zone
         return formatter.string(from: date)
     }
 }

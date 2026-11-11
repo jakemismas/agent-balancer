@@ -36,6 +36,12 @@ public enum TokenStore {
         return TokenSecret(value: value)
     }
 
+    /// Whether the token file of `label` is private and holds a plausible token. Answers yes or no
+    /// and never returns any part of the file.
+    public static func isUsable(context: ToolContext, label: String) -> Bool {
+        (try? read(context: context, label: label)) != nil
+    }
+
     /// A shape check only: printable, no spaces, a sane length.
     static func isPlausible(_ value: String) -> Bool {
         guard !value.isEmpty, value.count <= maxLength else { return false }

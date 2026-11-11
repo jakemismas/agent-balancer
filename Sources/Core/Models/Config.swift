@@ -128,6 +128,23 @@ public struct LaunchSettings: Codable, Equatable, Sendable {
     }
 }
 
+/// How long the readings history and the events record keep lines (docs/ARCHITECTURE.md
+/// section 10.4). With 0 no history line is kept.
+public struct HistorySettings: Codable, Equatable, Sendable {
+    public var retentionDays: Int
+
+    public init(retentionDays: Int = 35) {
+        self.retentionDays = retentionDays
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        retentionDays =
+            try c.decodeIfPresent(Int.self, forKey: .retentionDays)
+            ?? HistorySettings().retentionDays
+    }
+}
+
 /// `config.json`: labels, kinds, emails and rules. It holds no token, no launch template and no
 /// executable path.
 public struct Config: Codable, Equatable, Sendable {
@@ -141,12 +158,14 @@ public struct Config: Codable, Equatable, Sendable {
     public var fable: FableSettings
     public var picker: PickerSettings
     public var launch: LaunchSettings
+    public var history: HistorySettings
 
     public init(
         schemaVersion: Int = Config.currentSchema, sharedSource: String = "~/.claude",
         accounts: [Account] = [], probe: ProbeSettings = ProbeSettings(),
         refresh: RefreshSettings = RefreshSettings(), fable: FableSettings = FableSettings(),
-        picker: PickerSettings = PickerSettings(), launch: LaunchSettings = LaunchSettings()
+        picker: PickerSettings = PickerSettings(), launch: LaunchSettings = LaunchSettings(),
+        history: HistorySettings = HistorySettings()
     ) {
         self.schemaVersion = schemaVersion
         self.sharedSource = sharedSource
@@ -156,10 +175,11 @@ public struct Config: Codable, Equatable, Sendable {
         self.fable = fable
         self.picker = picker
         self.launch = launch
+        self.history = history
     }
 
     private enum CodingKeys: String, CodingKey {
-        case schemaVersion, sharedSource, accounts, probe, refresh, fable, picker, launch
+        case schemaVersion, sharedSource, accounts, probe, refresh, fable, picker, launch, history
     }
 
     public init(from decoder: Decoder) throws {
@@ -172,6 +192,7 @@ public struct Config: Codable, Equatable, Sendable {
         fable = try c.decodeIfPresent(FableSettings.self, forKey: .fable) ?? FableSettings()
         picker = try c.decodeIfPresent(PickerSettings.self, forKey: .picker) ?? PickerSettings()
         launch = try c.decodeIfPresent(LaunchSettings.self, forKey: .launch) ?? LaunchSettings()
+        history = try c.decodeIfPresent(HistorySettings.self, forKey: .history) ?? HistorySettings()
     }
 
     public func account(_ label: String) -> Account? {

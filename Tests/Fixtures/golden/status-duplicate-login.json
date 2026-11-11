@@ -1,0 +1,111 @@
+{
+  "accounts" : [
+    {
+      "accountKey" : "key-main",
+      "configDir" : null,
+      "email" : "same@example.com",
+      "endingSoon" : false,
+      "endsAt" : null,
+      "error" : {
+        "code" : "duplicate_login",
+        "text" : "Logged in as the same account as pool-a. Log one folder into its own account."
+      },
+      "fable" : {
+        "guaranteedLeftPercentOfCap" : null,
+        "possibleLeftPercentOfCap" : null,
+        "resetsAt" : null,
+        "source" : "none",
+        "usedPercent" : null
+      },
+      "fiveHour" : null,
+      "fullLogin" : true,
+      "inUse" : {
+        "count" : 0,
+        "sessions" : [
+
+        ]
+      },
+      "kind" : "login",
+      "label" : "main",
+      "limited" : null,
+      "linked" : null,
+      "loginExpiresAt" : null,
+      "loginExpiresSource" : null,
+      "planTier" : null,
+      "readingsAge" : null,
+      "reserve" : null,
+      "role" : "pool",
+      "state" : "error",
+      "stateSince" : "2026-11-09T21:10:00Z",
+      "warnings" : [
+
+      ],
+      "weekly" : {
+        "readAt" : null,
+        "resetsAt" : null,
+        "source" : "none",
+        "usedPercent" : null
+      }
+    },
+    {
+      "accountKey" : "key-pool-a",
+      "configDir" : null,
+      "email" : "SAME@example.com",
+      "endingSoon" : false,
+      "endsAt" : null,
+      "error" : {
+        "code" : "duplicate_login",
+        "text" : "Logged in as the same account as main. Log one folder into its own account."
+      },
+      "fable" : {
+        "guaranteedLeftPercentOfCap" : null,
+        "possibleLeftPercentOfCap" : null,
+        "resetsAt" : null,
+        "source" : "none",
+        "usedPercent" : null
+      },
+      "fiveHour" : null,
+      "fullLogin" : false,
+      "inUse" : {
+        "count" : 0,
+        "sessions" : [
+
+        ]
+      },
+      "kind" : "token",
+      "label" : "pool-a",
+      "limited" : null,
+      "linked" : null,
+      "loginExpiresAt" : "2027-11-09T21:10:00Z",
+      "loginExpiresSource" : "estimate",
+      "planTier" : null,
+      "readingsAge" : null,
+      "reserve" : null,
+      "role" : "pool",
+      "state" : "error",
+      "stateSince" : "2026-11-09T21:10:00Z",
+      "warnings" : [
+
+      ],
+      "weekly" : {
+        "readAt" : null,
+        "resetsAt" : null,
+        "source" : "none",
+        "usedPercent" : null
+      }
+    }
+  ],
+  "banner" : null,
+  "generatedAt" : "2026-11-09T21:10:00Z",
+  "next" : {
+    "all" : {
+      "label" : null,
+      "reason" : "No account has room. main: Logged in as the same account as pool-a. Log one folder into its own account. pool-a: Logged in as the same account as main. Log one folder into its own account."
+    },
+    "fable" : {
+      "label" : null,
+      "reason" : "No account has room. main: Logged in as the same account as pool-a. Log one folder into its own account. pool-a: Logged in as the same account as main. Log one folder into its own account."
+    }
+  },
+  "schemaVersion" : 1
+}

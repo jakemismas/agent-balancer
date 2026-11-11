@@ -83,17 +83,25 @@ agent-balancer/
       Runner/      Process with an argument array (never a shell), timeout, output size cap,
                    scrubber on every captured byte
       Readers/     auth status reader, probe reader (stream-json parser), sessions reader
+                   (`SessionsReader`: the default folder's `sessions/` and `jobs/` records, section 8)
       Readings/    reading cache (state/readings/<label>.json), the merge rule of 6.3, and the
                    refresher that runs probes under a lock per account
       Env/         the one shared group of protected environment names (6.2)
       Picker/      pure function: (config, readings, now, model) -> PickResult
       Accounts/    AccountKind (login, token, folder): each kind's checks, probe context and
                    recipe parts; the only place that branches on kind
-      Launch/      launch files: caller settings allowlist, merge, lease, upkeep
+      Launch/      launch files: caller settings allowlist, merge, lease, upkeep (`Upkeep`, 4A.6)
+      Status/      `StatusBuilder`: merges readings, sign-in checks and in-use sessions into the
+                   status document and rebuilds `state/status.json` (sections 10.1 and 13)
       Tokens/      the token file: capture, shape check, write, replace, delete
-      History/     append-only readings history and state-change events
+      History/     append-only readings history (`ReadingHistory`), state-change events
+                   (`EventLog`), the rule that turns a change of state into one event
+                   (`Transitions`), and the `events` and `history` answers (`Queries`)
       Scrub/       token-like string redaction used by Runner and the logger
     agent-balancer/          CLI (swift-argument-parser)
+      Commands/    one file per command: Init, Doctor, Config, Link, Refresh, Pick, Status, Events,
+                   History, and the `Shared` helper that ends a writing command with the status
+                   rebuild
     AgentBalancerBar/        SwiftUI MenuBarExtra app (window style, LSUIElement)
   skill/agent-balancer/SKILL.md   the skill file for a user's Claude (4A.7)
   Tests/
@@ -125,6 +133,13 @@ The rebuild step is the only writer of the history. Under one lock, taken before
 reading, lease or config file and held until `status.json` is renamed into place (section 13), it
 appends a line to an account's readings history when its numbers changed, and a numbered line to
 the events record when an account's state changed. `pick` and `verify` never read the history.
+`status` and `refresh` never read the default folder's settings file (rule 3). The commands that
+may read it (`init`, `pick`, `link --accept-source-change`) pass what they saw, the hook record
+status and whether keys are present, to the rebuild, which keeps it in `state/current.json` and
+carries it over for every rebuild that did not read the file. In the same way a sign-in check
+(`status` runs `auth status` for the `login` account) and a probe (`refresh`, `pick`) each pass
+their result, and a rebuild that observed nothing carries the last error over unchanged, so
+`status --cached` never invents a recovery. A successful probe clears a carried `login_rejected`.
 The app reads `status.json`, checks whether `config.json` exists (to choose the "no config yet"
 state), writes no file itself, and calls the CLI for actions.
 
@@ -321,7 +336,9 @@ Both folders are marked as excluded from backups.
 `login` or `token` account is refused with `settings_changed` when a recorded hook is later gone
 or changed, or hooks are switched off. After `init`, a missing or unreadable record fails these
 accounts too, with `settings_changed` and the text "Hook record missing. Run
-`agent-balancer link --accept-source-change` in Terminal."
+`agent-balancer link --accept-source-change` in Terminal." A record that holds a fingerprint or
+command hash other than 64 lowercase hex digits counts as unreadable, so no other value of it is
+ever printed.
 
 `pick --full-login` offers only `login` and `folder` accounts, for a session that needs
 connectors, Remote Control or the claude.ai skills. Without it every kind competes on the picker
@@ -348,15 +365,25 @@ rules of section 7.
 - **In use:** a session counts toward the account named by the launch file in its saved flags. A
   session in the default folder with no launch file counts toward the `login` account. A session
   in an account folder counts toward that folder's account.
-- **Launch file upkeep:** `pick` removes a launch file when its lease ended without a
-  launch (`leaseMinutes` passed and no session names it), or when the session that names it is
-  gone. A launch file is kept while any session entry names it. Upkeep lists the label's files
-  under the pick lock, so it never removes the file of a pick in progress. If session entries
-  cannot be read, files are kept for `launch.keepDays` (default 35) and then removed. Until the
-  in-use reader of section 8 ships, session entries are never read, so the last rule applies to
-  every file: only a regular file owned by the user, named `l-<8 hex>.json`, older than
-  `launch.keepDays`, goes, through the no-follow writer. Upkeep also runs on `refresh` once the
-  in-use reader ships.
+- **Launch file upkeep:** `pick` and `refresh` run it under the pick lock, so it never removes the
+  file of a pick in progress. The tool reads session records (section 8) and works from one of two
+  cases.
+  - Records read cleanly: a launch file is deleted only when no record names it, no open lease
+    holds it and it is older than `picker.leaseMinutes`. A launch file that any record names is
+    kept for as long as that record exists, whatever the session's state (running, sleeping,
+    finished or failed); a background session's launch file is named in its job record
+    (`respawnFlags`), a foreground session's record names none. A lease that ended without a
+    launch leaves a file no record names, so it goes.
+  - A record cannot be opened or read, is not a regular file, or is over 1 MiB: only files older
+    than `launch.keepDays` (default 35) are deleted, and `inUse` is `unknown`.
+
+  A removal touches only a regular file owned by the user, named `l-<8 hex>.json`, directly under
+  `launch/<label>/`, through the no-follow writer; a link planted there is neither followed nor
+  deleted. What a respawned background session does when its launch file is gone was never
+  measured, so the worst case is assumed (it runs on the stored login with no error), which is why
+  a named file is never deleted. Whether a running or sleeping session re-reads a rewritten launch
+  file is also unmeasured: a wake did not restart the process, so a session keeps the token it
+  started with until its process restarts.
 - **Trust and messages:** `login` and `token` sessions share the default folder, so a project
   trusted once is trusted for all of them and messages between their sessions work. Only `folder`
   accounts need the per-folder trust step and the file-only reports of 5.2.
@@ -682,7 +709,8 @@ user to run, because the tool starts no child process other than `claude` and it
              "recheckAfterWeeklyRisePercent": 5 },
   "launch": { "settingsKeys": ["env"], "envNames": [], "keepDays": 35 },
   "probe": { "safeMode": true, "timeoutSeconds": 60, "passProxyEnv": false },
-  "refresh": { "backgroundMinutes": 60 }
+  "refresh": { "backgroundMinutes": 60 },
+  "history": { "retentionDays": 35 }
 }
 ```
 
@@ -809,12 +837,36 @@ reading does it draw the possibly-used span hatched and label the row "Fable: up
 
 ## 8. In-use detection
 
-- Each account folder's `sessions/` holds one small file per running session. The tool lists
-  entry names, reads only the process id and name fields if present, and checks the process is
-  alive. The result is `inUse.count` and `inUse.sessions` (id, name), never prompts or paths.
-- If the `sessions/` format is not readable, the row shows `inUse: unknown` instead of guessing.
-- Not used: `claude agents --json` per folder (it may start a supervisor for every folder), and
-  reading other processes' environments (fragile, and close to snooping).
+A session counts toward an account by the launch file its records name (4A.6). The default folder
+is the only folder read in this version.
+
+- Records are `sessions/*.json` (one per running session) and `jobs/*/state.json` in the default
+  folder. The tool reads ids, names, state and launch file names from them and drops every other
+  value as it reads. Other files there, such as `.key` files, are ignored. A missing `sessions/`
+  or `jobs/` folder is an empty, clean read. A record that cannot be opened or read, is not a
+  regular file (a link included), or is over 1 MiB makes the pass unclean.
+- A `sessionId`, `resumeSessionId` or `jobId` is read only when it has the shape of a job folder
+  name, which is the job id: 1 to 128 letters, digits, dots, underscores or hyphens, starting with
+  a letter or digit. A record with any other id is treated as unreadable: the id is never printed
+  or stored, the record's launch file names still count as named, and the pass is unclean. An
+  entry of `jobs/` whose name has another shape, such as a hidden file, is not a job record.
+- A session is live when its `sessions/<pid>.json` entry names a process that is alive. A live
+  background session links to its job record by the entry's `jobId` (the `jobs/<jobId>/` folder)
+  or an equal `sessionId`. A job whose state is finished, stopped, failed or similar never counts.
+  Sessions are told apart by `sessionId`, so two sessions that share one launch file count twice.
+- A record names a launch file when any string in it, after `\/` is unescaped, contains
+  `launch/<label>/l-<8 hex>.json`, whatever the JSON shape. The label comes from that path, never
+  from a field of the record or an environment variable. A live session whose records name no
+  launch file counts toward the `login` account. One that names a label not in the config counts
+  toward no account.
+- The result is `inUse.count` and `inUse.sessions` (the first 8 characters of the session id and
+  the scrubbed name, at most 80 characters), never prompts or paths. When the pass was unclean the
+  row shows `inUse: { "count": null, "sessions": [], "unknown": true }` instead of guessing.
+- When a live session's records name a launch file that does not exist, the label's row carries the
+  warning `launch_file_missing` with a count (section 9). `doctor` lists those sessions by the
+  first 8 characters of their ids.
+- Not used: `claude agents --json` (it may start a supervisor), and reading other processes'
+  environments (fragile, and close to snooping).
 
 ## 9. Errors and states
 
@@ -838,9 +890,15 @@ short scrubbed text the menu shows as is.
 | `possible_duplicate` (warning) | a token account whose weekly and 5-hour reset times both equal another account's (4A.4) | ok | "Same reset times as pool-a. If this is the same account, remove one." |
 | `key_in_settings` (warning, no event) | the default folder's `settings.json` carries `apiKeyHelper` or an `env` name among the API key and token names, read by name only (4A.3) | ok | "Settings carry an API key or key helper. Token accounts are skipped." |
 | `stale` (warning) | reading older than twice the refresh interval | ok | "Last read 2 h ago." |
+| `launch_file_missing` (warning, no event) | a live session's records name a launch file that does not exist (section 8); the text carries a count only, never a session name or a path | unchanged | "1 live session names a launch file that is gone." |
 
 A rejected login on an account marked `endingSoon` stays `login_rejected`, because the tool cannot
-tell an ended subscription from an expired login, but its text says both.
+tell an ended subscription from an expired login, but its text says both. When several errors apply
+to one account, the row shows the first of: `login_rejected`, `settings_changed`, `token_missing`,
+`wrong_account`, `duplicate_login`, `plan_changed`, `check_failed`. An `endsAt` that has passed
+beats all of them. `duplicate_login` compares the emails of every account in the config, a token
+account's note included. An account in `error` or `ended` is never the `next` choice, and the
+state of an account in `error` takes precedence over `limited`.
 
 Every change of `state`, every error code that appears or clears (one `settings_changed` error
 event per affected account, though the menu shows one banner), and the first sight of a
@@ -859,6 +917,7 @@ numbers 0 to 100 with one decimal.
 {
   "schemaVersion": 1,
   "generatedAt": "2026-11-09T21:10:00Z",
+  "banner": null,
   "accounts": [
     {
       "label": "pool-a",
@@ -867,6 +926,9 @@ numbers 0 to 100 with one decimal.
       "kind": "token",
       "fullLogin": false,
       "configDir": null,
+      "accountKey": "key-pool-a",
+      "endingSoon": false,
+      "linked": null,
       "state": "ok",
       "stateSince": "2026-11-05T02:03:10Z",
       "limited": null,
@@ -877,12 +939,18 @@ numbers 0 to 100 with one decimal.
       "fable":    { "usedPercent": null, "guaranteedLeftPercentOfCap": 56.0, "possibleLeftPercentOfCap": 100.0,
                     "resetsAt": null, "source": "estimate" },
       "fiveHour": { "usedPercent": 9.0, "resetsAt": "2026-11-09T23:40:00Z", "source": "probe", "readAt": "2026-11-09T21:06:12Z" },
-      "inUse":    { "count": 1, "sessions": [ { "id": "s-1a2b", "name": "build-worker-1" } ] },
+      "readingsAge": 228,
+      "inUse":    { "count": 1, "sessions": [ { "id": "1a2b3c4d", "name": "build-worker-1" } ] },
       "endsAt": null,
       "loginExpiresAt": "2026-12-07T10:08:56Z",
+      "loginExpiresSource": "estimate",
       "reserve": null
     }
-  ]
+  ],
+  "next": {
+    "all":   { "label": "pool-a", "reason": "Soonest weekly reset: resets Wed 6:00 PM." },
+    "fable": { "label": "pool-a", "reason": "Soonest weekly reset: resets Wed 6:00 PM. Fable room guaranteed at 56% of cap." }
+  }
 }
 ```
 
@@ -893,14 +961,22 @@ Field rules:
 - For a token account `email` is the note typed at `add` (never checked), `planTier` is null, and
   `loginExpiresAt` is an estimate with `loginExpiresSource: "estimate"` (4A.4). No field ever
   holds a token or the path of a token or launch file.
+- `banner` is null, or `{ "code", "text" }` for a problem of the whole setup. This version sets it
+  for `settings_changed`, with the text "Settings changed. Run `agent-balancer link
+  --accept-source-change` in Terminal.", or the "Hook record missing" text of 4A.5.
+- `readingsAge` is the age of the account's reading in seconds, or null with no reading.
+  `loginExpiresSource` is `estimate` for a token account, `auth` for a `login` account (from
+  `auth status`), and null when no expiry is known. `inUse` is `{ "count", "sessions" }`, or with
+  an unreadable record `{ "count": null, "sessions": [], "unknown": true }` (section 8).
 - `state` is one of `ok | limited | error | ended`. `error` is null or
   `{ "code": ..., "text": ... }`. `source` is one of `probe | estimate | none`.
 - `reserve` is present only on `main` accounts:
   `{ "linePercent": 63.3, "marginPercent": 5, "launchAllowed": true, "daysLeft": 4.0 }`.
 - `fiveHour` is null when the plan has no 5-hour window.
-- `stateSince` is when the tool first saw the current `state` (null before the first reading).
+- `stateSince` is when the tool first saw the current `state` with its error code (null before the
+  first reading of an account that is `ok`).
   `limited` is null unless `state` is `limited`; then it is
-  `{ "window": "weekly" | "fable" | "fiveHour", "since": ..., "until": ... }`, where `since` is
+  `{ "window": "weekly" | "fiveHour", "since": ..., "until": ... }`, where `since` is
   when the tool first saw the account limited and `until` is that window's `resetsAt`. The sample
   row shows the Fable fallback; with a Fable reading `fable.usedPercent` is a number, `source` is
   `"probe"` and the two bound fields are null. The rebuild keeps state, error code and since times
@@ -908,10 +984,14 @@ Field rules:
   on retention. `limited.window` is the window whose reset frees the account: of the windows at or
   over `limitedAtPercent`, or named by a probe's rejected status, the one with the latest
   `resetsAt`. When `until` has passed and no new reading exists, the row stays `limited` until the
-  next reading; `limit_cleared` comes from a reading, never from the clock alone.
+  next reading; `limit_cleared` comes from a reading, never from the clock alone. A full Fable
+  sub-cap is the `fable_limited` warning, never a `limited` window (section 9).
+- `planTier` is the plan tier `auth status` reports when it is 1 to 64 letters, digits, dots,
+  underscores or hyphens, starting with a letter or digit. Any other value reads as unknown, the
+  same as a missing one, so it is never stored or printed.
 - Each account also carries `accountKey` (7.1), `endingSoon` and `linked` (true or false for a
   `folder` account; null for `login` and `token` accounts).
-- The document carries a top-level `next` object,
+- The document carries a top-level `next` object (`label` is null when nothing fits),
   `{ "all": { "label", "reason" }, "fable": { "label", "reason" } }`, computed with the picker
   rules but without leases and without the main account's probe-source and age rules, so the menu
   header can show the next launch without running `pick`. `pick` confirms, and its answer can
@@ -1027,18 +1107,31 @@ The record of state changes. It answers "what changed since I last looked": the 
   9 codes), `recovered` (an error cleared; `text` names which), `login_expiring`,
   `account_added`, `account_removed`, `token_replaced`. `possible_duplicate` and `key_in_settings`
   stay warnings with no event. A `settings_changed` error event is written once per affected
-  account, though `status` and the menu show one banner. New types may appear; a caller skips
-  types it does not know.
-- `seq` rises by one per event. A damaged record starts a new `recordId` and `seq` restarts at 1;
-  there is no counter file. `cursor` is the `seq` of the last event this answer covers: when
+  account, though `status` and the menu show one banner. `launch_file_missing` writes no event.
+  New types may appear; a caller skips types it does not know. A state change writes at most one
+  event per account in one rebuild, chosen in this order: a new error code (`error`), a cleared
+  error (`recovered`), `limited`, `limit_cleared`, then `login_expiring`. `account_added` and
+  `account_removed` come from comparing `accountKey`s with `state/current.json`, so a renamed label
+  writes none and a label removed and added again for another account writes both.
+- `seq` rises by one per event. A damaged record (a line in the middle that does not parse, a
+  `seq` that does not rise, or a missing header) is set aside as `events-damaged-<time>.jsonl`,
+  starts a new `recordId`, and `seq` restarts at 1; there is no counter file. A line with a value
+  the tool never writes (a label that does not match the label pattern of 5.2,
+  `\A[a-z0-9][a-z0-9-]{0,31}\z`; a type, code or window outside its list; or a `seq` below 1 or
+  at or above 10^12) counts as a line that does not parse, and a header whose `recordId` is not
+  `r-` and six lowercase hex digits counts as a missing header; neither value is ever returned. Pruning
+  (section 13) keeps each label's newest line, so `seq` can have gaps in the middle. Before the
+  first rebuild
+  `recordId` is null and `cursor` is 0. `cursor` is the `seq` of the last event this answer covers: when
   `--limit` cut the answer short it is the `seq` of the last event returned and `more` is true,
   and the caller calls again at once; otherwise it is the highest `seq` in the record, also when
   `events` is empty, and `more` is false. `oldestSeq` is the oldest event still kept (null for an
   empty record). `gap` is true when `--after` is below `oldestSeq - 1` (an event after the
   caller's cursor was pruned) or above `cursor`; the caller then reads `status --json` once and
   carries on from the new `cursor`. `--after 0` on a record that still holds seq 1 is not a gap.
-- Each answer carries `recordId`, a random id made when `events.jsonl` is created. A caller that
-  sees a `recordId` it does not know treats that as a gap too: the record was started over.
+- Each answer carries `recordId`, a random id made when `events.jsonl` is created: `r-` and six
+  lowercase hex digits. A caller that sees a `recordId` it does not know treats that as a gap too:
+  the record was started over.
 - `--label` must match the label pattern of 5.2 and is never used to build a path otherwise;
   `--limit` is 1 to 1000. The same holds for `history` (10.4).
 - `at` is when the tool first saw the change. `notBefore` is the time of the last reading that
@@ -1074,7 +1167,8 @@ time, for a chart or a burn-rate estimate.
 The rebuild step appends one line for an account when a number, a reset time or the state differs
 from that account's last line, at most one line per 15 minutes unless the state changed, so a gap
 means nothing was read. `--since` defaults to 24 hours back and `--limit` to 500 readings per
-account, oldest first. Lines older than `history.retentionDays` (default 35, five weekly windows)
+account (the newest ones, listed oldest first). `--since` takes an ISO 8601 time or a span such as
+`30m`, `24h` or `7d`. Lines older than `history.retentionDays` (default 35, five weekly windows)
 are dropped (section 13). With 0 no history line is kept and `history` answers with empty lists;
 the events record then keeps only each label's newest line.
 
@@ -1207,14 +1301,18 @@ the events record then keeps only each label's newest line.
   state/picks.log                  0600   one line per pick: time, model, label or none, lease id
                                           or `-`, reason; no line for a dry run
   state/history/<label>.jsonl      0600   readings history, one JSON line per changed reading (10.4)
-  state/events.jsonl               0600   state changes, one numbered JSON line each (10.3)
-  state/current.json               0600   each label's current state and since times (10.1)
+  state/events.jsonl               0600   a header line with the record id, then state changes, one
+                                          numbered JSON line each (10.3)
+  state/current.json               0600   each label's current state, error code and since times, the
+                                          last sign-in and probe errors, and what the settings file
+                                          last showed (10.1; labels, codes, times and scrubbed text only)
   state/leases.json                0600   open leases (internal id, label, model, time), pruned
   probe/                           0700   one fresh temporary folder per probe, removed afterwards
   locks/probe-<label>.lock        0600   one probe at a time per folder
   locks/pick.lock                  0600   one pick decision at a time (section 7.2 rule 7)
   locks/history.lock               0600   one writer at a time for the history and events files
-  logs/agent-balancer.log          0600   scrubbed, rotated at 1 MB, 3 kept
+  logs/agent-balancer.log          0600   scrubbed lines from the status rebuild (rotation at 1 MB
+                                          is not built yet)
   backups/config-<date>.json       0600   before every migration
 ```
 
@@ -1243,9 +1341,17 @@ until `status.json` has been renamed into place, so rebuilds run one at a time f
 A rebuild that waits more than 30 seconds for the lock writes neither file and logs it. The
 history step runs last, after the command's own result is written and printed; a failure in it is
 logged and never changes that output or the exit code, so a damaged record cannot stop a `pick`.
-A last line that does not parse is cut off under the lock and logged. A line whose `seq` is not
-the previous one plus one marks the file damaged: it is renamed aside, a new record with a new
-`recordId` starts, and `seq` restarts at 1. Lines older than `history.retentionDays` (default 35)
+A last line that does not parse is cut off under the lock and logged. An events line in the middle
+that does not parse, or whose `seq` does not rise above the previous one, marks the file damaged:
+it is written aside under a new name, a new record with a new `recordId` starts, and `seq`
+restarts at 1. An events line with a value the tool never writes (a label that does not match the
+label pattern of 5.2, `\A[a-z0-9][a-z0-9-]{0,31}\z`; a type, code or window outside its list; or a
+`seq` below 1 or at or above 10^12) counts as a line that does not parse, and an events
+header whose `recordId` is not `r-` and six lowercase hex digits counts as a missing header. A
+history line in the middle that does not parse, or whose state or source the tool never writes,
+is skipped. A `state/current.json` that does not parse, or holds a label, state, code, window,
+plan tier or date the tool never writes, is logged and started over. Lines older than
+`history.retentionDays` (default 35)
 are dropped by rewriting the file through the same no-follow writer, at most once a day; the
 newest events line of each label is always kept. The files hold labels, percentages, times, states
 and scrubbed texts only: no email, no organization id, no session name, no path. With five

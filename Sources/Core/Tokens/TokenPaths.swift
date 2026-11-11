@@ -27,6 +27,8 @@ public enum TokenPaths {
         public var isRegularFile: Bool
         public var ownedByUser: Bool
         public var mode: Int
+        /// Last change of the file, from `lstat`. The estimate of the token's end counts from it.
+        public var modified: Date? = nil
         public var isPrivate: Bool { isRegularFile && ownedByUser && mode == 0o600 }
     }
 
@@ -42,6 +44,7 @@ public enum TokenPaths {
         guard fstatat(dir, name, &st, AT_SYMLINK_NOFOLLOW) == 0 else { return none }
         return Facts(
             exists: true, isRegularFile: (st.st_mode & S_IFMT) == S_IFREG,
-            ownedByUser: st.st_uid == getuid(), mode: Int(st.st_mode & 0o777))
+            ownedByUser: st.st_uid == getuid(), mode: Int(st.st_mode & 0o777),
+            modified: Date(timeIntervalSince1970: Double(st.st_mtimespec.tv_sec)))
     }
 }

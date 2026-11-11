@@ -1,0 +1,69 @@
+{
+  "accounts" : [
+    {
+      "accountKey" : "key-main",
+      "configDir" : null,
+      "email" : "main@example.com",
+      "endingSoon" : false,
+      "endsAt" : null,
+      "error" : null,
+      "fable" : {
+        "guaranteedLeftPercentOfCap" : 56,
+        "possibleLeftPercentOfCap" : 100,
+        "resetsAt" : null,
+        "source" : "estimate",
+        "usedPercent" : null
+      },
+      "fiveHour" : {
+        "readAt" : "2026-11-09T21:06:00Z",
+        "resetsAt" : "2026-11-09T23:40:00Z",
+        "source" : "probe",
+        "usedPercent" : 9
+      },
+      "fullLogin" : true,
+      "inUse" : {
+        "count" : 0,
+        "sessions" : [
+
+        ]
+      },
+      "kind" : "login",
+      "label" : "main",
+      "limited" : null,
+      "linked" : null,
+      "loginExpiresAt" : "2026-11-12T21:10:00Z",
+      "loginExpiresSource" : "auth",
+      "planTier" : "max_20x",
+      "readingsAge" : 240,
+      "reserve" : null,
+      "role" : "pool",
+      "state" : "ok",
+      "stateSince" : "2026-11-09T21:10:00Z",
+      "warnings" : [
+        {
+          "code" : "login_expiring",
+          "text" : "Login expires Nov 12."
+        }
+      ],
+      "weekly" : {
+        "readAt" : "2026-11-09T21:06:00Z",
+        "resetsAt" : "2026-11-11T21:10:00Z",
+        "source" : "probe",
+        "usedPercent" : 22
+      }
+    }
+  ],
+  "banner" : null,
+  "generatedAt" : "2026-11-09T21:10:00Z",
+  "next" : {
+    "all" : {
+      "label" : "main",
+      "reason" : "Soonest weekly reset: resets Wed 9:10 PM."
+    },
+    "fable" : {
+      "label" : "main",
+      "reason" : "Soonest weekly reset: resets Wed 9:10 PM. Fable room guaranteed at 56% of cap."
+    }
+  },
+  "schemaVersion" : 1
+}

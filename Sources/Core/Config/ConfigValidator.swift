@@ -2,11 +2,11 @@ import Foundation
 
 public enum ConfigValidator {
     public static func isValidLabel(_ label: String) -> Bool {
-        label.range(of: "^[a-z0-9][a-z0-9-]{0,31}$", options: .regularExpression) != nil
+        label.range(of: #"\A[a-z0-9][a-z0-9-]{0,31}\z"#, options: .regularExpression) != nil
     }
 
     public static func isValidDate(_ text: String) -> Bool {
-        text.range(of: "^[0-9]{4}-[0-9]{2}-[0-9]{2}$", options: .regularExpression) != nil
+        text.range(of: #"\A[0-9]{4}-[0-9]{2}-[0-9]{2}\z"#, options: .regularExpression) != nil
     }
 
     /// Throws on the first problem found, with a message that names the field and never a value
@@ -60,6 +60,9 @@ public enum ConfigValidator {
         }
         if picker.endingSoonAssumeDays < 0 {
             throw ToolError("picker.endingSoonAssumeDays must not be negative.")
+        }
+        if config.history.retentionDays < 0 {
+            throw ToolError("history.retentionDays must not be negative.")
         }
         let launch = config.launch
         if launch.keepDays < 1 {

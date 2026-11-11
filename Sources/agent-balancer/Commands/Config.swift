@@ -63,6 +63,7 @@ struct ConfigCommand: ParsableCommand {
             try store.save(config, backup: true)
             let reserve = config.accounts[index].reserve ?? .standard
             print("'\(Display.safe(label))' is the main account. Reserve: \(reserve.summary).")
+            Shared.rebuildStatus(context)
         }
     }
 
@@ -84,6 +85,7 @@ struct ConfigCommand: ParsableCommand {
             config.accounts[index].reserve = nil
             try store.save(config, backup: true)
             print("'\(Display.safe(label))' is a pool account.")
+            Shared.rebuildStatus(context)
         }
     }
 
@@ -112,6 +114,7 @@ struct ConfigCommand: ParsableCommand {
                 config.refresh.backgroundMinutes = minutes
                 try store.save(config, backup: true)
                 print("refresh.backgroundMinutes is \(minutes).")
+                Shared.rebuildStatus(context)
                 return
             }
             guard words.count == 3 else {
@@ -162,6 +165,7 @@ struct ConfigCommand: ParsableCommand {
             }
             try store.save(config, backup: true)
             print("Updated \(field) for '\(Display.safe(label))'.")
+            Shared.rebuildStatus(context)
         }
     }
 }

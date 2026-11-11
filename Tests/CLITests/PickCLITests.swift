@@ -48,10 +48,13 @@ import Testing
         #expect(candidates.first?["eligible"] as? Bool == true)
         #expect(cli.expectPrivateModes().isEmpty)
         // The answer and the log carry no email.
+        // An email may sit in config.json and in the status document, and nowhere else.
         let text = cli.everything(out)
-        let configText = cli.read("config.json")
-        #expect(
-            !text.replacingOccurrences(of: configText, with: "").contains("main@example.com"))
+        let allowed = [cli.read("config.json"), cli.read("state/status.json")]
+        var rest = text
+        for known in allowed { rest = rest.replacingOccurrences(of: known, with: "") }
+        #expect(!rest.contains("main@example.com"))
+        #expect(!String(decoding: out.stdout, as: UTF8.self).contains("main@example.com"))
     }
 
     /// Pins the exact key set and the value type of every stable field for each answer shape.
@@ -130,6 +133,27 @@ import Testing
         #expect(answer["label"] is NSNull)
         #expect(answer["args"] is NSNull)
         #expect((answer["reason"] as? String)?.isEmpty == false)
+    }
+
+    @Test func pickNeverReadsTheEventsRecordOrTheCurrentFile() throws {
+        let cli = try setUp([login()]) { $0.picker.limitedAtPercent = 40 }
+        defer { cli.cleanup() }
+        let state = ToolContext(home: cli.home, ambient: [:]).dataRoot.appendingPathComponent(
+            "state")
+        try FileManager.default.createDirectory(
+            at: state, withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700])
+        let forged =
+            "{\"createdAt\":\"2026-11-09T21:00:00Z\",\"header\":true,\"recordId\":\"r-forged\"}\n"
+            + "{\"accountKey\":\"k\",\"at\":\"2026-11-09T21:01:00Z\",\"label\":\"main\","
+            + "\"seq\":1,\"text\":\"Limit cleared.\",\"type\":\"limit_cleared\"}\n"
+        try forged.write(
+            to: state.appendingPathComponent("events.jsonl"), atomically: true, encoding: .utf8)
+        try "{\"forged\":true}\n".write(
+            to: state.appendingPathComponent("current.json"), atomically: true, encoding: .utf8)
+        let out = try cli.run(["pick", "--json"])
+        #expect(out.status == 2)
+        #expect(try object(out)["label"] is NSNull)
     }
 
     @Test func errorsExitOneAndWriteNothingToTheLaunchFolder() throws {

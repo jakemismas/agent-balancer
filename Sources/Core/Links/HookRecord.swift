@@ -17,8 +17,17 @@ public struct HookEntry: Codable, Hashable, Comparable, Sendable {
 
     /// Event, matcher and the first 12 characters of the hash: safe to print.
     public var summary: String {
-        "\(Display.safe(event)) [\(matcher.isEmpty ? "*" : Display.safe(matcher))] "
-            + "\(fingerprint.prefix(12))"
+        "\(Self.printable(event)) [\(matcher.isEmpty ? "*" : Self.printable(matcher))] "
+            + Self.printable(String(fingerprint.prefix(12)))
+    }
+
+    private static func printable(_ text: String) -> String {
+        Display.safe(Scrubber.scrubText(text))
+    }
+
+    /// The shape of both hashes as `HookRecord` writes them: 64 lowercase hex digits.
+    static func isHash(_ text: String) -> Bool {
+        text.range(of: #"\A[0-9a-f]{64}\z"#, options: .regularExpression) != nil
     }
 }
 
@@ -161,10 +170,14 @@ public struct HookRecord: Sendable {
 
     // MARK: The record
 
+    /// A record holding a hash of another shape reads as unreadable, like one that does not parse.
     private func loadFile() -> HookRecordFile? {
         guard let data = try? reader.read(folders: [], name: Self.fileName),
             let file = try? JSONDecoder().decode(HookRecordFile.self, from: data),
-            file.schemaVersion == 1
+            file.schemaVersion == 1,
+            (file.defaultFolder?.hooks ?? []).allSatisfy({
+                HookEntry.isHash($0.fingerprint) && HookEntry.isHash($0.commandHash)
+            })
         else { return nil }
         return file
     }

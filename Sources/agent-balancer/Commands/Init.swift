@@ -52,6 +52,12 @@ struct InitCommand: ParsableCommand {
         if !hadConfig { config.probe.safeMode = true }
         try store.save(config, backup: hadConfig)
         try hooks.record(facts)
+        var observations = StatusObservations()
+        observations.settings = SettingsObservation(issue: nil, carriesKey: facts.carriesKey)
+        observations.auth[chosen] = AuthObservation(
+            error: nil, planTier: status.planTier, loginExpiresAt: status.loginExpiresAt,
+            signedIn: true)
+        Shared.rebuildStatus(context, observations: observations)
 
         print("Registered '\(Display.safe(chosen))' as a login account in the pool.")
         print("Recorded \(facts.hooks.count) hook entries from the default folder.")

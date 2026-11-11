@@ -68,7 +68,7 @@ public struct ConfigStore: Sendable {
 
     private static let topKeys: Set<String> = [
         "schemaVersion", "sharedSource", "accounts", "probe", "refresh", "fable", "picker",
-        LaunchFiles.configKey,
+        LaunchFiles.configKey, "history",
     ]
     private static let accountKeys: Set<String> = [
         "label", "kind", "role", "email", "expectedPlanTier", "accountKey", "reserve", "endsAt",
@@ -84,6 +84,7 @@ public struct ConfigStore: Sendable {
         "limitedAtPercent", "minRoomPercent", "maxReadingAgeMinutes", "deadlineSeconds",
         "leaseMinutes", "expectedRunPercent", "endingSoonAssumeDays",
     ]
+    private static let historyKeys: Set<String> = ["retentionDays"]
     private static let launchKeys: Set<String> = ["settingsKeys", "envNames", "keepDays"]
     private static let reserveKeys: Set<String> = ["points", "marginPercent", "allowAbove90"]
 
@@ -118,6 +119,10 @@ public struct ConfigStore: Sendable {
         if let n = new[LaunchFiles.configKey] as? [String: Any] {
             out[LaunchFiles.configKey] = overlay(
                 old: old[LaunchFiles.configKey] as? [String: Any] ?? [:], new: n, known: launchKeys)
+        }
+        if let n = new["history"] as? [String: Any] {
+            out["history"] = overlay(
+                old: old["history"] as? [String: Any] ?? [:], new: n, known: historyKeys)
         }
         let oldAccounts = (old["accounts"] as? [[String: Any]]) ?? []
         var byKey: [String: [String: Any]] = [:]

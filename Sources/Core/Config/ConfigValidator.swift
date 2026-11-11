@@ -23,6 +23,25 @@ public enum ConfigValidator {
         if config.probe.timeoutSeconds < 1 {
             throw ToolError("probe.timeoutSeconds must be at least 1.")
         }
+        let fable = config.fable
+        if fable.capPercentOfWeekly < 1 || fable.capPercentOfWeekly > 100 {
+            throw ToolError("fable.capPercentOfWeekly must be from 1 to 100.")
+        }
+        if !(fable.probeBudgetUsd > 0) || fable.probeBudgetUsd > 100 {
+            throw ToolError("fable.probeBudgetUsd must be more than 0 and at most 100.")
+        }
+        if fable.probeTimeoutSeconds < 1 {
+            throw ToolError("fable.probeTimeoutSeconds must be at least 1.")
+        }
+        if fable.minRoomPercentOfCap < 0 || fable.minRoomPercentOfCap > 100 {
+            throw ToolError("fable.minRoomPercentOfCap must be from 0 to 100.")
+        }
+        if fable.recheckAfterWeeklyRisePercent < 0 || fable.recheckAfterWeeklyRisePercent > 100 {
+            throw ToolError("fable.recheckAfterWeeklyRisePercent must be from 0 to 100.")
+        }
+        if config.picker.maxReadingAgeMinutes < 1 {
+            throw ToolError("picker.maxReadingAgeMinutes must be at least 1.")
+        }
         var seen = Set<String>()
         var logins = 0
         for account in config.accounts {

@@ -46,17 +46,28 @@ public enum AuthStatusReader {
             configDirectory: string("configDirectory"))
     }
 
-    /// ISO 8601 text, or a number of seconds or milliseconds since 1970.
+    /// The calendar range a reported date must fall in. Anything else is unknown, so a huge or
+    /// negative number never becomes a date.
+    static let plausibleSeconds: ClosedRange<Double> = 946_684_800...7_258_118_400
+
+    /// ISO 8601 text, or a number of seconds or milliseconds since 1970, between the years 2000
+    /// and 2200. Anything else gives nil, as does a boolean or a number that is not finite.
     static func date(_ value: Any?) -> Date? {
         if let text = value as? String {
             let plain = ISO8601DateFormatter()
-            if let d = plain.date(from: text) { return d }
             let fractional = ISO8601DateFormatter()
             fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            return fractional.date(from: text)
+            guard let d = plain.date(from: text) ?? fractional.date(from: text),
+                plausibleSeconds.contains(d.timeIntervalSince1970)
+            else { return nil }
+            return d
         }
-        if let number = value as? Double {
-            return Date(timeIntervalSince1970: number > 100_000_000_000 ? number / 1000 : number)
+        if let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() {
+            let raw = number.doubleValue
+            guard raw.isFinite else { return nil }
+            let seconds = raw > 100_000_000_000 ? raw / 1000 : raw
+            guard plausibleSeconds.contains(seconds) else { return nil }
+            return Date(timeIntervalSince1970: seconds)
         }
         return nil
     }

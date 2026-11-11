@@ -102,3 +102,141 @@ public struct NoFollowWriter: Sendable {
         }
     }
 }
+
+/// An exclusive lock on a file under the data folder. It is released when this value goes away.
+public final class FileLock: @unchecked Sendable {
+    private var descriptor: Int32
+
+    fileprivate init(descriptor: Int32) {
+        self.descriptor = descriptor
+    }
+
+    public func release() {
+        if descriptor >= 0 {
+            close(descriptor)
+            descriptor = -1
+        }
+    }
+
+    deinit { release() }
+}
+
+extension NoFollowWriter {
+    /// Takes an exclusive lock on `<root>/<folders...>/<name>`, making the file at 0600 when it is
+    /// missing. Waits up to `wait` seconds and returns nil when the lock stays held. The lock file
+    /// is never deleted, so two callers never lock two different files of one name.
+    public func acquireLock(folders: [String], name: String, wait: TimeInterval) throws -> FileLock?
+    {
+        try Paths.checkName(name)
+        let dir = try NoFollowWriter.openFolder(root: root, folders: folders, create: true)
+        defer { close(dir) }
+        let fd = openat(dir, name, O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0o600)
+        guard fd >= 0 else { throw ToolError("Could not open the lock file \(name).") }
+        var st = stat()
+        guard fstat(fd, &st) == 0, (st.st_mode & S_IFMT) == S_IFREG, st.st_uid == getuid() else {
+            close(fd)
+            throw ToolError("Refused the lock file \(name): it is not a regular file made by you.")
+        }
+        _ = fchmod(fd, 0o600)
+        let deadline = Date().addingTimeInterval(max(0, wait))
+        while true {
+            if flock(fd, LOCK_EX | LOCK_NB) == 0 { return FileLock(descriptor: fd) }
+            if Date() >= deadline {
+                close(fd)
+                return nil
+            }
+            usleep(50_000)
+        }
+    }
+
+    /// Makes a fresh folder `<prefix><16 hex>` at 0700 under `<root>/<parent...>` and returns its
+    /// name. Before it makes one, a folder of that shape older than `staleAfter` seconds is
+    /// removed. Anything else in the parent that is not such a folder refuses the call.
+    public func makeScratchFolder(parent: [String], prefix: String, staleAfter: TimeInterval)
+        throws -> String
+    {
+        let dir = try NoFollowWriter.openFolder(root: root, folders: parent, create: true)
+        defer { close(dir) }
+        let now = Date().timeIntervalSince1970
+        for entry in try NoFollowWriter.entries(of: dir) {
+            var st = stat()
+            if fstatat(dir, entry, &st, AT_SYMLINK_NOFOLLOW) != 0 {
+                // Another probe removed its own folder after the listing.
+                if errno == ENOENT { continue }
+                throw ToolError("Could not read the probe folder.", code: .checkFailed)
+            }
+            let isFolder = (st.st_mode & S_IFMT) == S_IFDIR && st.st_uid == getuid()
+            guard isFolder, NoFollowWriter.isScratchName(entry, prefix: prefix) else {
+                throw ToolError(
+                    "The probe folder holds something that is not a probe folder.",
+                    code: .checkFailed)
+            }
+            let modified = Double(st.st_mtimespec.tv_sec)
+            if now - modified > staleAfter {
+                NoFollowWriter.removeTree(in: dir, name: entry, depth: 0)
+            }
+        }
+        let name = prefix + Paths.randomHex(8)
+        guard mkdirat(dir, name, 0o700) == 0 else {
+            throw ToolError("Could not make a probe folder.", code: .checkFailed)
+        }
+        return name
+    }
+
+    /// Removes a folder made by `makeScratchFolder`, and what is inside it, without following links.
+    public func removeScratchFolder(parent: [String], name: String, prefix: String) {
+        guard NoFollowWriter.isScratchName(name, prefix: prefix) else { return }
+        guard let dir = try? NoFollowWriter.openFolder(root: root, folders: parent, create: false),
+            dir >= 0
+        else { return }
+        defer { close(dir) }
+        NoFollowWriter.removeTree(in: dir, name: name, depth: 0)
+    }
+
+    static func isScratchName(_ name: String, prefix: String) -> Bool {
+        guard name.hasPrefix(prefix) else { return false }
+        let rest = name.dropFirst(prefix.count)
+        return rest.count == 16 && rest.allSatisfy { $0.isHexDigit && !$0.isUppercase }
+    }
+
+    private static func entries(of dir: Int32) throws -> [String] {
+        let copy = dup(dir)
+        guard copy >= 0, let stream = fdopendir(copy) else {
+            if copy >= 0 { close(copy) }
+            throw ToolError("Could not list the probe folder.", code: .checkFailed)
+        }
+        defer { closedir(stream) }
+        rewinddir(stream)
+        var names: [String] = []
+        while let entry = readdir(stream) {
+            let name = withUnsafePointer(to: &entry.pointee.d_name) {
+                $0.withMemoryRebound(to: CChar.self, capacity: Int(NAME_MAX) + 1) {
+                    String(cString: $0)
+                }
+            }
+            if name != "." && name != ".." { names.append(name) }
+        }
+        return names
+    }
+
+    /// Deletes `name` under `parent`. Folders are opened with `O_NOFOLLOW`; any other entry,
+    /// a link included, is unlinked itself and never followed.
+    private static func removeTree(in parent: Int32, name: String, depth: Int) {
+        var st = stat()
+        guard fstatat(parent, name, &st, AT_SYMLINK_NOFOLLOW) == 0 else { return }
+        guard (st.st_mode & S_IFMT) == S_IFDIR else {
+            unlinkat(parent, name, 0)
+            return
+        }
+        if depth < 8,
+            case let child = openat(parent, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC),
+            child >= 0
+        {
+            if let names = try? entries(of: child) {
+                for entry in names { removeTree(in: child, name: entry, depth: depth + 1) }
+            }
+            close(child)
+        }
+        unlinkat(parent, name, AT_REMOVEDIR)
+    }
+}

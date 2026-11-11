@@ -1,0 +1,2 @@
+{"type":"system","subtype":"init","apiKeySource":"none","cwd":"/tmp/probe","owner":"someone@example.com"}
+{"type":"result","subtype":"success","is_error":true,"api_error_status":401,"result":"Invalid API key. Please run /login"}

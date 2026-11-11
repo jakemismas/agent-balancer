@@ -36,3 +36,37 @@ public enum AccountKinds {
         }
     }
 }
+
+/// What a probe of one account adds to the plain probe form of section 6.2.
+public struct ProbeContext: Sendable {
+    /// Arguments after the plain form. For a token account, `--settings <token file path>`.
+    public var extraArguments: [String]
+    /// The folder for `CLAUDE_CONFIG_DIR`, or nil to leave it unset.
+    public var configDir: URL?
+    /// True when the reading cache calls its `afterProbe` hook for this account.
+    public var callsAfterProbeHook: Bool
+
+    public init(
+        extraArguments: [String] = [], configDir: URL? = nil, callsAfterProbeHook: Bool = false
+    ) {
+        self.extraArguments = extraArguments
+        self.configDir = configDir
+        self.callsAfterProbeHook = callsAfterProbeHook
+    }
+}
+
+extension AccountKinds {
+    /// How one account is probed, by kind. A kind this version does not probe throws.
+    public static func probeContext(for account: Account, context: ToolContext) throws
+        -> ProbeContext
+    {
+        switch account.kind {
+        case Kind.login: return ProbeContext()
+        case Kind.token: return try TokenKind.probeContext(account: account, context: context)
+        default:
+            throw ToolError(
+                "Account '\(Display.safe(account.label))': this kind is not probed in this version.",
+                code: .checkFailed)
+        }
+    }
+}

@@ -99,6 +99,18 @@ struct CLIHome {
         try fake("auth.exit", "\(exit)")
     }
 
+    func fakeProbe(_ fixture: String) throws {
+        let now = Date()
+        let text = try String(
+            contentsOf: fixtures.appendingPathComponent("probe/\(fixture)"), encoding: .utf8
+        )
+        .replacingOccurrences(of: "@RESET_5H@", with: "\(Int(now.timeIntervalSince1970) + 10_000)")
+        .replacingOccurrences(of: "@RESET_7D@", with: "\(Int(now.timeIntervalSince1970) + 400_000)")
+        .replacingOccurrences(
+            of: "@RESET_31D@", with: "\(Int(now.timeIntervalSince1970) + 2_000_000)")
+        try fake("probe.jsonl", text)
+    }
+
     func fakeRecord(_ name: String) -> String {
         (try? String(
             contentsOf: home.appendingPathComponent(".ab-fake/\(name)"), encoding: .utf8)) ?? ""

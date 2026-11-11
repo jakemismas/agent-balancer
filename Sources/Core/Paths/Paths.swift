@@ -16,6 +16,17 @@ public enum Paths {
     }
 }
 
+/// Folder and file names under the data folder (docs/ARCHITECTURE.md section 13).
+public enum Layout {
+    public static let readingsFolders = ["state", "readings"]
+    public static let locksFolders = ["locks"]
+    public static let probeFolders = ["probe"]
+    public static let probeFolderPrefix = "p-"
+
+    public static func readingName(_ label: String) -> String { label + ".json" }
+    public static func lockName(_ label: String) -> String { "probe-" + label + ".lock" }
+}
+
 /// What the runner needs to know about a path before it trusts it.
 public struct FileFacts: Sendable {
     public let realPath: String

@@ -16,3 +16,14 @@
 - Add the safe `claude` runner (fixed search list, ownership checks, allowlisted child
   environment, timeout, output cap) and the scrubber for captured output.
 - Add the no-follow reader and writer, the fake `claude` and recorded auth fixtures for tests.
+- Add `refresh [--label <label>] [--force]`: a one-turn probe per `login` and `token` account that
+  stores each reading (percent from 0 to 100, source `probe`) under `~/.agent-balancer/state/`,
+  with a lock per account, a fresh probe folder per probe and a Fable probe at most once a day.
+  Add the `fable` and `picker.maxReadingAgeMinutes` settings, stream fixtures for the probe and
+  the token file path builder.
+- Bound a probe's reset time to its window (5 hours, 7 days or 31 days from the probe, with
+  5 minutes of slack) and fail the reading when it is outside that range. Bound dates read from
+  `auth status`, let a stored far-future reset be replaced by the next valid reading, and keep one
+  bad stored value from erasing an account's reading. Record the measured cost and time of the
+  Fable probe check as the source of the `fable.probeBudgetUsd` and `fable.probeTimeoutSeconds`
+  defaults.

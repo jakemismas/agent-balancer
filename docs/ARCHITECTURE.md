@@ -83,6 +83,8 @@ agent-balancer/
       Runner/      Process with an argument array (never a shell), timeout, output size cap,
                    scrubber on every captured byte
       Readers/     auth status reader, probe reader (stream-json parser), sessions reader
+      Readings/    reading cache (state/readings/<label>.json), the merge rule of 6.3, and the
+                   refresher that runs probes under a lock per account
       Env/         the one shared group of protected environment names (6.2)
       Picker/      pure function: (config, readings, now, model) -> PickResult
       Accounts/    AccountKind (login, token, folder): each kind's checks, probe context and
@@ -319,8 +321,9 @@ rules of section 7.
   whose Fable reading is older than that, or when all-models use has risen by
   `fable.recheckAfterWeeklyRisePercent` (default 5) since the reading. A Fable probe has its own
   budget and timeout, `fable.probeBudgetUsd` (default 0.50) and `fable.probeTimeoutSeconds`
-  (default 20), because a cold Fable probe costs more than the 0.05 cap of the plain probe and a
-  cap below the cold cost still spends it and returns no reading. The estimate of 7.4 is the
+  (default 20), set from the check recorded in 6.2, because a cold Fable probe costs more than
+  the 0.05 cap of the plain probe and a cap below the cold cost still spends it and returns no
+  reading. The estimate of 7.4 is the
   fallback for an account with no Fable reading yet, or with `fable.probe` switched off.
 - **In use:** a session counts toward the account named by the launch file in its saved flags. A
   session in the default folder with no launch file counts toward the `login` account. A session
@@ -484,7 +487,11 @@ strings only, so editing the script a command points to is not seen.
 | Source | Gives | Cost | When |
 |---|---|---|---|
 | `claude auth status --json` | Logged in or not, email, `planTier`, `subscriptionType`, `loginExpiresAt`, `configDirectory` | Free (no model call) | Every refresh, every folder |
-| One-turn probe | `rate_limit_event.rate_limit_info`: status, `unifiedWindows.five_hour` and `seven_day` utilization (0 to 1; a value outside the expected range is `check_failed`) and `resetsAt` | About $0.008 API-equivalent | Only when the stored reading is older than `picker.maxReadingAgeMinutes`, or on `refresh --force` |
+| One-turn probe | `rate_limit_event.rate_limit_info`: status, `unifiedWindows.five_hour` and `seven_day` utilization (0 to 1 on the wire; a value outside that range is `check_failed`) and `resetsAt` | About $0.008 API-equivalent | Only when the stored reading is older than `picker.maxReadingAgeMinutes`, or on `refresh --force` |
+
+The probe reports utilization as a fraction from 0 to 1. The reader converts it once, at parse
+time, to percent from 0 to 100 with one decimal (0.456 becomes 45.6). Every stored reading, every
+room figure and every output uses percent.
 
 ### 6.2 The probe
 
@@ -512,6 +519,27 @@ claude -p "Reply with the single word OK." --model haiku --tools "" --disallowed
   does not know the flag, the row shows `check_failed` with the scrubbed error text; the probe
   never falls back to normal mode silently. With `safeMode` off, each probe runs the folder's
   hooks once, and `doctor` and the README privacy list say so.
+- A probe reply counts as a reading only when at least one `rate_limit_event` carries a window
+  with a `utilization` value. Events with no such value give `check_failed`, never an empty reading.
+- Fable probe check, recorded on 2026-11-10 with the exact probe form above and a Fable model. A
+  first, cold run with a 0.05 USD cap spent 0.099 USD in about 4 seconds and was cut off
+  (`error_max_budget_usd`, no `rate_limit_event`, so no reading). A second run with a 1.00 USD cap
+  succeeded in 3.2 seconds for 0.0067 USD, most likely from a warm prompt cache (inferred, not
+  verified). Two earlier cold samples cost 0.19 and 0.33 USD. The defaults come from this check:
+  `fable.probeBudgetUsd` is 0.50 USD, above every cold cost seen, and `fable.probeTimeoutSeconds`
+  is 20, five times the longest run seen (about 4 seconds), which leaves 25 of the 45 second pick
+  deadline.
+- Manual smoke status, still open: the probe cost with and without `--safe-mode`, and the check
+  that the two MCP flags start no server, are not yet recorded. The `probe.safeMode` default stays
+  as it is until they are.
+- A reset time from the probe must lie within the window it belongs to, measured from the time of
+  the probe: no more than 300 seconds before it, and no more than one window length plus 300
+  seconds after it. The window length is 5 hours for `five_hour`, 7 days for `seven_day` and the
+  Fable window, and 31 days for a window name the tool does not know. A reset time that is
+  outside that range, is not a number or a date, or is a boolean gives `check_failed`, like a
+  usage value outside 0 to 1, and nothing is stored. A missing or null reset time is stored as
+  unknown. Numbers above 100 billion are read as milliseconds. The same range of years, 2000
+  to 2200, applies to dates read from `auth status`.
 - A lock file per account folder stops two probes of one account at once. A caller that finds the
   lock held waits up to its deadline and then uses the stored reading. `refresh` and `pick` skip a
   probe when the stored reading is younger than `picker.maxReadingAgeMinutes`, unless
@@ -544,7 +572,17 @@ claude -p "Reply with the single word OK." --model haiku --tools "" --disallowed
 
 ### 6.3 Cache and age
 
-Each reading carries `readAt` and `source`. `status` shows the age; the menu greys a row whose
+Each reading carries `source`, a `readAt` (when the last probe that fed it finished, which the age
+rule reads) and one entry per window with its own `readAt` (when the stored value was taken). A
+lower value that does not replace the stored one leaves the window's `readAt` where it was.
+`state/readings/<label>.json` is a fixed set of keys that a golden test pins: `schemaVersion`,
+`source`, `readAt`, `windows`, `fable` and `fableProbedAt`. `fable` has `source` `probe` (with
+`usedPercent` as a share of the Fable cap, `resetsAt`, `readAt`, `weeklyUsedPercentAtRead`) or
+`estimate` (with `upToPercentOfWeekly` and `guaranteedRoomPercentOfCap`, section 7.4).
+`fableProbedAt` is the time of the last Fable probe tried, so the once-a-day limit holds when one
+fails. `refresh --force` does not lift that limit.
+
+`status` shows the age; the menu greys a row whose
 reading is older than twice the refresh interval. `pick` refreshes any candidate whose reading is
 older than `picker.maxReadingAgeMinutes` (default 15) and skips the probe when the reading is
 younger (unless `refresh --force`). If that refresh fails, the candidate is skipped with reason
@@ -553,7 +591,11 @@ case (not eligible), never as zero use.
 
 Readings merge by one rule: within one window (the same `resetsAt`, to the minute) stored use
 never goes down, so each new reading is merged as the maximum for that window. A reading that
-claims a later `resetsAt` before the stored reset time has passed is discarded. A reading whose
+claims a later `resetsAt` before the stored reset time has passed is discarded. A stored
+`resetsAt` further ahead than its window length plus 10 minutes (a file from before the bounds of
+6.2, or an edited one) is not trusted, so the next valid reading replaces it. A stored file that
+does not decode as a whole reads as no reading, and the next good probe writes a new one; a stored
+reset time that does not decode reads as unknown, and a stored use outside 0 to 100 is dropped. A reading whose
 `resetsAt` has passed, that has no weekly value, or that is dated more than 60 seconds in the
 future counts as stale: it is refreshed first, and the account is skipped with
 `window reset, refresh failed` or `no weekly reading` if that refresh fails. For a `main`
@@ -608,10 +650,11 @@ user to run, because the tool starts no child process other than `claude` and it
   "picker": { "limitedAtPercent": 95, "minRoomPercent": 5, "maxReadingAgeMinutes": 15,
               "deadlineSeconds": 45, "leaseMinutes": 10, "expectedRunPercent": 5,
               "endingSoonAssumeDays": 2 },
-  "fable": { "capPercentOfWeekly": 50, "probe": true,
-             "minRoomPercentOfCap": 10, "recheckAfterWeeklyRisePercent": 5 },
+  "fable": { "capPercentOfWeekly": 50, "probe": true, "probeBudgetUsd": 0.50,
+             "probeTimeoutSeconds": 20, "minRoomPercentOfCap": 10,
+             "recheckAfterWeeklyRisePercent": 5 },
   "launch": { "settingsKeys": ["env"], "envNames": [] },
-  "probe": { "safeMode": false, "timeoutSeconds": 60, "passProxyEnv": false },
+  "probe": { "safeMode": true, "timeoutSeconds": 60, "passProxyEnv": false },
   "refresh": { "backgroundMinutes": 60 }
 }
 ```
@@ -1120,7 +1163,7 @@ the events record then keeps only each label's newest line.
   state/current.json               0600   each label's current state and since times (10.1)
   state/leases.json                0600   open leases (internal id, label, model, time), pruned
   probe/                           0700   one fresh temporary folder per probe, removed afterwards
-  locks/<label>.lock               0600   one probe at a time per folder
+  locks/probe-<label>.lock        0600   one probe at a time per folder
   locks/pick.lock                  0600   one pick decision at a time (section 7.2 rule 7)
   locks/history.lock               0600   one writer at a time for the history and events files
   logs/agent-balancer.log          0600   scrubbed, rotated at 1 MB, 3 kept

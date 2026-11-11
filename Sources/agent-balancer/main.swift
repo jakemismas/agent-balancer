@@ -9,6 +9,7 @@ struct AgentBalancer: ParsableCommand {
         version: Version.current,
         subcommands: [
             InitCommand.self, DoctorCommand.self, ConfigCommand.self, LinkCommand.self,
+            RefreshCommand.self,
         ]
     )
 }

@@ -24,11 +24,27 @@ case "$1" in
     exit 0
     ;;
   -p)
+    model=""
+    prev=""
+    for a in "$@"; do
+      if [ "$prev" = "--model" ]; then model="$a"; fi
+      prev="$a"
+    done
+    pwd >> "$dir/cwd.log"
+    stat -f %Lp . >> "$dir/cwd-mode.log"
+    printf '%s\n' "$model" >> "$dir/models.log"
     if [ -f "$dir/unknown-option" ]; then
       echo "error: unknown option '--safe-mode'" >&2
       exit 1
     fi
-    if [ -f "$dir/probe.json" ]; then cat "$dir/probe.json"; fi
+    if [ -f "$dir/probe-$model.jsonl" ]; then
+      cat "$dir/probe-$model.jsonl"
+    elif [ -f "$dir/probe.jsonl" ]; then
+      cat "$dir/probe.jsonl"
+    elif [ -f "$dir/probe.json" ]; then
+      cat "$dir/probe.json"
+    fi
+    if [ -f "$dir/probe.exit" ]; then exit "$(cat "$dir/probe.exit")"; fi
     exit 0
     ;;
 esac

@@ -49,6 +49,26 @@ import Testing
         #expect(status?.loginExpiresAt == Date(timeIntervalSince1970: 4_102_444_800))
     }
 
+    @Test func aDateOutsideTheYears2000To2200IsUnknown() {
+        for bad in ["1e300", "-1e300", "1e999", "-5", "0", "99999999999", "1e20", "true", "false"] {
+            let text = "{\"loggedIn\":true,\"loginExpiresAt\":\(bad)}"
+            #expect(AuthStatusReader.parse(text)?.loginExpiresAt == nil, Comment(rawValue: bad))
+        }
+        for bad in ["9999-12-31T00:00:00Z", "1900-01-01T00:00:00Z", "soon"] {
+            let text = "{\"loggedIn\":true,\"loginExpiresAt\":\"\(bad)\"}"
+            #expect(AuthStatusReader.parse(text)?.loginExpiresAt == nil, Comment(rawValue: bad))
+        }
+    }
+
+    @Test func theEdgesOfTheDateRangeAreAccepted() {
+        #expect(AuthStatusReader.date(946_684_800 as NSNumber) != nil)
+        #expect(AuthStatusReader.date(946_684_799 as NSNumber) == nil)
+        #expect(AuthStatusReader.date(7_258_118_400 as NSNumber) != nil)
+        #expect(AuthStatusReader.date(7_258_118_401 as NSNumber) == nil)
+        #expect(AuthStatusReader.date(Double.nan as NSNumber) == nil)
+        #expect(AuthStatusReader.date(Double.infinity as NSNumber) == nil)
+    }
+
     func read(_ t: TestHome) -> AuthReadResult { AuthStatusReader.read(runner: t.runner) }
 
     @Test func loggedInReads() throws {

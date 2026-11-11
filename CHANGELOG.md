@@ -27,3 +27,9 @@
   bad stored value from erasing an account's reading. Record the measured cost and time of the
   Fable probe check as the source of the `fable.probeBudgetUsd` and `fable.probeTimeoutSeconds`
   defaults.
+- Add `pick [--model <name>] [--settings <json>] [--full-login] [--caller typed|launcher]
+  [--exclude <label>] [--dry-run] [--json]`: refreshes stale readings within
+  `picker.deadlineSeconds`, then under the pick lock picks the account, writes a launch file
+  (mode 0600, holding the token for a token account) and a lease, and logs one line. It answers
+  with the launch recipe for a typed line or a launcher, and exits 2 when no account is eligible.
+  A recipe that cannot be typed safely is refused before any file or lease is written.

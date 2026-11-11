@@ -1,0 +1,619 @@
+import Foundation
+import Testing
+
+@testable import Core
+
+@Suite struct PickServiceTests {
+    func login(role: String = Role.pool) -> Account {
+        Account(
+            label: "main", kind: Kind.login, role: role, email: "main@example.com",
+            expectedPlanTier: "max_20x")
+    }
+
+    func token(_ label: String) -> Account {
+        Account(label: label, kind: Kind.token, role: Role.pool)
+    }
+
+    /// A home with the fake claude, a saved config, a hook record and a probe that reads 45.6
+    /// percent of the week.
+    func setUp(
+        _ accounts: [Account], ambient: [String: String] = [:], hookRecord: Bool = true,
+        tune: (inout Config) -> Void = { _ in }
+    ) throws -> (TestHome, PickService) {
+        let t = try TestHome()
+        try t.installFake()
+        try t.fakeFixture(auth: "logged_in")
+        try t.fakeProbe("ok.jsonl")
+        var config = Config(accounts: accounts)
+        config.fable.probe = false
+        tune(&config)
+        let context = t.context(ambient: ambient)
+        try ConfigStore(context: context).save(config)
+        if hookRecord { try HookRecord(context: context).record(.empty) }
+        return (t, PickService(context: context))
+    }
+
+    func launchFiles(_ t: TestHome) -> [URL] {
+        let root = LaunchFiles.rootURL(context: t.context)
+        guard let walker = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil)
+        else { return [] }
+        return walker.compactMap { $0 as? URL }.filter { $0.pathExtension == "json" }
+    }
+
+    func mode(_ url: URL) -> Int {
+        let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
+        return (attrs?[.posixPermissions] as? NSNumber)?.intValue ?? -1
+    }
+
+    func json(_ url: URL) throws -> [String: Any] {
+        try #require(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+    }
+
+    // MARK: Recipes
+
+    @Test func aLoginPickWritesALaunchFileAndALease() throws {
+        let (t, service) = try setUp([login()])
+        let result = try service.pick(PickRequest())
+        #expect(result.label == "main")
+        #expect(result.env == [:])
+        let path = try #require(result.args).last ?? ""
+        #expect(result.args?.first == "--settings")
+        #expect(result.launchPrefix == "")
+        #expect(result.launchArgs == "--settings '\(path)'")
+        #expect(result.unsetEnv == nil)
+        #expect(!result.backgroundOnly)
+        #expect(result.candidates.map(\.label) == ["main"])
+        #expect(mode(URL(fileURLWithPath: path)) == 0o600)
+        let env = try #require(json(URL(fileURLWithPath: path))["env"] as? [String: String])
+        #expect(env == ["AGENT_BALANCER_ACCOUNT": "main"])
+        #expect(path.hasPrefix(LaunchFiles.rootURL(context: t.context).path + "/main/l-"))
+        let leases = t.context.dataRoot.appendingPathComponent("state/leases.json")
+        #expect(mode(leases) == 0o600)
+        let log = try String(
+            contentsOf: t.context.dataRoot.appendingPathComponent("state/picks.log"),
+            encoding: .utf8)
+        #expect(log.contains(" default main l-"))
+    }
+
+    @Test func aTokenPickCopiesTheTokenOnlyIntoItsLaunchFile() throws {
+        let (t, service) = try setUp([token("pool-a")])
+        let secret = Canaries.oauth()
+        let tokenFile = try t.makeTokenFile(label: "pool-a", secret: secret)
+        let result = try service.pick(PickRequest(model: "sonnet"))
+        #expect(result.label == "pool-a")
+        let path = URL(fileURLWithPath: try #require(result.args).last ?? "")
+        let env = try #require(json(path)["env"] as? [String: String])
+        #expect(env[ProtectedEnv.tokenVariable] == secret)
+        #expect(env[LaunchFiles.accountVariable] == "pool-a")
+        #expect(mode(path) == 0o600)
+
+        let answer = String(
+            decoding: try PickResult.encoder().encode(result), as: UTF8.self)
+        #expect(!answer.contains(secret))
+        #expect(!answer.contains(ProtectedEnv.tokenVariable))
+        let text = t.allText(skipping: tokenFile).replacingOccurrences(
+            of: try String(contentsOf: path, encoding: .utf8), with: "")
+        #expect(!text.contains(secret))
+        // The probe child got the token only as the path of the token file.
+        #expect(!t.fakeRecord("env-names.txt").contains(ProtectedEnv.tokenVariable))
+        #expect(!t.fakeRecord("args.log").contains(secret))
+    }
+
+    @Test func aLauncherPickFillsUnsetEnvAndNoTypedStrings() throws {
+        let (t, service) = try setUp([login()], ambient: [ProtectedEnv.configDirVariable: "/x"])
+        let result = try service.pick(PickRequest(caller: .launcher))
+        #expect(result.label == "main")
+        #expect(result.launchPrefix == nil)
+        #expect(result.launchArgs == nil)
+        #expect(result.unsetEnv == Recipe.unsetNames)
+        #expect(result.unsetEnv?.contains("CLAUDE_CONFIG_DIR") == true)
+        #expect(result.args?.count == 2)
+        #expect(!result.backgroundOnly)
+        withExtendedLifetime(t) {}
+    }
+
+    @Test func theCallersSettingsAreMergedAfterTheAllowlist() throws {
+        let (t, service) = try setUp([login()]) { $0.launch.envNames = ["MY_FLAG"] }
+        let result = try service.pick(PickRequest(settings: "{\"env\":{\"MY_FLAG\":\"1\"}}"))
+        let path = URL(fileURLWithPath: try #require(result.args).last ?? "")
+        let env = try #require(json(path)["env"] as? [String: String])
+        #expect(env == ["AGENT_BALANCER_ACCOUNT": "main", "MY_FLAG": "1"])
+        withExtendedLifetime(t) {}
+    }
+
+    @Test func refusedSettingsExitOneAndWriteNothing() throws {
+        let (t, service) = try setUp([login()])
+        let secret = Canaries.oauth()
+        for bad in [
+            "{\"hooks\":{}}", "{\"env\":{\"MY_FLAG\":\"\(secret)\"}}", "[]",
+            "{\"env\":{\"PATH\":\"/x\"}}",
+        ] {
+            do {
+                _ = try service.pick(PickRequest(settings: bad))
+                Issue.record("expected a refusal for \(bad)")
+            } catch let e as ToolError {
+                #expect(!e.message.contains(secret))
+            }
+        }
+        #expect(launchFiles(t).isEmpty)
+        let root = t.context.dataRoot
+        #expect(
+            !FileManager.default.fileExists(
+                atPath: root.appendingPathComponent("state/leases.json").path))
+        #expect(
+            !FileManager.default.fileExists(
+                atPath: root.appendingPathComponent("state/picks.log").path))
+        #expect(t.fakeRecord("args.log").isEmpty)
+    }
+
+    @Test func badFlagsExitOne() throws {
+        let (t, service) = try setUp([login()])
+        #expect(throws: ToolError.self) { try service.pick(PickRequest(model: "a b")) }
+        #expect(throws: ToolError.self) { try service.pick(PickRequest(exclude: ["../x"])) }
+        withExtendedLifetime(t) {}
+    }
+
+    // MARK: Ambient rule
+
+    @Test func anAmbientConfigDirSkipsLoginAndTokenForATypedCaller() throws {
+        let (t, service) = try setUp(
+            [login(), token("pool-a")], ambient: [ProtectedEnv.configDirVariable: "/x"])
+        _ = try t.makeTokenFile(label: "pool-a", secret: Canaries.oauth())
+        let result = try service.pick(PickRequest())
+        #expect(result.label == nil)
+        #expect(result.env == nil && result.args == nil && result.launchArgs == nil)
+        #expect(result.candidates.allSatisfy { $0.reason == "ambient CLAUDE_CONFIG_DIR set" })
+        #expect(launchFiles(t).isEmpty)
+        #expect(t.fakeRecord("args.log").isEmpty)
+    }
+
+    /// The rows of the environment case table (docs/ARCHITECTURE.md section 4A.3).
+    static let keyRows: [[String: String]] = [
+        [ProtectedEnv.tokenVariable: "x"], ["ANTHROPIC_API_KEY": "x"],
+        ["ANTHROPIC_AUTH_TOKEN": "x"],
+        [ProtectedEnv.tokenVariable: "x", "ANTHROPIC_AUTH_TOKEN": "x"],
+    ]
+
+    @Test(arguments: PickServiceTests.keyRows)
+    func anInheritedKeyMakesEveryTypedPickBackgroundOnly(ambient: [String: String]) throws {
+        let (t, service) = try setUp([login()], ambient: ambient)
+        let typed = try service.pick(PickRequest())
+        #expect(typed.label == "main")
+        #expect(typed.backgroundOnly)
+        #expect(typed.launchPrefix == "")
+        let launcher = try service.pick(PickRequest(caller: .launcher))
+        #expect(launcher.label == "main")
+        #expect(!launcher.backgroundOnly)
+        #expect(launcher.unsetEnv == Recipe.unsetNames)
+        #expect(launcher.launchArgs == nil)
+        withExtendedLifetime(t) {}
+    }
+
+    @Test(arguments: PickServiceTests.keyRows)
+    func aKeyTogetherWithAConfigDirSkipsTypedAndNotLauncher(ambient: [String: String]) throws {
+        var both = ambient
+        both[ProtectedEnv.configDirVariable] = "/x"
+        let (t, service) = try setUp([login()], ambient: both)
+        let typed = try service.pick(PickRequest())
+        #expect(typed.label == nil)
+        #expect(typed.candidates.allSatisfy { $0.reason == "ambient CLAUDE_CONFIG_DIR set" })
+        let launcher = try service.pick(PickRequest(caller: .launcher))
+        #expect(launcher.label == "main")
+        #expect(!launcher.backgroundOnly)
+        #expect(launcher.unsetEnv == Recipe.unsetNames)
+        withExtendedLifetime(t) {}
+    }
+
+    @Test func nothingInheritedLetsEveryKindCompete() throws {
+        let (t, service) = try setUp([login(), token("pool-a")])
+        _ = try t.makeTokenFile(label: "pool-a", secret: Canaries.oauth())
+        let typed = try service.pick(PickRequest(dryRun: true))
+        #expect(typed.candidates.allSatisfy { $0.eligible })
+        #expect(!typed.backgroundOnly)
+        let launcher = try service.pick(PickRequest(caller: .launcher, dryRun: true))
+        #expect(launcher.candidates.allSatisfy { $0.eligible })
+    }
+
+    @Test func aLauncherInsideATokenSessionSkipsNothingAndUnsetsTheToken() throws {
+        let (t, service) = try setUp(
+            [login(), token("pool-a")],
+            ambient: [ProtectedEnv.tokenVariable: "x", ProtectedEnv.configDirVariable: "/x"])
+        _ = try t.makeTokenFile(label: "pool-a", secret: Canaries.oauth())
+        let result = try service.pick(PickRequest(caller: .launcher))
+        #expect(result.label != nil)
+        #expect(result.candidates.allSatisfy { $0.eligible })
+        #expect(result.unsetEnv?.contains(ProtectedEnv.tokenVariable) == true)
+        #expect(result.unsetEnv?.contains(ProtectedEnv.configDirVariable) == true)
+        #expect(!result.backgroundOnly)
+    }
+
+    // MARK: Fail closed per kind
+
+    @Test func aMissingOrChangedHookRecordFailsLoginAndTokenAccounts() throws {
+        let (t, service) = try setUp([login(), token("pool-a")], hookRecord: false)
+        _ = try t.makeTokenFile(label: "pool-a", secret: Canaries.oauth())
+        let missing = try service.pick(PickRequest())
+        #expect(missing.label == nil)
+        #expect(missing.candidates.allSatisfy { $0.reason == Messages.hookRecordMissing })
+
+        let hooks = HookRecord(context: t.context)
+        try hooks.record(.empty)
+        let claude = t.home.appendingPathComponent(".claude")
+        try FileManager.default.createDirectory(at: claude, withIntermediateDirectories: true)
+        try "{\"disableAllHooks\":true}".write(
+            to: claude.appendingPathComponent("settings.json"), atomically: true, encoding: .utf8)
+        let changed = try service.pick(PickRequest())
+        #expect(changed.label == nil)
+        #expect(changed.candidates.allSatisfy { $0.reason == Messages.settingsChanged })
+    }
+
+    @Test(arguments: [
+        "\"apiKeyHelper\":\"/bin/helper PLANTED\"",
+        "\"env\":{\"ANTHROPIC_API_KEY\":\"PLANTED\"}",
+        "\"env\":{\"ANTHROPIC_AUTH_TOKEN\":\"PLANTED\"}",
+        "\"env\":{\"\(ProtectedEnv.tokenVariable)\":\"PLANTED\"}",
+    ])
+    func keyNamesInSettingsSkipTokenAccountsOnly(member: String) throws {
+        let (t, service) = try setUp([login(), token("pool-a")])
+        _ = try t.makeTokenFile(label: "pool-a", secret: Canaries.oauth())
+        let planted = Canaries.apiKey()
+        let claude = t.home.appendingPathComponent(".claude")
+        try FileManager.default.createDirectory(at: claude, withIntermediateDirectories: true)
+        try "{\(member.replacingOccurrences(of: "PLANTED", with: planted))}".write(
+            to: claude.appendingPathComponent("settings.json"), atomically: true, encoding: .utf8)
+        let result = try service.pick(PickRequest())
+        #expect(result.label == "main")
+        let reasons = Dictionary(
+            uniqueKeysWithValues: result.candidates.map { ($0.label, $0.reason) })
+        #expect(reasons["pool-a"] == "settings carry an API key or key helper")
+        let answer = String(decoding: try PickResult.encoder().encode(result), as: UTF8.self)
+        #expect(!answer.contains(planted))
+        let written = try launchFiles(t).map { try String(contentsOf: $0, encoding: .utf8) }
+        #expect(written.allSatisfy { !$0.contains(planted) })
+        let log = try String(
+            contentsOf: t.context.dataRoot.appendingPathComponent("state/picks.log"),
+            encoding: .utf8)
+        #expect(!log.contains(planted))
+        #expect(!t.fakeRecord("args.log").contains(planted))
+        let state = t.allText().replacingOccurrences(
+            of: try String(contentsOf: claude.appendingPathComponent("settings.json")),
+            with: "")
+        #expect(!state.contains(planted))
+    }
+
+    @Test func aTokenFileThatIsOpenOrMissingIsRefused() throws {
+        let (t, service) = try setUp([token("pool-a"), token("pool-b")])
+        let file = try t.makeTokenFile(label: "pool-a", secret: Canaries.oauth())
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: file.path)
+        let result = try service.pick(PickRequest())
+        #expect(result.label == nil)
+        #expect(result.candidates.allSatisfy { $0.reason == "no token saved" })
+        #expect(launchFiles(t).isEmpty)
+    }
+
+    @Test func aMissingTokenFileIsRefused() throws {
+        let (t, service) = try setUp([token("pool-a")])
+        let result = try service.pick(PickRequest())
+        #expect(result.label == nil)
+        #expect(result.candidates.first?.reason == "no token saved")
+        #expect(launchFiles(t).isEmpty)
+    }
+
+    @Test func aTokenFileThatIsALinkIsRefused() throws {
+        let (t, service) = try setUp([token("pool-a")])
+        let file = try t.makeTokenFile(label: "pool-a", secret: Canaries.oauth())
+        let real = t.home.appendingPathComponent("real-token.json")
+        try FileManager.default.moveItem(at: file, to: real)
+        try FileManager.default.createSymbolicLink(at: file, withDestinationURL: real)
+        let result = try service.pick(PickRequest())
+        #expect(result.label == nil)
+        #expect(result.candidates.first?.reason == "no token saved")
+        #expect(launchFiles(t).isEmpty)
+    }
+
+    @Test func aTokenFileOwnedByAnotherUserIsNotPrivate() {
+        let other = TokenPaths.Facts(
+            exists: true, isRegularFile: true, ownedByUser: false, mode: 0o600)
+        #expect(!other.isPrivate)
+        let mine = TokenPaths.Facts(
+            exists: true, isRegularFile: true, ownedByUser: true, mode: 0o600)
+        #expect(mine.isPrivate)
+    }
+
+    @Test func aTokenAccountWhoseLastProbeEndedInAnAuthErrorIsSkipped() throws {
+        let (t, service) = try setUp([token("pool-a")])
+        _ = try t.makeTokenFile(label: "pool-a", secret: Canaries.oauth())
+        try t.fakeProbe("auth_error.jsonl")
+        let result = try service.pick(PickRequest())
+        #expect(result.label == nil)
+        #expect(result.candidates.first?.eligible == false)
+        #expect(launchFiles(t).isEmpty)
+    }
+
+    @Test func aTokenFileWithoutATokenIsRefusedWhenTheLaunchFileIsWritten() throws {
+        let (t, service) = try setUp([token("pool-a"), token("pool-b")])
+        let a = try t.makeTokenFile(label: "pool-a", secret: Canaries.oauth())
+        try "{\"env\":{}}".write(to: a, atomically: true, encoding: .utf8)
+        _ = try t.makeTokenFile(label: "pool-b", secret: Canaries.oauth())
+        let result = try service.pick(PickRequest())
+        #expect(result.label == "pool-b")
+        #expect(launchFiles(t).count == 1)
+    }
+
+    @Test func aRejectedLoginIsSkipped() throws {
+        let (t, service) = try setUp([login()])
+        try t.fakeFixture(auth: "logged_out")
+        let result = try service.pick(PickRequest())
+        #expect(result.label == nil)
+        #expect(result.candidates.first?.reason.hasPrefix("Login rejected") == true)
+        #expect(launchFiles(t).isEmpty)
+    }
+
+    @Test func aFailedRefreshSkipsTheAccountAndNeverUsesZero() throws {
+        let (t, service) = try setUp([token("pool-a")])
+        _ = try t.makeTokenFile(label: "pool-a", secret: Canaries.oauth())
+        try t.fake("probe.jsonl", "garbage\n")
+        let result = try service.pick(PickRequest())
+        #expect(result.label == nil)
+        #expect(result.candidates.first?.reason == "no weekly reading")
+    }
+
+    @Test func fullLoginLeavesTokenAccountsOut() throws {
+        let (t, service) = try setUp([login(), token("pool-a")])
+        _ = try t.makeTokenFile(label: "pool-a", secret: Canaries.oauth())
+        let result = try service.pick(PickRequest(fullLogin: true))
+        #expect(result.label == "main")
+        #expect(
+            result.candidates.first { $0.label == "pool-a" }?.reason
+                == "token sessions have no connectors")
+    }
+
+    @Test func excludeLeavesALabelOut() throws {
+        let (t, service) = try setUp([login(), token("pool-a")])
+        _ = try t.makeTokenFile(label: "pool-a", secret: Canaries.oauth())
+        let result = try service.pick(PickRequest(exclude: ["main"]))
+        #expect(result.label == "pool-a")
+        #expect(
+            result.candidates.first { $0.label == "main" }?.reason == "excluded by caller")
+    }
+
+    // MARK: Leases and the lock
+
+    @Test func twoPicksSecondsApartSpreadOverTwoAccounts() throws {
+        let (t, service) = try setUp([token("pool-a"), token("pool-b")])
+        _ = try t.makeTokenFile(label: "pool-a", secret: Canaries.oauth())
+        _ = try t.makeTokenFile(label: "pool-b", secret: Canaries.oauth())
+        let first = try service.pick(PickRequest())
+        let second = try service.pick(PickRequest())
+        #expect(first.label == "pool-a")
+        #expect(second.label == "pool-b")
+        #expect(launchFiles(t).count == 2)
+    }
+
+    @Test func aDryRunWritesNoLeaseAndNoLaunchFile() throws {
+        let (t, service) = try setUp([login()])
+        let result = try service.pick(PickRequest(dryRun: true))
+        #expect(result.label == "main")
+        #expect(result.args == nil && result.launchArgs == nil && result.env == nil)
+        #expect(result.dryRun)
+        #expect(launchFiles(t).isEmpty)
+        let state = t.context.dataRoot.appendingPathComponent("state")
+        #expect(
+            !FileManager.default.fileExists(
+                atPath: state.appendingPathComponent("leases.json").path))
+        #expect(
+            !FileManager.default.fileExists(atPath: state.appendingPathComponent("picks.log").path))
+        let data = try PickResult.encoder().encode(result)
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(object["dryRun"] as? Bool == true)
+    }
+
+    @Test func aHeldPickLockGivesPickBusy() throws {
+        let (t, service) = try setUp([login()])
+        var quick = service
+        quick.lockWaitSeconds = 0.2
+        let held = try #require(
+            try NoFollowWriter(root: t.context.dataRoot).acquireLock(
+                folders: Layout.locksFolders, name: Layout.pickLockName, wait: 1))
+        defer { held.release() }
+        do {
+            _ = try quick.pick(PickRequest())
+            Issue.record("expected pick busy")
+        } catch let e as ToolError {
+            #expect(e.message == "pick busy")
+        }
+        #expect(launchFiles(t).isEmpty)
+    }
+
+    @Test func aLeaseDatedInTheFutureIsDropped() throws {
+        let (t, service) = try setUp([token("pool-a"), token("pool-b")])
+        _ = try t.makeTokenFile(label: "pool-a", secret: Canaries.oauth())
+        _ = try t.makeTokenFile(label: "pool-b", secret: Canaries.oauth())
+        let future = Lease(
+            id: "l-00000000", label: "pool-a", model: "x", at: Date().addingTimeInterval(3_600))
+        try LeaseStore(context: t.context).save([future])
+        let result = try service.pick(PickRequest())
+        #expect(result.label == "pool-a")
+        let kept = try LeaseStore(context: t.context).current(
+            now: Date().addingTimeInterval(7_200), leaseMinutes: 600)
+        #expect(kept.map(\.label) == ["pool-a"])
+    }
+
+    @Test func nothingEligibleExitsTwoShapeWithNoFiles() throws {
+        let (t, service) = try setUp([login()]) { $0.picker.limitedAtPercent = 40 }
+        let result = try service.pick(PickRequest())
+        #expect(result.label == nil)
+        #expect(!result.picked)
+        let data = try PickResult.encoder().encode(result)
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        for key in ["label", "env", "args", "launchPrefix", "launchArgs", "unsetEnv"] {
+            #expect(object[key] is NSNull, "\(key)")
+        }
+        #expect(object["backgroundOnly"] as? Bool == false)
+        #expect(object["schemaVersion"] as? Int == 1)
+        #expect(launchFiles(t).isEmpty)
+    }
+
+    @Test func aProbeThatMissesTheDeadlineIsSkippedAsStale() throws {
+        let (t, service) = try setUp([token("pool-a"), token("pool-b")]) {
+            $0.picker.deadlineSeconds = 1
+        }
+        _ = try t.makeTokenFile(label: "pool-a", secret: Canaries.oauth())
+        _ = try t.makeTokenFile(label: "pool-b", secret: Canaries.oauth())
+        // Both readings are old, so both need a probe, and the fake claude sleeps past the deadline.
+        let old = Date().addingTimeInterval(-7_200)
+        let store = ReadingStore(context: t.context)
+        for label in ["pool-a", "pool-b"] {
+            try store.save(
+                Reading(
+                    readAt: old,
+                    windows: [
+                        WindowName.sevenDay: WindowReading(
+                            usedPercent: 10, resetsAt: Date().addingTimeInterval(86_400 * 3),
+                            readAt: old)
+                    ]), label: label)
+        }
+        try t.fake("delay", "4")
+        let started = Date()
+        let result = try service.pick(PickRequest())
+        #expect(Date().timeIntervalSince(started) < 3.5)
+        #expect(result.label == nil)
+        #expect(result.candidates.count == 2)
+        #expect(result.candidates.allSatisfy { $0.reason == "stale reading, refresh failed" })
+        #expect(launchFiles(t).isEmpty)
+    }
+
+    @Test func aLaunchPathThatCannotBeTypedLeavesNoFileAndNoLease() throws {
+        let t = try TestHome()
+        try t.installFake()
+        try t.fakeFixture(auth: "logged_in")
+        try t.fakeProbe("ok.jsonl")
+        var config = Config(accounts: [token("pool-a")])
+        config.fable.probe = false
+        // A quote in the home folder puts a quote in the launch file path.
+        let quoted = t.home.appendingPathComponent("it's")
+        try FileManager.default.createDirectory(at: quoted, withIntermediateDirectories: true)
+        let context = ToolContext(home: quoted, ambient: [:])
+        try FileManager.default.createDirectory(
+            at: quoted.appendingPathComponent(".local/bin"), withIntermediateDirectories: true)
+        try FileManager.default.copyItem(
+            at: t.fakePath, to: quoted.appendingPathComponent(".local/bin/claude"))
+        try FileManager.default.copyItem(
+            at: t.home.appendingPathComponent(".ab-fake"),
+            to: quoted.appendingPathComponent(".ab-fake"))
+        try ConfigStore(context: context).save(config)
+        try HookRecord(context: context).record(.empty)
+        let quotedHome = TestHome.wrapping(quoted, fixtures: t.fixtures)
+        _ = try quotedHome.makeTokenFile(label: "pool-a", secret: Canaries.oauth())
+        let service = PickService(context: context)
+        #expect(throws: ToolError.self) { try service.pick(PickRequest()) }
+        #expect(launchFiles(quotedHome).isEmpty)
+        let state = context.dataRoot.appendingPathComponent("state")
+        #expect(
+            !FileManager.default.fileExists(
+                atPath: state.appendingPathComponent("leases.json").path))
+        // A launcher has no typed string, so the same path works.
+        let launcher = try service.pick(PickRequest(caller: .launcher))
+        #expect(launcher.label == "pool-a")
+    }
+
+    // MARK: Fable
+
+    @Test func aFablePickRunsAFableProbeAndAnotherModelDoesNot() throws {
+        let (t, service) = try setUp([token("pool-a")]) { $0.fable.probe = true }
+        _ = try t.makeTokenFile(label: "pool-a", secret: Canaries.oauth())
+        try t.fakeProbe("ok.jsonl", model: "haiku")
+        try t.fakeProbe("fable.jsonl", model: "fable")
+        let plain = try service.pick(PickRequest(model: "opus"))
+        #expect(plain.label == "pool-a")
+        #expect(!t.fakeRecord("models.log").contains("fable"))
+        let fable = try service.pick(PickRequest(model: "fable"))
+        #expect(fable.label == "pool-a")
+        #expect(t.fakeRecord("models.log").contains("fable"))
+        #expect(fable.reason.contains("Fable at least 69% of cap left."))
+    }
+
+    @Test func aFableRecheckHappensWhenAllModelsUseRoseByFivePoints() throws {
+        let (t, service) = try setUp([token("pool-a")]) { $0.fable.probe = true }
+        _ = try t.makeTokenFile(label: "pool-a", secret: Canaries.oauth())
+        try t.fakeProbe("ok.jsonl", model: "haiku")
+        try t.fakeProbe("fable.jsonl", model: "fable")
+        _ = try service.pick(PickRequest(model: "fable"))
+        let probes = t.fakeLines("models.log").filter { $0 == "fable" }.count
+        #expect(probes == 1)
+
+        let store = ReadingStore(context: t.context)
+        var stored = try #require(try store.load(label: "pool-a"))
+        // The Fable reading was taken at a lower weekly use, and the last try was 20 minutes ago.
+        let weekly = stored.sevenDay?.usedPercent ?? 0
+        stored.fable?.weeklyUsedPercentAtRead = weekly - 6
+        stored.fableProbedAt = Date().addingTimeInterval(-1_200)
+        try store.save(stored, label: "pool-a")
+        _ = try service.pick(PickRequest(model: "fable"))
+        #expect(t.fakeLines("models.log").filter { $0 == "fable" }.count == 2)
+    }
+
+    @Test func aFableReadingFromTheLastDayGetsNoProbeAndAnOlderOneGetsOne() throws {
+        let (t, service) = try setUp([token("pool-a")]) { $0.fable.probe = true }
+        _ = try t.makeTokenFile(label: "pool-a", secret: Canaries.oauth())
+        try t.fakeProbe("ok.jsonl", model: "haiku")
+        try t.fakeProbe("fable.jsonl", model: "fable")
+        func probes() -> Int { t.fakeLines("models.log").filter { $0 == "fable" }.count }
+        // No reading yet: one probe.
+        _ = try service.pick(PickRequest(model: "fable"))
+        #expect(probes() == 1)
+        // A reading from moments ago: no probe.
+        _ = try service.pick(PickRequest(model: "fable"))
+        #expect(probes() == 1)
+        // A reading from two days ago: one probe.
+        let store = ReadingStore(context: t.context)
+        var stored = try #require(try store.load(label: "pool-a"))
+        stored.fableProbedAt = Date().addingTimeInterval(-2 * 86_400)
+        try store.save(stored, label: "pool-a")
+        _ = try service.pick(PickRequest(model: "fable"))
+        #expect(probes() == 2)
+    }
+
+    @Test func aFolderAccountIsRefusedInThisVersionSoNoSupervisorRowApplies() throws {
+        let folder = Account(label: "f", kind: Kind.folder, role: Role.pool)
+        #expect(throws: ToolError.self) {
+            _ = try ConfigValidator.validate(Config(accounts: [folder]))
+        }
+    }
+
+    // MARK: Upkeep
+
+    @Test func upkeepRemovesOnlyOldFilesTheToolMade() throws {
+        let (t, service) = try setUp([login()])
+        let result = try service.pick(PickRequest())
+        let fresh = URL(fileURLWithPath: try #require(result.args).last ?? "")
+        let old = fresh.deletingLastPathComponent().appendingPathComponent("l-deadbeef.json")
+        try "{}".write(to: old, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o600, .modificationDate: Date().addingTimeInterval(-40 * 86_400)],
+            ofItemAtPath: old.path)
+        let stray = fresh.deletingLastPathComponent().appendingPathComponent("notes.json")
+        try "{}".write(to: stray, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date().addingTimeInterval(-40 * 86_400)], ofItemAtPath: stray.path)
+        let removed = LaunchFiles.upkeep(context: t.context, keepDays: 35, now: Date())
+        #expect(removed == 1)
+        #expect(!FileManager.default.fileExists(atPath: old.path))
+        #expect(FileManager.default.fileExists(atPath: fresh.path))
+        #expect(FileManager.default.fileExists(atPath: stray.path))
+    }
+
+    @Test func upkeepNeverFollowsALink() throws {
+        let (t, service) = try setUp([login()])
+        let result = try service.pick(PickRequest())
+        let dir = URL(fileURLWithPath: try #require(result.args).last ?? "")
+            .deletingLastPathComponent()
+        let target = t.home.appendingPathComponent("elsewhere.json")
+        try "keep".write(to: target, atomically: true, encoding: .utf8)
+        let link = dir.appendingPathComponent("l-cafecafe.json")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+        _ = LaunchFiles.upkeep(
+            context: t.context, keepDays: 1, now: Date().addingTimeInterval(86_400 * 5))
+        #expect(FileManager.default.fileExists(atPath: target.path))
+    }
+}

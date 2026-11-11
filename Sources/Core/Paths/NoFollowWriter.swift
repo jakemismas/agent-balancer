@@ -240,3 +240,79 @@ extension NoFollowWriter {
         unlinkat(parent, name, AT_REMOVEDIR)
     }
 }
+
+/// What `lstat` says about one file the tool made.
+public struct OwnFileInfo: Equatable, Sendable {
+    public var isRegularFile: Bool
+    public var ownedByUser: Bool
+    public var mode: Int
+    public var modified: Date
+}
+
+extension NoFollowWriter {
+    /// Appends `data` to `<root>/<folders...>/<name>` at mode 0600. The final name is opened with
+    /// `O_NOFOLLOW`, and a file that is not a regular file made by you is refused.
+    public func append(_ data: Data, folders: [String], name: String) throws {
+        try Paths.checkName(name)
+        let dir = try NoFollowWriter.openFolder(root: root, folders: folders, create: true)
+        defer { close(dir) }
+        let fd = openat(dir, name, O_WRONLY | O_APPEND | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0o600)
+        guard fd >= 0 else { throw ToolError("Could not write \(name).") }
+        defer { close(fd) }
+        var st = stat()
+        guard fstat(fd, &st) == 0, (st.st_mode & S_IFMT) == S_IFREG, st.st_uid == getuid() else {
+            throw ToolError("Refused to write \(name): it is not a regular file made by you.")
+        }
+        _ = fchmod(fd, 0o600)
+        var ok = true
+        data.withUnsafeBytes { (buffer: UnsafeRawBufferPointer) in
+            var offset = 0
+            while offset < buffer.count {
+                let n = Darwin.write(fd, buffer.baseAddress! + offset, buffer.count - offset)
+                if n <= 0 {
+                    ok = false
+                    return
+                }
+                offset += n
+            }
+        }
+        if !ok { throw ToolError("Could not write \(name).") }
+    }
+
+    /// The names in `<root>/<folders...>`, or an empty list when that folder does not exist.
+    public func listNames(folders: [String]) throws -> [String] {
+        let dir = try NoFollowWriter.openFolder(root: root, folders: folders, create: false)
+        if dir < 0 { return [] }
+        defer { close(dir) }
+        return try NoFollowWriter.entries(of: dir).sorted()
+    }
+
+    /// `lstat` of `<root>/<folders...>/<name>`, or nil when it is missing.
+    public func info(folders: [String], name: String) throws -> OwnFileInfo? {
+        try Paths.checkName(name)
+        let dir = try NoFollowWriter.openFolder(root: root, folders: folders, create: false)
+        if dir < 0 { return nil }
+        defer { close(dir) }
+        var st = stat()
+        guard fstatat(dir, name, &st, AT_SYMLINK_NOFOLLOW) == 0 else { return nil }
+        return OwnFileInfo(
+            isRegularFile: (st.st_mode & S_IFMT) == S_IFREG, ownedByUser: st.st_uid == getuid(),
+            mode: Int(st.st_mode & 0o777),
+            modified: Date(timeIntervalSince1970: Double(st.st_mtimespec.tv_sec)))
+    }
+
+    /// Deletes `<root>/<folders...>/<name>` only when `lstat` shows a regular file owned by the
+    /// user. Anything else, a link included, is left alone. Returns whether a file was removed.
+    @discardableResult
+    public func removeOwnRegularFile(folders: [String], name: String) throws -> Bool {
+        try Paths.checkName(name)
+        let dir = try NoFollowWriter.openFolder(root: root, folders: folders, create: false)
+        if dir < 0 { return false }
+        defer { close(dir) }
+        var st = stat()
+        guard fstatat(dir, name, &st, AT_SYMLINK_NOFOLLOW) == 0,
+            (st.st_mode & S_IFMT) == S_IFREG, st.st_uid == getuid()
+        else { return false }
+        return unlinkat(dir, name, 0) == 0
+    }
+}

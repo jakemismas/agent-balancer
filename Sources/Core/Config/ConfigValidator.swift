@@ -39,8 +39,39 @@ public enum ConfigValidator {
         if fable.recheckAfterWeeklyRisePercent < 0 || fable.recheckAfterWeeklyRisePercent > 100 {
             throw ToolError("fable.recheckAfterWeeklyRisePercent must be from 0 to 100.")
         }
-        if config.picker.maxReadingAgeMinutes < 1 {
+        let picker = config.picker
+        if picker.maxReadingAgeMinutes < 1 {
             throw ToolError("picker.maxReadingAgeMinutes must be at least 1.")
+        }
+        if picker.limitedAtPercent < 1 || picker.limitedAtPercent > 100 {
+            throw ToolError("picker.limitedAtPercent must be from 1 to 100.")
+        }
+        if picker.minRoomPercent < 0 || picker.minRoomPercent > 100 {
+            throw ToolError("picker.minRoomPercent must be from 0 to 100.")
+        }
+        if picker.deadlineSeconds < 1 {
+            throw ToolError("picker.deadlineSeconds must be at least 1.")
+        }
+        if picker.leaseMinutes < 1 {
+            throw ToolError("picker.leaseMinutes must be at least 1.")
+        }
+        if picker.expectedRunPercent < 0 || picker.expectedRunPercent > 100 {
+            throw ToolError("picker.expectedRunPercent must be from 0 to 100.")
+        }
+        if picker.endingSoonAssumeDays < 0 {
+            throw ToolError("picker.endingSoonAssumeDays must not be negative.")
+        }
+        let launch = config.launch
+        if launch.keepDays < 1 {
+            throw ToolError("launch.keepDays must be at least 1.")
+        }
+        for key in launch.settingsKeys
+        where key.range(of: "^[A-Za-z][A-Za-z0-9_]{0,63}$", options: .regularExpression) == nil {
+            throw ToolError("launch.settingsKeys holds a name that is not valid.")
+        }
+        for name in launch.envNames
+        where name.range(of: "^[A-Z][A-Z0-9_]{0,63}$", options: .regularExpression) == nil {
+            throw ToolError("launch.envNames holds a name that is not valid.")
         }
         var seen = Set<String>()
         var logins = 0

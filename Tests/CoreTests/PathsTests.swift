@@ -105,4 +105,40 @@ import Testing
         }
         #expect(throws: ToolError.self) { try writer.put(Data(), folders: [".."], name: "a") }
     }
+
+    @Test func appendAddsLinesAt0600AndRefusesALink() throws {
+        let t = try TestHome()
+        let writer = NoFollowWriter(root: t.context.dataRoot)
+        try writer.append(Data("one\n".utf8), folders: ["state"], name: "log")
+        try writer.append(Data("two\n".utf8), folders: ["state"], name: "log")
+        let url = t.context.dataRoot.appendingPathComponent("state/log")
+        #expect(try String(contentsOf: url, encoding: .utf8) == "one\ntwo\n")
+        #expect(try mode(url) == 0o600)
+        let target = t.home.appendingPathComponent("target")
+        try "keep".write(to: target, atomically: true, encoding: .utf8)
+        try FileManager.default.createSymbolicLink(
+            at: t.context.dataRoot.appendingPathComponent("state/linked"),
+            withDestinationURL: target)
+        #expect(throws: ToolError.self) {
+            try writer.append(Data("x".utf8), folders: ["state"], name: "linked")
+        }
+        #expect(try String(contentsOf: target, encoding: .utf8) == "keep")
+    }
+
+    @Test func removeOwnRegularFileSkipsLinksAndFolders() throws {
+        let t = try TestHome()
+        let writer = NoFollowWriter(root: t.context.dataRoot)
+        try writer.put(Data("x".utf8), folders: ["d"], name: "a")
+        let target = t.home.appendingPathComponent("target")
+        try "keep".write(to: target, atomically: true, encoding: .utf8)
+        try FileManager.default.createSymbolicLink(
+            at: t.context.dataRoot.appendingPathComponent("d/link"), withDestinationURL: target)
+        #expect(try writer.removeOwnRegularFile(folders: ["d"], name: "link") == false)
+        #expect(FileManager.default.fileExists(atPath: target.path))
+        #expect(try writer.removeOwnRegularFile(folders: ["d"], name: "a") == true)
+        #expect(try writer.removeOwnRegularFile(folders: ["d"], name: "a") == false)
+        #expect(try writer.removeOwnRegularFile(folders: ["nope"], name: "a") == false)
+        #expect(try writer.listNames(folders: ["d"]) == ["link"])
+        #expect(try writer.listNames(folders: ["nope"]).isEmpty)
+    }
 }

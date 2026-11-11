@@ -47,7 +47,7 @@ private let refusal = "Run this in your own terminal, outside a Claude Code sess
         #expect(a["reserve"] == nil, "init alone writes no reserve line")
         #expect(a["configDir"] == nil)
         let raw = h.read("config.json")
-        #expect(!raw.contains("lau" + "nch") && !raw.contains("claudePath"))
+        #expect(!raw.contains("lau" + "nchTemplate") && !raw.contains("claudePath"))
         #expect(h.expectPrivateModes().isEmpty)
         #expect(
             FileManager.default.fileExists(

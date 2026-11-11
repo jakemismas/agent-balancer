@@ -80,7 +80,7 @@ import Testing
         let json = """
             {"schemaVersion":1,"picker":{"a":1},"probe":{"safeMode":false,"timeoutSeconds":60,"passProxyEnv":false,"extra":2},\
             "accounts":[{"label":"x","kind":"token","role":"pool","accountKey":"k1",\
-            "fable":true,"endsAt":"2026-12-31"}]}
+            "futureKey":true,"endsAt":"2026-12-31"}]}
             """
         try NoFollowWriter(root: t.context.dataRoot).put(
             Data(json.utf8), folders: [], name: "config.json")
@@ -92,7 +92,7 @@ import Testing
         #expect(o["picker"] != nil)
         #expect((o["probe"] as? [String: Any])?["extra"] as? Int == 2)
         let a = try #require((o["accounts"] as? [[String: Any]])?.first)
-        #expect(a["fable"] as? Bool == true)
+        #expect(a["futureKey"] as? Bool == true)
         #expect(a["endsAt"] == nil)
     }
 
@@ -137,5 +137,44 @@ import Testing
         #expect(throws: ToolError.self) { try store.save(c, backup: true) }
         #expect(try FileManager.default.contentsOfDirectory(atPath: outside.path).isEmpty)
         #expect(try store.loadRequired().refresh.backgroundMinutes == 60)
+    }
+
+    @Test func pickerAndLaunchKeysDefaultAndRoundTrip() throws {
+        let d = Config()
+        #expect(d.picker.limitedAtPercent == 95 && d.picker.minRoomPercent == 5)
+        #expect(d.picker.deadlineSeconds == 45 && d.picker.leaseMinutes == 10)
+        #expect(d.picker.expectedRunPercent == 5 && d.picker.endingSoonAssumeDays == 2)
+        #expect(d.launch.settingsKeys == ["env"] && d.launch.envNames.isEmpty)
+        #expect(d.launch.keepDays == 35)
+        let t = try TestHome()
+        let store = ConfigStore(context: t.context)
+        var c = config([login()])
+        c.picker.limitedAtPercent = 90
+        c.launch.envNames = ["MY_FLAG"]
+        c.accounts[0].fable = AccountFable(allowLaunches: false)
+        try store.save(c)
+        #expect(try store.load() == c)
+        let partial = "{\"schemaVersion\":1,\"picker\":{\"minRoomPercent\":7}}"
+        let decoded = try JSONDecoder().decode(Config.self, from: Data(partial.utf8))
+        #expect(decoded.picker.minRoomPercent == 7 && decoded.picker.limitedAtPercent == 95)
+    }
+
+    @Test func validatorChecksThePickerAndLaunchKeys() {
+        func bad(_ tune: (inout Config) -> Void) -> String? {
+            var c = config([login()])
+            tune(&c)
+            return message(c)
+        }
+        #expect(bad { $0.picker.limitedAtPercent = 0 }?.contains("limitedAtPercent") == true)
+        #expect(bad { $0.picker.minRoomPercent = 101 }?.contains("minRoomPercent") == true)
+        #expect(bad { $0.picker.deadlineSeconds = 0 }?.contains("deadlineSeconds") == true)
+        #expect(bad { $0.picker.leaseMinutes = 0 }?.contains("leaseMinutes") == true)
+        #expect(bad { $0.picker.expectedRunPercent = -1 }?.contains("expectedRunPercent") == true)
+        #expect(
+            bad { $0.picker.endingSoonAssumeDays = -1 }?.contains("endingSoonAssumeDays") == true)
+        #expect(bad { $0.launch.keepDays = 0 }?.contains("keepDays") == true)
+        #expect(bad { $0.launch.envNames = ["bad name"] }?.contains("envNames") == true)
+        #expect(bad { $0.launch.settingsKeys = ["a b"] }?.contains("settingsKeys") == true)
+        #expect(bad { _ in } == nil)
     }
 }

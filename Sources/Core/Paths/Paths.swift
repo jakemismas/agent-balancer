@@ -22,6 +22,10 @@ public enum Layout {
     public static let locksFolders = ["locks"]
     public static let probeFolders = ["probe"]
     public static let probeFolderPrefix = "p-"
+    public static let stateFolders = ["state"]
+    public static let pickLockName = "pick.lock"
+    public static let leasesName = "leases.json"
+    public static let picksLogName = "picks.log"
 
     public static func readingName(_ label: String) -> String { label + ".json" }
     public static func lockName(_ label: String) -> String { "probe-" + label + ".lock" }

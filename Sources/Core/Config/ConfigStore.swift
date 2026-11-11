@@ -68,10 +68,11 @@ public struct ConfigStore: Sendable {
 
     private static let topKeys: Set<String> = [
         "schemaVersion", "sharedSource", "accounts", "probe", "refresh", "fable", "picker",
+        LaunchFiles.configKey,
     ]
     private static let accountKeys: Set<String> = [
         "label", "kind", "role", "email", "expectedPlanTier", "accountKey", "reserve", "endsAt",
-        "endingSoon",
+        "endingSoon", "fable",
     ]
     private static let probeKeys: Set<String> = ["safeMode", "timeoutSeconds", "passProxyEnv"]
     private static let refreshKeys: Set<String> = ["backgroundMinutes"]
@@ -79,7 +80,11 @@ public struct ConfigStore: Sendable {
         "capPercentOfWeekly", "probe", "probeBudgetUsd", "probeTimeoutSeconds",
         "minRoomPercentOfCap", "recheckAfterWeeklyRisePercent",
     ]
-    private static let pickerKeys: Set<String> = ["maxReadingAgeMinutes"]
+    private static let pickerKeys: Set<String> = [
+        "limitedAtPercent", "minRoomPercent", "maxReadingAgeMinutes", "deadlineSeconds",
+        "leaseMinutes", "expectedRunPercent", "endingSoonAssumeDays",
+    ]
+    private static let launchKeys: Set<String> = ["settingsKeys", "envNames", "keepDays"]
     private static let reserveKeys: Set<String> = ["points", "marginPercent", "allowAbove90"]
 
     /// Known keys come from the new value (and vanish when it omits them); keys this version does
@@ -109,6 +114,10 @@ public struct ConfigStore: Sendable {
         if let n = new["picker"] as? [String: Any] {
             out["picker"] = overlay(
                 old: old["picker"] as? [String: Any] ?? [:], new: n, known: pickerKeys)
+        }
+        if let n = new[LaunchFiles.configKey] as? [String: Any] {
+            out[LaunchFiles.configKey] = overlay(
+                old: old[LaunchFiles.configKey] as? [String: Any] ?? [:], new: n, known: launchKeys)
         }
         let oldAccounts = (old["accounts"] as? [[String: Any]]) ?? []
         var byKey: [String: [String: Any]] = [:]

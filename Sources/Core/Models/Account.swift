@@ -49,6 +49,15 @@ public struct Reserve: Codable, Equatable, Sendable {
     }
 }
 
+/// Per-account Fable options (docs/ARCHITECTURE.md section 7.1).
+public struct AccountFable: Codable, Equatable, Sendable {
+    public var allowLaunches: Bool
+
+    public init(allowLaunches: Bool = true) {
+        self.allowLaunches = allowLaunches
+    }
+}
+
 public struct Account: Codable, Equatable, Sendable {
     public var label: String
     public var kind: String
@@ -60,11 +69,13 @@ public struct Account: Codable, Equatable, Sendable {
     public var reserve: Reserve?
     public var endsAt: String?
     public var endingSoon: Bool?
+    public var fable: AccountFable?
 
     public init(
         label: String, kind: String, role: String, email: String? = nil,
         expectedPlanTier: String? = nil, accountKey: String = Account.makeKey(),
-        reserve: Reserve? = nil, endsAt: String? = nil, endingSoon: Bool? = nil
+        reserve: Reserve? = nil, endsAt: String? = nil, endingSoon: Bool? = nil,
+        fable: AccountFable? = nil
     ) {
         self.label = label
         self.kind = kind
@@ -75,6 +86,7 @@ public struct Account: Codable, Equatable, Sendable {
         self.reserve = reserve
         self.endsAt = endsAt
         self.endingSoon = endingSoon
+        self.fable = fable
     }
 
     public static func makeKey() -> String {

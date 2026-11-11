@@ -60,18 +60,71 @@ public struct FableSettings: Codable, Equatable, Sendable {
     }
 }
 
-/// The picker keys this version reads. The rest of section 7.1 arrives with the picker.
+/// The picker keys of docs/ARCHITECTURE.md section 7.1.
 public struct PickerSettings: Codable, Equatable, Sendable {
+    public var limitedAtPercent: Int
+    public var minRoomPercent: Int
     public var maxReadingAgeMinutes: Int
+    public var deadlineSeconds: Int
+    public var leaseMinutes: Int
+    public var expectedRunPercent: Int
+    public var endingSoonAssumeDays: Int
 
-    public init(maxReadingAgeMinutes: Int = 15) {
+    public init(
+        limitedAtPercent: Int = 95, minRoomPercent: Int = 5, maxReadingAgeMinutes: Int = 15,
+        deadlineSeconds: Int = 45, leaseMinutes: Int = 10, expectedRunPercent: Int = 5,
+        endingSoonAssumeDays: Int = 2
+    ) {
+        self.limitedAtPercent = limitedAtPercent
+        self.minRoomPercent = minRoomPercent
         self.maxReadingAgeMinutes = maxReadingAgeMinutes
+        self.deadlineSeconds = deadlineSeconds
+        self.leaseMinutes = leaseMinutes
+        self.expectedRunPercent = expectedRunPercent
+        self.endingSoonAssumeDays = endingSoonAssumeDays
     }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = PickerSettings()
+        limitedAtPercent =
+            try c.decodeIfPresent(Int.self, forKey: .limitedAtPercent) ?? d.limitedAtPercent
+        minRoomPercent =
+            try c.decodeIfPresent(Int.self, forKey: .minRoomPercent) ?? d.minRoomPercent
         maxReadingAgeMinutes =
-            try c.decodeIfPresent(Int.self, forKey: .maxReadingAgeMinutes) ?? 15
+            try c.decodeIfPresent(Int.self, forKey: .maxReadingAgeMinutes) ?? d.maxReadingAgeMinutes
+        deadlineSeconds =
+            try c.decodeIfPresent(Int.self, forKey: .deadlineSeconds) ?? d.deadlineSeconds
+        leaseMinutes = try c.decodeIfPresent(Int.self, forKey: .leaseMinutes) ?? d.leaseMinutes
+        expectedRunPercent =
+            try c.decodeIfPresent(Int.self, forKey: .expectedRunPercent) ?? d.expectedRunPercent
+        endingSoonAssumeDays =
+            try c.decodeIfPresent(Int.self, forKey: .endingSoonAssumeDays)
+            ?? d.endingSoonAssumeDays
+    }
+}
+
+/// What a caller's own settings may carry into a launch file (docs/ARCHITECTURE.md section 4A.2).
+public struct LaunchSettings: Codable, Equatable, Sendable {
+    /// Top-level keys a caller's settings may use.
+    public var settingsKeys: [String]
+    /// Names a caller's `env` may use. Empty until the user lists some.
+    public var envNames: [String]
+    /// Days a launch file is kept when session entries cannot be read (section 4A.6).
+    public var keepDays: Int
+
+    public init(settingsKeys: [String] = ["env"], envNames: [String] = [], keepDays: Int = 35) {
+        self.settingsKeys = settingsKeys
+        self.envNames = envNames
+        self.keepDays = keepDays
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = LaunchSettings()
+        settingsKeys = try c.decodeIfPresent([String].self, forKey: .settingsKeys) ?? d.settingsKeys
+        envNames = try c.decodeIfPresent([String].self, forKey: .envNames) ?? d.envNames
+        keepDays = try c.decodeIfPresent(Int.self, forKey: .keepDays) ?? d.keepDays
     }
 }
 
@@ -87,12 +140,13 @@ public struct Config: Codable, Equatable, Sendable {
     public var refresh: RefreshSettings
     public var fable: FableSettings
     public var picker: PickerSettings
+    public var launch: LaunchSettings
 
     public init(
         schemaVersion: Int = Config.currentSchema, sharedSource: String = "~/.claude",
         accounts: [Account] = [], probe: ProbeSettings = ProbeSettings(),
         refresh: RefreshSettings = RefreshSettings(), fable: FableSettings = FableSettings(),
-        picker: PickerSettings = PickerSettings()
+        picker: PickerSettings = PickerSettings(), launch: LaunchSettings = LaunchSettings()
     ) {
         self.schemaVersion = schemaVersion
         self.sharedSource = sharedSource
@@ -101,10 +155,11 @@ public struct Config: Codable, Equatable, Sendable {
         self.refresh = refresh
         self.fable = fable
         self.picker = picker
+        self.launch = launch
     }
 
     private enum CodingKeys: String, CodingKey {
-        case schemaVersion, sharedSource, accounts, probe, refresh, fable, picker
+        case schemaVersion, sharedSource, accounts, probe, refresh, fable, picker, launch
     }
 
     public init(from decoder: Decoder) throws {
@@ -116,6 +171,7 @@ public struct Config: Codable, Equatable, Sendable {
         refresh = try c.decodeIfPresent(RefreshSettings.self, forKey: .refresh) ?? RefreshSettings()
         fable = try c.decodeIfPresent(FableSettings.self, forKey: .fable) ?? FableSettings()
         picker = try c.decodeIfPresent(PickerSettings.self, forKey: .picker) ?? PickerSettings()
+        launch = try c.decodeIfPresent(LaunchSettings.self, forKey: .launch) ?? LaunchSettings()
     }
 
     public func account(_ label: String) -> Account? {

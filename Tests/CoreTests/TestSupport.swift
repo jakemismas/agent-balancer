@@ -16,6 +16,16 @@ final class TestHome {
             .appendingPathComponent("Fixtures")
     }
 
+    private init(home: URL, fixtures: URL) {
+        self.home = home
+        self.fixtures = fixtures
+    }
+
+    /// A view of an existing folder as a home; the folder is not removed with it.
+    static func wrapping(_ home: URL, fixtures: URL) -> TestHome {
+        TestHome(home: home, fixtures: fixtures)
+    }
+
     deinit { try? FileManager.default.removeItem(at: home) }
 
     var context: ToolContext { ToolContext(home: home, ambient: [:]) }

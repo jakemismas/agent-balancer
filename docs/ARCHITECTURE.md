@@ -117,7 +117,9 @@ stays `scripts/check.sh` and the install check stays unchanged.
 Data flow: readers run `claude` (auth status, probe) and write one reading file per account. Every
 command that writes under the data folder ends by rebuilding `state/status.json` atomically.
 `status --cached` rebuilds it from saved readings without starting a child process. `pick` reads
-the same readings (refreshing stale ones first) and writes a lease and a pick log line.
+the same readings (refreshing stale ones first) and writes a lease and a pick log line. The
+picker itself (`Picker/`) is a pure function; `PickService` in the same folder does the I/O around
+it: kind checks, the refresh, the pick lock, the launch file, the lease and the log line.
 
 The rebuild step is the only writer of the history. Under one lock, taken before it reads any
 reading, lease or config file and held until `status.json` is renamed into place (section 13), it
@@ -238,6 +240,21 @@ stored login in a foreground launch and does not reach a background worker. A to
 | Both inherited | Only `folder` accounts; `backgroundOnly` true | Skips nothing; `unsetEnv` removes both |
 | `key_in_settings`: the default folder's `settings.json` carries `apiKeyHelper` or an `env` name among the API key and token names | `token` accounts skipped with `settings carry an API key or key helper` | Same |
 
+Recorded manual checks behind this rule (2026-11-10, spike runs S12 and S17, results in
+`.claude/sprint/DECISIONS.md` "Spike results"):
+
+- An inherited `CLAUDE_CONFIG_DIR` picks the folder, so a `login` or `token` recipe applied under
+  it lands in the wrong folder. This is why typed callers keep only `folder` accounts (rule 1).
+- A token in `--settings` reaches the worker's own requests: a bad token gave "API Error: 401
+  Invalid bearer token". A foreground session passes a settings env variable to its Bash child. A
+  `--bg` worker does not.
+- `claude setup-token` was run through a pipe (S14); the token shape and capture rule are in 4A.4.
+- Not measured: which account a `--bg` worker bills when a valid token is in `--settings`, and how
+  an inherited API key changes billing beyond the 401 behavior above. The rule therefore assumes
+  the worst case: an inherited key or token marks every answer `backgroundOnly` (rule 2), and a
+  launcher removes the variables (rule 3). If the open check shows the default login billed,
+  token accounts become foreground-only for launches.
+
 `init` and `doctor` look for the settings case by name only, never by value, with the same parse
 as the hook record (5.7), and warn `key_in_settings` (section 9).
 
@@ -319,7 +336,10 @@ rules of section 7.
   weekly meter. A Fable probe reads it, and `fable.probe` is true by default. One costs roughly 20
   to 35 cents as the CLI prints it, so it runs at most once a day per account, before a Fable pick
   whose Fable reading is older than that, or when all-models use has risen by
-  `fable.recheckAfterWeeklyRisePercent` (default 5) since the reading. A Fable probe has its own
+  `fable.recheckAfterWeeklyRisePercent` (default 5) since the reading, or when the Fable window
+  has reset. The rise and reset rechecks wait at least 10 minutes after the last Fable probe
+  tried, so a failing probe is not repeated on every pick. A pick for another model runs no Fable
+  probe at all; `refresh` runs one at most once a day. A Fable probe has its own
   budget and timeout, `fable.probeBudgetUsd` (default 0.50) and `fable.probeTimeoutSeconds`
   (default 20), set from the check recorded in 6.2, because a cold Fable probe costs more than
   the 0.05 cap of the plain probe and a cap below the cold cost still spends it and returns no
@@ -328,11 +348,15 @@ rules of section 7.
 - **In use:** a session counts toward the account named by the launch file in its saved flags. A
   session in the default folder with no launch file counts toward the `login` account. A session
   in an account folder counts toward that folder's account.
-- **Launch file upkeep:** `pick` and `refresh` remove a launch file when its lease ended without a
+- **Launch file upkeep:** `pick` removes a launch file when its lease ended without a
   launch (`leaseMinutes` passed and no session names it), or when the session that names it is
   gone. A launch file is kept while any session entry names it. Upkeep lists the label's files
   under the pick lock, so it never removes the file of a pick in progress. If session entries
-  cannot be read, files are kept for `launch.keepDays` (default 35) and then removed.
+  cannot be read, files are kept for `launch.keepDays` (default 35) and then removed. Until the
+  in-use reader of section 8 ships, session entries are never read, so the last rule applies to
+  every file: only a regular file owned by the user, named `l-<8 hex>.json`, older than
+  `launch.keepDays`, goes, through the no-follow writer. Upkeep also runs on `refresh` once the
+  in-use reader ships.
 - **Trust and messages:** `login` and `token` sessions share the default folder, so a project
   trusted once is trusted for all of them and messages between their sessions work. Only `folder`
   accounts need the per-folder trust step and the file-only reports of 5.2.
@@ -598,11 +622,14 @@ does not decode as a whole reads as no reading, and the next good probe writes a
 reset time that does not decode reads as unknown, and a stored use outside 0 to 100 is dropped. A reading whose
 `resetsAt` has passed, that has no weekly value, or that is dated more than 60 seconds in the
 future counts as stale: it is refreshed first, and the account is skipped with
-`window reset, refresh failed` or `no weekly reading` if that refresh fails. For a `main`
+`window reset, refresh failed` or `no weekly reading` if that refresh fails. A `pick` forces the
+probe for a candidate whose stored reading has a passed reset time, even when it is younger than
+`picker.maxReadingAgeMinutes`. For a `main`
 account a launch is allowed only on a probe reading from the current window no older than
 `picker.maxReadingAgeMinutes`. The pre-pick refreshes run in parallel and `pick` answers within
 `picker.deadlineSeconds` (default 45); a candidate whose refresh fails or misses the deadline is
-skipped.
+skipped with `check_failed`; a probe left running past the deadline ends on its own and `pick`
+does not wait for it.
 
 ### 6.4 Refresh cadence and daily cost
 
@@ -653,7 +680,7 @@ user to run, because the tool starts no child process other than `claude` and it
   "fable": { "capPercentOfWeekly": 50, "probe": true, "probeBudgetUsd": 0.50,
              "probeTimeoutSeconds": 20, "minRoomPercentOfCap": 10,
              "recheckAfterWeeklyRisePercent": 5 },
-  "launch": { "settingsKeys": ["env"], "envNames": [] },
+  "launch": { "settingsKeys": ["env"], "envNames": [], "keepDays": 35 },
   "probe": { "safeMode": true, "timeoutSeconds": 60, "passProxyEnv": false },
   "refresh": { "backgroundMinutes": 60 }
 }
@@ -670,6 +697,15 @@ Every account also carries `expectedPlanTier` and `accountKey`. `init` records t
 `accountKey` is a random id that `init` and `add` make. It is no secret, and it goes on every
 history and events line and into `status`, so a label removed and added again for another account
 is never mixed with the old one.
+
+An account may also carry `"fable": { "allowLaunches": false }` (7.2 rule 4; absent means
+allowed). An account's `endsAt` date is its last day: the account counts as ended once that local
+day is over. The validator refuses `picker.limitedAtPercent` outside 1 to 100,
+`picker.minRoomPercent` and `picker.expectedRunPercent` outside 0 to 100,
+`picker.deadlineSeconds`, `picker.leaseMinutes` and `launch.keepDays` below 1,
+`picker.endingSoonAssumeDays` below 0, a `launch.envNames` entry that does not match
+`^[A-Z][A-Z0-9_]{0,63}$`, and a `launch.settingsKeys` entry that is not a plain name. A key missing
+from a section takes the default shown above.
 
 `minRoomPercent` and every room figure are in percent of the weekly limit, except a Fable room
 read from a Fable reading, which `fable.minRoomPercentOfCap` compares in percent of the Fable cap
@@ -916,6 +952,14 @@ The same pick landing on a folder account differs in two fields:
   "launchPrefix": "CLAUDE_CONFIG_DIR='/Users/<user>/.agent-balancer/accounts/spare/.claude' ",
 ```
 
+`model` echoes `--model`, or is `default` when the flag is absent. Reasons that callers may see in
+`candidates` include `excluded by caller`, `ambient CLAUDE_CONFIG_DIR set`,
+`settings carry an API key or key helper`, `token sessions have no connectors`, `no token saved`,
+`login rejected`, `no weekly reading`, `window reset, refresh failed`,
+`stale reading, refresh failed` and `Fable reading is stale, refresh failed`; their text is
+informational and not stable. The `pick busy` refusal (lock not taken within 30 seconds) and every
+refused flag or caller settings exit 1 with a message on stderr and write nothing.
+
 `label: null` with `reason` when nothing fits (exit 2); then `env`, `args`, `launchPrefix`,
 `launchArgs` and `unsetEnv` are null, `backgroundOnly` is false and no launch file is written.
 `--model` takes `fable`, a Fable model id, or anything else (treated as all-models only). The
@@ -947,8 +991,11 @@ Flags:
   `excluded by caller`, for a caller whose own check refused a folder or whose worker just hit a
   limit there. There is no `release` command and no lease id in the answer: a caller that did not
   launch does nothing, and the lease lapses after `picker.leaseMinutes`.
-- `--dry-run`: writes no lease and no launch file, and returns `candidates` with `label` and
-  `eligible` for every account.
+- `--dry-run`: writes no lease, no launch file and no pick log line, and returns `candidates` with
+  `label` and `eligible` for every account. The answer has `dryRun: true`, the chosen `label`
+  when one fits (exit 0, or exit 2 when none), and `env`, `args`, `launchPrefix`, `launchArgs` and
+  `unsetEnv` all null, because no launch file exists to name. It still refreshes stale readings
+  and takes the pick lock.
 
 ### 10.3 `agent-balancer events --json`
 
@@ -1157,7 +1204,8 @@ the events record then keeps only each label's newest line.
   links.json                       0600   link manifest: link, target, hook fingerprint at link time
   state/status.json                0600   last merged status (what the menu reads)
   state/readings/<label>.json      0600   last reading per account, with source and time
-  state/picks.log                  0600   one line per pick: time, model, label or none, reason
+  state/picks.log                  0600   one line per pick: time, model, label or none, lease id
+                                          or `-`, reason; no line for a dry run
   state/history/<label>.jsonl      0600   readings history, one JSON line per changed reading (10.4)
   state/events.jsonl               0600   state changes, one numbered JSON line each (10.3)
   state/current.json               0600   each label's current state and since times (10.1)

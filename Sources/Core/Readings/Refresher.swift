@@ -5,6 +5,17 @@ extension ProbeForm {
     public static let fableModel = "fable"
 }
 
+/// When a refresh runs the Fable probe (docs/ARCHITECTURE.md section 4A.6).
+public enum FableMode: Equatable, Sendable {
+    /// At most once a day per account. What `refresh` does.
+    case daily
+    /// Never. A pick that is not for Fable.
+    case none
+    /// A pick for Fable: once a day, and also when all-models use has risen by
+    /// `fable.recheckAfterWeeklyRisePercent` since the Fable reading, or the Fable window has reset.
+    case forPick
+}
+
 public enum RefreshStatus: Equatable, Sendable {
     /// A new reading was stored.
     case probed(Reading)
@@ -41,10 +52,10 @@ private final class Results: @unchecked Sendable {
         items[index] = value
         lock.unlock()
     }
-    func ordered(count: Int) -> [AccountRefresh] {
+    func slots(count: Int) -> [AccountRefresh?] {
         lock.lock()
         defer { lock.unlock() }
-        return (0..<count).compactMap { items[$0] }
+        return (0..<count).map { items[$0] }
     }
 }
 
@@ -74,23 +85,43 @@ public struct Refresher: Sendable {
     }
 
     /// Refreshes the given accounts at the same time. Different accounts never wait for each
-    /// other; two probes of one account do.
-    public func refresh(accounts: [Account], force: Bool) -> [AccountRefresh] {
+    /// other; two probes of one account do. With a `deadline` (seconds) it returns when that has
+    /// passed: an account still running is reported `check_failed`, and its probe is left to end
+    /// on its own. `forced` names labels probed even when their reading is fresh.
+    public func refresh(
+        accounts: [Account], force: Bool, forced: Set<String> = [], fable: FableMode = .daily,
+        deadline: TimeInterval? = nil
+    ) -> [AccountRefresh] {
         let results = Results()
         let done = DispatchGroup()
         // A thread per account: concurrentPerform may run blocking probes one at a time.
         for (index, account) in accounts.enumerated() {
             done.enter()
             Thread {
-                results.set(index, refresh(account: account, force: force))
+                results.set(
+                    index,
+                    refresh(
+                        account: account, force: force || forced.contains(account.label),
+                        fable: fable))
                 done.leave()
             }.start()
         }
-        done.wait()
-        return results.ordered(count: accounts.count)
+        if let deadline {
+            _ = done.wait(timeout: .now() + max(0, deadline))
+        } else {
+            done.wait()
+        }
+        let missed = Issue(.checkFailed, .error, "Check failed: the refresh missed the deadline.")
+        return results.slots(count: accounts.count).enumerated().map { index, value in
+            value
+                ?? AccountRefresh(
+                    label: accounts[index].label, status: .failed(missed), fable: .notRun)
+        }
     }
 
-    public func refresh(account: Account, force: Bool) -> AccountRefresh {
+    public func refresh(account: Account, force: Bool, fable mode: FableMode = .daily)
+        -> AccountRefresh
+    {
         func failed(_ issue: Issue) -> AccountRefresh {
             AccountRefresh(label: account.label, status: .failed(issue), fable: .notRun)
         }
@@ -108,7 +139,7 @@ public struct Refresher: Sendable {
             var now = clock()
             let early = try store.load(label: account.label)
             if !force, let early, early.isFresh(now: now, maxAgeMinutes: maxAge),
-                !fableDue(early, now: now)
+                !fableDue(early, now: now, mode: mode)
             {
                 return AccountRefresh(label: account.label, status: .fresh(early), fable: .notRun)
             }
@@ -150,7 +181,9 @@ public struct Refresher: Sendable {
             var plainFailed = false
             if case .failed = status { plainFailed = true }
             now = clock()
-            if !plainFailed, let current = stored, fableDue(current, now: now) {
+            if !plainFailed, let current = stored,
+                fableDue(current, now: now, mode: mode)
+            {
                 try store.noteFableAttempt(label: account.label, at: now)
                 switch runProbe(account: account, probe: probe, fable: true) {
                 case .failed(let issue): fableStatus = .failed(issue)
@@ -173,11 +206,28 @@ public struct Refresher: Sendable {
     /// was more than a day ago. `--force` does not lift this limit, because a Fable probe costs
     /// cents rather than fractions of one.
     func fableDue(_ stored: Reading, now: Date) -> Bool {
-        guard config.fable.probe else { return false }
+        fableDue(stored, now: now, mode: .daily)
+    }
+
+    /// Seconds between two Fable probes that the weekly-rise rule asks for.
+    static let fableRiseCooldown: TimeInterval = 600
+
+    func fableDue(_ stored: Reading, now: Date, mode: FableMode) -> Bool {
+        guard config.fable.probe, mode != .none else { return false }
         guard let last = stored.fableProbedAt else { return true }
         // A time ahead of the clock would otherwise block the probe until that time.
         if last > now.addingTimeInterval(60) { return true }
-        return now.timeIntervalSince(last) >= Self.fableInterval
+        if now.timeIntervalSince(last) >= Self.fableInterval { return true }
+        guard mode == .forPick, now.timeIntervalSince(last) >= Self.fableRiseCooldown,
+            let fable = stored.fable, fable.source == ReadingSource.probe
+        else { return false }
+        if let reset = fable.resetsAt, reset <= now { return true }
+        if let weekly = stored.sevenDay?.usedPercent, let at = fable.weeklyUsedPercentAtRead,
+            weekly - at >= Double(config.fable.recheckAfterWeeklyRisePercent)
+        {
+            return true
+        }
+        return false
     }
 
     private func runProbe(account: Account, probe: ProbeContext, fable: Bool)

@@ -24,7 +24,7 @@ public struct NoFollowWriter: Sendable {
             }
         }
 
-        let temp = ".tmp-" + Paths.randomHex(8)
+        let temp = Self.temporaryPrefix + Paths.randomHex(8)
         let fd = openat(dir, temp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
         guard fd >= 0 else { throw ToolError("Could not write \(name).") }
         var ok = true
@@ -45,11 +45,40 @@ public struct NoFollowWriter: Sendable {
             unlinkat(dir, temp, 0)
             throw ToolError("Could not write \(name).")
         }
+        do {
+            try Self.beforeRename.run(name)
+        } catch {
+            unlinkat(dir, temp, 0)
+            throw error
+        }
         if renameat(dir, temp, dir, name) != 0 {
             unlinkat(dir, temp, 0)
             throw ToolError("Could not write \(name).")
         }
     }
+
+    /// Test seam: runs after the temporary file is complete and before the rename, so a test can
+    /// stop a write at that point.
+    final class RenameHook: @unchecked Sendable {
+        private let lock = NSLock()
+        private var actions: [String: @Sendable () throws -> Void] = [:]
+
+        /// Sets or, with nil, clears the action for writes of the file `name`.
+        func set(_ name: String, _ new: (@Sendable () throws -> Void)?) {
+            lock.lock()
+            actions[name] = new
+            lock.unlock()
+        }
+
+        func run(_ name: String) throws {
+            lock.lock()
+            let current = actions[name]
+            lock.unlock()
+            try current?()
+        }
+    }
+
+    static let beforeRename = RenameHook()
 
     /// Creates the data root and the given folders at 0700 without writing a file.
     public func prepare(folders: [String]) throws {
@@ -321,5 +350,79 @@ extension NoFollowWriter {
             (st.st_mode & S_IFMT) == S_IFREG, st.st_uid == getuid()
         else { return false }
         return unlinkat(dir, name, 0) == 0
+    }
+}
+
+extension NoFollowWriter {
+    static let temporaryPrefix = ".tmp-"
+
+    /// Whether `name` has the shape of the temporary name `put` writes to before its rename.
+    public static func isTemporaryName(_ name: String) -> Bool {
+        name.range(of: #"\A\.tmp-[0-9a-f]{16}\z"#, options: .regularExpression) != nil
+    }
+
+    /// The temporary files `put` left directly in `<root>/<folders...>` when a write stopped
+    /// before its rename: names of that shape that `lstat` shows as a regular file owned by the
+    /// user. Such a file may hold the whole content of the write. Nothing is opened.
+    public func leftoverTemporaries(folders: [String]) throws -> [String] {
+        try listNames(folders: folders).filter { name in
+            guard Self.isTemporaryName(name), let facts = try? info(folders: folders, name: name)
+            else { return false }
+            return facts.isRegularFile && facts.ownedByUser
+        }
+    }
+
+    /// Deletes the temporary files `put` left directly in `<root>/<folders...>`. Callers hold the
+    /// lock every writer of that folder holds, so none of them belongs to a write in progress.
+    /// Anything else of that shape, a link included, is left alone. Returns how many names of that
+    /// shape are still there when it has read the folder again.
+    @discardableResult
+    public func removeLeftoverTemporaries(folders: [String]) throws -> Int {
+        for name in try leftoverTemporaries(folders: folders) {
+            try removeOwnRegularFile(folders: folders, name: name)
+        }
+        return try listNames(folders: folders).filter(Self.isTemporaryName).count
+    }
+}
+
+extension NoFollowWriter {
+    static let backupExcludeName = "com.apple.metadata:com_apple_backup_excludeItem"
+
+    /// Marks `<root>/<folders...>` as excluded from backups. The folder is opened with no-follow
+    /// handles and the attribute is set on that handle, so a planted link is never followed. The
+    /// folder is made first when it is missing. An attribute that is already set is left alone.
+    public func markExcludedFromBackup(folders: [String]) throws {
+        let dir = try NoFollowWriter.openFolder(root: root, folders: folders, create: true)
+        defer { close(dir) }
+        if fgetxattr(dir, Self.backupExcludeName, nil, 0, 0, 0) >= 0 { return }
+        let value = try PropertyListSerialization.data(
+            fromPropertyList: "com.apple.backupd", format: .binary, options: 0)
+        let ok = value.withUnsafeBytes {
+            fsetxattr(dir, Self.backupExcludeName, $0.baseAddress, value.count, 0, 0) == 0
+        }
+        if !ok { throw ToolError("Could not mark a data folder as excluded from backups.") }
+    }
+
+    /// Whether `<root>/<folders...>` carries the backup exclusion. A missing folder reads as no.
+    public func isExcludedFromBackup(folders: [String]) throws -> Bool {
+        let dir = try NoFollowWriter.openFolder(root: root, folders: folders, create: false)
+        if dir < 0 { return false }
+        defer { close(dir) }
+        return fgetxattr(dir, Self.backupExcludeName, nil, 0, 0, 0) >= 0
+    }
+
+    /// Removes the folder `name` under `<root>/<parent...>` only when it is empty and a real folder
+    /// made by the user. Returns whether it was removed.
+    @discardableResult
+    public func removeEmptyFolder(parent: [String], name: String) throws -> Bool {
+        try Paths.checkName(name)
+        let dir = try NoFollowWriter.openFolder(root: root, folders: parent, create: false)
+        if dir < 0 { return false }
+        defer { close(dir) }
+        var st = stat()
+        guard fstatat(dir, name, &st, AT_SYMLINK_NOFOLLOW) == 0,
+            (st.st_mode & S_IFMT) == S_IFDIR, st.st_uid == getuid()
+        else { return false }
+        return unlinkat(dir, name, AT_REMOVEDIR) == 0
     }
 }

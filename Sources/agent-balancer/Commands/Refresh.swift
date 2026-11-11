@@ -24,6 +24,8 @@ struct RefreshCommand: ParsableCommand {
             accounts = [one]
         }
         guard !accounts.isEmpty else {
+            // `doctor` sends people here to delete a write's leftovers, with or without accounts.
+            Upkeep.runLocked(context: context, config: config)
             print("No accounts to refresh.")
             return
         }

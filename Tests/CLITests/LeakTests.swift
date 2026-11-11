@@ -11,6 +11,13 @@ struct Canary: Sendable {
         return String((0..<count).map { _ in alphabet.randomElement()! })
     }
 
+    /// A setup-token in the shape recorded for a real one: 108 characters, the prefix, then upper,
+    /// lower, digit and dash.
+    static func realShapeToken() -> String {
+        "sk-" + "ant-" + "oat01-" + "Aa0" + randomTail(27) + "-" + randomTail(30) + "-"
+            + randomTail(33)
+    }
+
     static func all() -> [Canary] {
         [
             Canary(name: "oauth-token", value: "sk-" + "ant-" + "oat01-" + randomTail(40)),
@@ -22,6 +29,7 @@ struct Canary: Sendable {
             Canary(name: "org-name", value: "Northwind " + randomTail(6) + " Traders"),
             Canary(
                 name: "home-path", value: "/Users/" + "pat" + randomTail(4).lowercased() + "/work"),
+            Canary(name: "oauth-token-real-shape", value: realShapeToken()),
         ]
     }
 }
@@ -142,6 +150,18 @@ struct Collected {
             return LeakDetector.contains(data, canaries: canaries) ? key : nil
         }.sorted()
     }
+
+    /// Streams that hold a canary, apart from those whose key matches one of `allowedPathPatterns`,
+    /// regular expressions on the whole key.
+    func leaks(of canaries: [Canary], allowedPathPatterns: [String]) -> [String] {
+        streams.compactMap { key, data in
+            let allowed = allowedPathPatterns.contains {
+                key.range(of: $0, options: .regularExpression) != nil
+            }
+            if allowed { return nil }
+            return LeakDetector.contains(data, canaries: canaries) ? key : nil
+        }.sorted()
+    }
 }
 
 @Suite struct LeakTests {
@@ -189,7 +209,9 @@ struct Collected {
 
     @Test func versionRunLeaksNoCanaryFromAnyPlantedInput() throws {
         let exe = try #require(Support.builtBinary(), "build the package before running tests")
-        for (_, channel, inputs) in PlantedInputs.everyCombination() {
+        // One set of canaries, so the scan looks for exactly the values that were planted.
+        let canaries = Canary.all()
+        for (_, channel, inputs) in PlantedInputs.everyCombination(canaries: canaries) {
             let home = try Support.makeTempDir()
             defer { try? FileManager.default.removeItem(at: home) }
             let env = try inputs.materialize(
@@ -203,7 +225,7 @@ struct Collected {
             let allowed = Array(inputs.files.keys)
             #expect(result.status == 0, "channel \(channel)")
             #expect(
-                collected.leaks(of: Canary.all(), allowedPathFragments: allowed).isEmpty,
+                collected.leaks(of: canaries, allowedPathFragments: allowed).isEmpty,
                 "leak with \(channel)")
         }
     }

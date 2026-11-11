@@ -5,8 +5,32 @@ public enum ConfigValidator {
         label.range(of: #"\A[a-z0-9][a-z0-9-]{0,31}\z"#, options: .regularExpression) != nil
     }
 
+    /// A real calendar day written `YYYY-MM-DD`. `2026-13-45` and `2026-02-30` are refused.
     public static func isValidDate(_ text: String) -> Bool {
-        text.range(of: #"\A[0-9]{4}-[0-9]{2}-[0-9]{2}\z"#, options: .regularExpression) != nil
+        guard text.range(of: #"\A[0-9]{4}-[0-9]{2}-[0-9]{2}\z"#, options: .regularExpression) != nil
+        else { return false }
+        let parts = text.split(separator: "-").compactMap { Int($0) }
+        guard parts.count == 3 else { return false }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC") ?? .current
+        let parts3 = DateComponents(year: parts[0], month: parts[1], day: parts[2])
+        guard let day = calendar.date(from: parts3) else { return false }
+        let back = calendar.dateComponents([.year, .month, .day], from: day)
+        return back.year == parts[0] && back.month == parts[1] && back.day == parts[2]
+    }
+
+    /// A real day that is `now`'s local day or later. A new `ends` value must pass this.
+    public static func isTodayOrLater(_ text: String, now: Date = Date()) -> Bool {
+        guard isValidDate(text) else { return false }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd"
+        return text >= formatter.string(from: now)
+    }
+
+    /// An ISO 8601 time such as `2026-11-11T17:03:00Z`.
+    public static func isValidTimestamp(_ text: String) -> Bool {
+        ISO8601DateFormatter().date(from: text) != nil
     }
 
     /// Throws on the first problem found, with a message that names the field and never a value
@@ -102,6 +126,11 @@ public enum ConfigValidator {
             if account.kind == Kind.login { logins += 1 }
             if let ends = account.endsAt, !isValidDate(ends) {
                 throw ToolError("Account '\(label)': ends must be a date like 2026-12-31.")
+            }
+            if let created = account.tokenCreatedAt {
+                guard account.kind == Kind.token, isValidTimestamp(created) else {
+                    throw ToolError("Account '\(label)': tokenCreatedAt is not valid.")
+                }
             }
             if let reserve = account.reserve {
                 for point in reserve.points

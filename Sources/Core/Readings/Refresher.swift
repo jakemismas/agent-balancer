@@ -32,10 +32,44 @@ public enum FableRefreshStatus: Equatable, Sendable {
     case failed(Issue)
 }
 
+/// What the duplicate check of docs/ARCHITECTURE.md section 4A.4 found after the probes of one
+/// refresh. It runs in the reading cache's `afterProbe` hook, so only a token account probe that
+/// gave a reading runs it.
+public enum DuplicateCheck: Equatable, Sendable {
+    case notRun
+    case clear
+    /// Both reset times equal those of the account with this label.
+    case sameAs(String)
+
+    /// The `possible_duplicate` warning, or nil.
+    public var issue: Issue? {
+        guard case .sameAs(let other) = self else { return nil }
+        return Issue(.possibleDuplicate, .warning, TokenKind.duplicateText(other))
+    }
+}
+
+private final class DuplicateBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored = DuplicateCheck.notRun
+    var value: DuplicateCheck {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return stored
+        }
+        set {
+            lock.lock()
+            stored = newValue
+            lock.unlock()
+        }
+    }
+}
+
 public struct AccountRefresh: Equatable, Sendable {
     public var label: String
     public var status: RefreshStatus
     public var fable: FableRefreshStatus
+    public var duplicate: DuplicateCheck = .notRun
 
     public var failed: Bool {
         if case .failed = status { return true }
@@ -119,11 +153,38 @@ public struct Refresher: Sendable {
         }
     }
 
+    /// The reading cache with its `afterProbe` hook set to the duplicate check, which writes what
+    /// it found into `box`. A hook the caller set still runs first.
+    private func storeWithDuplicateCheck(into box: DuplicateBox) -> ReadingStore {
+        var store = self.store
+        let caller = store.afterProbe
+        let base = self.store
+        let accounts = config.accounts
+        let clock = self.clock
+        store.afterProbe = { label, reading in
+            caller(label, reading)
+            var readings = [label: reading]
+            for other in accounts where other.label != label {
+                if let stored = try? base.load(label: other.label) {
+                    readings[other.label] = stored
+                }
+            }
+            let other = TokenKind.possibleDuplicate(
+                of: label, accounts: accounts, readings: readings, now: clock())
+            box.value = other.map(DuplicateCheck.sameAs) ?? .clear
+        }
+        return store
+    }
+
     public func refresh(account: Account, force: Bool, fable mode: FableMode = .daily)
         -> AccountRefresh
     {
+        let duplicate = DuplicateBox()
+        let store = storeWithDuplicateCheck(into: duplicate)
         func failed(_ issue: Issue) -> AccountRefresh {
-            AccountRefresh(label: account.label, status: .failed(issue), fable: .notRun)
+            AccountRefresh(
+                label: account.label, status: .failed(issue), fable: .notRun,
+                duplicate: duplicate.value)
         }
         let probe: ProbeContext
         do {
@@ -194,7 +255,9 @@ public struct Refresher: Sendable {
                     fableStatus = .probed
                 }
             }
-            return AccountRefresh(label: account.label, status: status, fable: fableStatus)
+            return AccountRefresh(
+                label: account.label, status: status, fable: fableStatus,
+                duplicate: duplicate.value)
         } catch let error as ToolError {
             return failed(Issue(error.code ?? .checkFailed, .error, error.message))
         } catch {

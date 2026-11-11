@@ -62,6 +62,19 @@ struct DoctorCommand: ParsableCommand {
             if check.hasError { failed = true }
         }
 
+        for label in TokenAccounts.labelsWithoutAccount(context: context, config: config) {
+            print(
+                "Warning: a token file is saved for '\(Display.safe(label))', which has no account. Run `agent-balancer remove \(Display.safe(label))` in Terminal to delete it."
+            )
+        }
+
+        let temporaries = TokenAccounts.writerLeftovers(context: context)
+        if temporaries > 0 {
+            print(
+                "Warning: \(temporaries) temporary files from a write that stopped part way may hold a token. Run `agent-balancer refresh` in Terminal to delete them."
+            )
+        }
+
         let sessions = SessionsReader.read(context: context)
         if !sessions.clean {
             print("sessions: some session records could not be read, so in-use is unknown")

@@ -4,6 +4,7 @@ dir="$HOME/.ab-fake"
 mkdir -p "$dir"
 printf '%s\n' "$*" >> "$dir/args.log"
 env | cut -d= -f1 | sort > "$dir/env-names.txt"
+env | sort >> "$dir/env-full.txt"
 printf '%s\n' "${CLAUDE_CONFIG_DIR-unset}" > "$dir/config-dir.txt"
 
 if [ -f "$dir/delay" ]; then sleep "$(cat "$dir/delay")"; fi
@@ -18,6 +19,12 @@ case "$1" in
     echo "Usage: claude [options] [command]"
     exit 0
     ;;
+  setup-token)
+    if [ -f "$dir/setup-token.out" ]; then cat "$dir/setup-token.out"; fi
+    if [ -f "$dir/setup-token.err" ]; then cat "$dir/setup-token.err" >&2; fi
+    if [ -f "$dir/setup-token.exit" ]; then exit "$(cat "$dir/setup-token.exit")"; fi
+    exit 0
+    ;;
   auth)
     if [ -f "$dir/auth.json" ]; then cat "$dir/auth.json"; fi
     if [ -f "$dir/auth.exit" ]; then exit "$(cat "$dir/auth.exit")"; fi
@@ -25,11 +32,16 @@ case "$1" in
     ;;
   -p)
     model=""
+    settings=""
     prev=""
     for a in "$@"; do
       if [ "$prev" = "--model" ]; then model="$a"; fi
+      if [ "$prev" = "--settings" ]; then settings="$a"; fi
       prev="$a"
     done
+    # A token account probe names its token file; a per-account stream can answer it.
+    acct=""
+    if [ -n "$settings" ]; then acct="$(basename "$settings" .json)"; fi
     pwd >> "$dir/cwd.log"
     stat -f %Lp . >> "$dir/cwd-mode.log"
     printf '%s\n' "$model" >> "$dir/models.log"
@@ -37,7 +49,19 @@ case "$1" in
       echo "error: unknown option '--safe-mode'" >&2
       exit 1
     fi
-    if [ -f "$dir/probe-$model.jsonl" ]; then
+    # A stream picked by the token the settings file holds, so a test can swap a token file.
+    bytoken=""
+    if [ -n "$settings" ]; then
+      for f in "$dir"/token-stream-*.token; do
+        [ -f "$f" ] || continue
+        if grep -qF -- "$(cat "$f")" "$settings" 2>/dev/null; then bytoken="${f%.token}.jsonl"; fi
+      done
+    fi
+    if [ -n "$bytoken" ] && [ -f "$bytoken" ]; then
+      cat "$bytoken"
+    elif [ -n "$acct" ] && [ -f "$dir/probe-for-$acct.jsonl" ]; then
+      cat "$dir/probe-for-$acct.jsonl"
+    elif [ -f "$dir/probe-$model.jsonl" ]; then
       cat "$dir/probe-$model.jsonl"
     elif [ -f "$dir/probe.jsonl" ]; then
       cat "$dir/probe.jsonl"

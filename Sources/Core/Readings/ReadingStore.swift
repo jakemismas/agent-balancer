@@ -7,8 +7,8 @@ public struct ReadingStore: Sendable {
     private let reader: NoFollowReader
     private let writer: NoFollowWriter
 
-    /// Called once after each probe of a token account that gave a reading. It does nothing in
-    /// this version; the duplicate check of section 4A.4 fills it in.
+    /// Called once after each probe of a token account that gave a reading. The refresher sets it
+    /// to the duplicate check of docs/ARCHITECTURE.md section 4A.4; by default it does nothing.
     public var afterProbe: @Sendable (_ label: String, _ reading: Reading) -> Void = { _, _ in }
 
     public init(context: ToolContext) {
@@ -35,6 +35,12 @@ public struct ReadingStore: Sendable {
     public func save(_ reading: Reading, label: String) throws {
         let data = try Reading.encoder().encode(reading) + Data([0x0A])
         try writer.put(data, folders: Layout.readingsFolders, name: Layout.readingName(label))
+    }
+
+    /// Deletes the stored reading of `label` when it is a regular file made by the user.
+    public func delete(label: String) throws {
+        try writer.removeOwnRegularFile(
+            folders: Layout.readingsFolders, name: Layout.readingName(label))
     }
 
     /// Merges a probe reading into the stored one and saves it. `callsHook` is true for a token

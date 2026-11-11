@@ -70,12 +70,15 @@ public struct Account: Codable, Equatable, Sendable {
     public var endsAt: String?
     public var endingSoon: Bool?
     public var fable: AccountFable?
+    /// When the account's current token was saved, as an ISO 8601 time. Token accounts only. The
+    /// estimate of the token's end counts from it.
+    public var tokenCreatedAt: String?
 
     public init(
         label: String, kind: String, role: String, email: String? = nil,
         expectedPlanTier: String? = nil, accountKey: String = Account.makeKey(),
         reserve: Reserve? = nil, endsAt: String? = nil, endingSoon: Bool? = nil,
-        fable: AccountFable? = nil
+        fable: AccountFable? = nil, tokenCreatedAt: String? = nil
     ) {
         self.label = label
         self.kind = kind
@@ -87,6 +90,7 @@ public struct Account: Codable, Equatable, Sendable {
         self.endsAt = endsAt
         self.endingSoon = endingSoon
         self.fable = fable
+        self.tokenCreatedAt = tokenCreatedAt
     }
 
     public static func makeKey() -> String {

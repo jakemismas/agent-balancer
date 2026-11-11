@@ -39,3 +39,31 @@
   unchanged when the events cannot be saved so the transitions are detected again. Add in-use
   session counts from live session records and launch file upkeep. `pick` never reads the events
   record or `current.json`.
+- Add token accounts: `add <label>` (kind `token`, optional `--email`, `--ends` and
+  `--ending-soon`), `login <label>` (runs `claude setup-token` and keeps the token without showing
+  it, or reads a pasted token from input) and `remove <label>`. A token lives in
+  `tokens/<label>.json`, written by one atomic rename. A replace rewrites the label's launch files
+  under the pick lock, and `remove` overwrites a launch file that a session still names with no
+  token. Both print that the old token may keep working until its year ends; whether a new token
+  ends the old one is not yet known.
+- Estimate a token's end as 365 days after it was saved, show it as `loginExpiresAt` with source
+  `estimate`, and warn with `login_expiring` 14 days before, once per expiry date. Warn with
+  `possible_duplicate` when two accounts share both reset times, checked after every probe of a
+  token account.
+- Refuse an `--ends` date that is not a real day, and refuse a past date in `add` and
+  `config set ends`.
+- `remove` keeps a launch file that a session names or that a recent pick returned as a tombstone
+  whose token variable is `invalid`, reads every remaining launch file back before it deletes the
+  token file, deletes the writer's leftover temporary files, and finishes on a rerun even when the
+  account entry is gone. `doctor` lists a token file that has no account. A replace never revives
+  a tombstone and never leaves the old token in a launch file that does not parse.
+- `pick` skips a token account whose token file does not parse, also with `--dry-run`, and
+  `refresh` never probes one. A token file that is missing, not private or does not parse shows
+  `token_missing` with one text, "No token saved. Run `agent-balancer login <label>` in Terminal.",
+  also after a `refresh`.
+- `remove`, a token replace and launch file upkeep delete the temporary files a write killed
+  before its rename leaves in `tokens/` and the launch folders, and `doctor` counts any that are
+  left. `login` writes no token file once a `remove` has dropped the account, `add` refuses a label
+  whose token file outlived its account, and `login --paste` refuses to read when the terminal
+  cannot hide the input.
+- `config set <label> label <new>` refuses on a token account and writes nothing.

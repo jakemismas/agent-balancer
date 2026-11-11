@@ -12,7 +12,8 @@ public struct TokenSecret: CustomStringConvertible, CustomDebugStringConvertible
     func reveal() -> String { value }
 }
 
-/// Reads the token of a token account. Only the `Launch` module calls it.
+/// Reads the token of a token account. Only the `Launch` module takes the value; other modules
+/// ask `isUsable`, which answers yes or no.
 public enum TokenStore {
     static let maxLength = 512
 
@@ -20,8 +21,7 @@ public enum TokenStore {
     /// mode 0600. A file that is missing, wide open, not JSON or without a plausible token throws
     /// `token_missing`, with a message that holds no part of the file.
     static func read(context: ToolContext, label: String) throws -> TokenSecret {
-        let missing = ToolError(
-            "Account '\(Display.safe(label))' has no usable token file.", code: .tokenMissing)
+        let missing = ToolError(Messages.tokenMissing(label), code: .tokenMissing)
         let facts = try TokenPaths.facts(context: context, label: label)
         guard facts.exists, facts.isPrivate else { throw missing }
         let name = try TokenPaths.fileName(label: label)

@@ -412,3 +412,86 @@ import Testing
         #expect(!text.contains(email) && !text.contains(token))
     }
 }
+
+/// The token account's expiry estimate and its sign-in error.
+extension StatusBuilderTests {
+    func tokenAccount(createdDaysAgo days: Double?) -> Account {
+        var a = Account(
+            label: "tok", kind: Kind.token, role: Role.pool, accountKey: "key-tok")
+        if let days {
+            a.tokenCreatedAt = ISO8601DateFormatter().string(
+                from: now.addingTimeInterval(-days * 86_400))
+        }
+        return a
+    }
+
+    func tokenBuild(
+        _ a: Account, previous: CurrentFile = CurrentFile(),
+        observations: StatusObservations = .init()
+    ) -> StatusBuild {
+        build(
+            [a], readings: ["tok": reading()], previous: previous, observations: observations,
+            tokens: ["tok": TokenInfo(usable: true, modified: now)])
+    }
+
+    @Test func aTokenEstimateCountsAYearAndSaysEstimate() {
+        let built = tokenBuild(tokenAccount(createdDaysAgo: 10))
+        let r = row(built)
+        #expect(r.loginExpiresSource == "estimate")
+        let expected = now.addingTimeInterval(355 * 86_400)
+        let at = r.loginExpiresAt
+        #expect(abs((at ?? .distantPast).timeIntervalSince(expected)) < 2)
+        #expect(r.warnings.isEmpty)
+    }
+
+    @Test func aTokenWarnsFourteenDaysBeforeItsYearEnds() {
+        #expect(
+            row(tokenBuild(tokenAccount(createdDaysAgo: 351))).warnings.map(\.code) == [
+                "login_expiring"
+            ])
+        #expect(
+            row(tokenBuild(tokenAccount(createdDaysAgo: 360))).warnings.map(\.code) == [
+                "login_expiring"
+            ])
+        #expect(
+            row(tokenBuild(tokenAccount(createdDaysAgo: 351.5))).warnings.map(\.code) == [
+                "login_expiring"
+            ])
+        #expect(row(tokenBuild(tokenAccount(createdDaysAgo: 350))).warnings.isEmpty)
+        #expect(row(tokenBuild(tokenAccount(createdDaysAgo: 100))).warnings.isEmpty)
+    }
+
+    @Test func aLoginAccountStillWarnsOnlyWithinSevenDays() {
+        var obs = StatusObservations()
+        obs.auth["main"] = AuthObservation(
+            error: nil, planTier: "max_20x", loginExpiresAt: now.addingTimeInterval(10 * 86_400),
+            signedIn: true)
+        let built = build([account()], readings: ["main": reading()], observations: obs)
+        #expect(row(built).warnings.isEmpty)
+    }
+
+    @Test func theTokenExpiringEventIsWrittenOncePerExpiryDate() {
+        let a = tokenAccount(createdDaysAgo: 355)
+        let first = tokenBuild(a)
+        #expect(first.events.filter { $0.type == "login_expiring" }.count == 1)
+        let again = tokenBuild(a, previous: first.current)
+        #expect(again.events.filter { $0.type == "login_expiring" }.isEmpty)
+        // A replaced token moves the date; a new year then warns again once it is close.
+        var renewed = a
+        renewed.tokenCreatedAt = ISO8601DateFormatter().string(
+            from: now.addingTimeInterval(-352 * 86_400))
+        let moved = tokenBuild(renewed, previous: first.current)
+        #expect(moved.events.filter { $0.type == "login_expiring" }.count == 1)
+    }
+
+    @Test func aRejectedTokenShowsLoginRejected() {
+        var obs = StatusObservations()
+        obs.probe["tok"] = ProbeObservation(
+            error: Issue(.loginRejected, .error, "Login rejected."))
+        let built = tokenBuild(tokenAccount(createdDaysAgo: 10), observations: obs)
+        let r = row(built)
+        #expect(r.state == "error")
+        #expect(r.error?.code == "login_rejected")
+        #expect(built.events.contains { $0.type == "error" })
+    }
+}

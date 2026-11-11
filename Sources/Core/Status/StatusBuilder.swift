@@ -80,7 +80,8 @@ public enum StatusBuilder {
             let reading = readings[account.label]
             let entry = Transitions.observed(
                 known, account: account, auth: observations.auth[account.label],
-                probe: observations.probe[account.label], now: now)
+                probe: observations.probe[account.label],
+                duplicate: observations.duplicates[account.label] ?? .notRun, now: now)
             let token = tokens[account.label]
             let duplicate = emails[account.email?.lowercased() ?? ""].flatMap { group in
                 group.count > 1 ? group.first { $0 != account.label } : nil
@@ -88,7 +89,11 @@ public enum StatusBuilder {
             var evaluation = Transitions.evaluate(
                 Transitions.Input(
                     account: account, reading: reading, entry: entry, settings: settings,
-                    duplicateOf: duplicate, tokenUsable: token?.usable ?? false,
+                    duplicateOf: duplicate,
+                    possibleDuplicateOf: entry.possibleDuplicateOf.flatMap { other in
+                        config.account(other) == nil ? nil : other
+                    },
+                    tokenUsable: token?.usable ?? false,
                     tokenModified: token?.modified, config: config, now: now))
             if let count = missing[account.label], count > 0 {
                 let text =
@@ -142,6 +147,13 @@ public enum StatusBuilder {
                 }
             }
             if let drafted { events.append(drafted) }
+            if observations.tokenReplaced.contains(account.label) {
+                events.append(
+                    EventDraft(
+                        label: account.label, accountKey: account.accountKey,
+                        type: EventType.tokenReplaced, code: nil, window: nil, resetsAt: nil,
+                        notBefore: known?.lastReadingAt, text: "Token replaced."))
+            }
 
             if let reading, retention > 0 {
                 let line = Self.historyLine(account: account, reading: reading, state: next.state)

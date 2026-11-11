@@ -216,9 +216,10 @@ public struct PickService: Sendable {
         if let settingsIssue { return settingsIssue }
         if account.kind == Kind.token {
             if carriesKey { return "settings carry an API key or key helper" }
-            guard let facts = try? TokenPaths.facts(context: context, label: account.label),
-                facts.isPrivate
-            else { return "no token saved" }
+            // A file that does not parse counts as no token, so it is never probed or offered.
+            guard TokenStore.isUsable(context: context, label: account.label) else {
+                return "no token saved"
+            }
         }
         if account.kind == Kind.login, let handler = AccountKinds.handler(for: Kind.login) {
             let check = handler.check(account: account, runner: runner, now: clock())

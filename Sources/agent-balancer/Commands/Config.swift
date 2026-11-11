@@ -138,8 +138,9 @@ struct ConfigCommand: ParsableCommand {
                 if value == "none" {
                     config.accounts[index].endsAt = nil
                 } else {
-                    guard ConfigValidator.isValidDate(value) else {
-                        throw ToolError("ends must be a date like 2026-12-31, or none.")
+                    guard ConfigValidator.isTodayOrLater(value) else {
+                        throw ToolError(
+                            "ends must be today or a later date like 2026-12-31, or none.")
                     }
                     config.accounts[index].endsAt = value
                 }
@@ -149,6 +150,12 @@ struct ConfigCommand: ParsableCommand {
                 }
                 config.accounts[index].endingSoon = value == "true" ? true : nil
             case "label":
+                // A token account's files carry its label, so a rename would strand the token.
+                guard config.accounts[index].kind != Kind.token else {
+                    throw ToolError(
+                        "A token account cannot be renamed. Run `agent-balancer remove \(Display.safe(label))`, then `agent-balancer add \(Display.safe(value))` and `agent-balancer login \(Display.safe(value))`."
+                    )
+                }
                 guard ConfigValidator.isValidLabel(value) else {
                     throw ToolError(
                         "Label '\(Display.safe(value))' is not valid. Use 1 to 32 lowercase letters, digits or hyphens, starting with a letter or digit."

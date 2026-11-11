@@ -10,7 +10,7 @@ struct AgentBalancer: ParsableCommand {
         subcommands: [
             InitCommand.self, DoctorCommand.self, ConfigCommand.self, LinkCommand.self,
             RefreshCommand.self, PickCommand.self, StatusCommand.self, EventsCommand.self,
-            HistoryCommand.self,
+            HistoryCommand.self, AddCommand.self, LoginCommand.self, RemoveCommand.self,
         ]
     )
 }

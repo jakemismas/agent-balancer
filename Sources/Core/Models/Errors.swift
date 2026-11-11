@@ -62,4 +62,10 @@ public enum Messages {
     public static let keyInSettings =
         "Settings carry an API key or key helper. Token accounts are skipped."
     public static let notSetUp = "Setup has not run. Run `agent-balancer init`."
+
+    /// The `token_missing` text, the same for a token file that is absent, not private or does
+    /// not parse (docs/ARCHITECTURE.md section 9).
+    public static func tokenMissing(_ label: String) -> String {
+        "No token saved. Run `agent-balancer login \(Display.safe(label, limit: 32))` in Terminal."
+    }
 }

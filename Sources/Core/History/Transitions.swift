@@ -34,6 +34,9 @@ public struct CurrentEntry: Codable, Equatable, Sendable {
     public var expiringNotified: String?
     public var historyAt: Date?
     public var historySignature: String?
+    /// The other label the last duplicate check of a token account matched, from the
+    /// `afterProbe` hook. It stays until the account's next probe checks again.
+    public var possibleDuplicateOf: String?
 }
 
 /// What the default folder's settings showed the last time a command allowed to read them did.
@@ -71,6 +74,7 @@ public struct CurrentFile: Codable, Equatable, Sendable {
                 entry.limitedWindow.map(Self.windowNames.contains) ?? true,
                 entry.planTier.map(AuthStatusReader.isPlainTier) ?? true,
                 entry.expiringNotified.map(ConfigValidator.isValidDate) ?? true,
+                entry.possibleDuplicateOf.map(ConfigValidator.isValidLabel) ?? true,
                 [entry.authError, entry.probeError].allSatisfy({
                     $0.map { StateCode(rawValue: $0.code) != nil } ?? true
                 })
@@ -126,6 +130,10 @@ public struct StatusObservations: Sendable {
     public var auth: [String: AuthObservation] = [:]
     public var probe: [String: ProbeObservation] = [:]
     public var settings: SettingsObservation?
+    /// Labels whose token was replaced by the command that triggers this rebuild.
+    public var tokenReplaced: Set<String> = []
+    /// What the duplicate check found for each token account a probe of this command read.
+    public var duplicates: [String: DuplicateCheck] = [:]
 
     public init(
         auth: [String: AuthObservation] = [:], probe: [String: ProbeObservation] = [:],
@@ -145,6 +153,7 @@ public struct StatusObservations: Sendable {
             case .probed: probe[result.label] = ProbeObservation(error: nil)
             case .fresh, .usedStored: break
             }
+            if result.duplicate != .notRun { duplicates[result.label] = result.duplicate }
         }
     }
 }
@@ -158,6 +167,7 @@ enum Transitions {
         var entry: CurrentEntry
         var settings: SettingsMemory
         var duplicateOf: String?
+        var possibleDuplicateOf: String? = nil
         var tokenUsable: Bool
         var tokenModified: Date?
         var config: Config
@@ -183,7 +193,7 @@ enum Transitions {
     /// The entry with this run's observations folded in. The state fields are not touched.
     static func observed(
         _ previous: CurrentEntry?, account: Account, auth: AuthObservation?,
-        probe: ProbeObservation?, now: Date
+        probe: ProbeObservation?, duplicate: DuplicateCheck = .notRun, now: Date
     ) -> CurrentEntry {
         var entry =
             previous
@@ -216,6 +226,12 @@ enum Transitions {
                 entry.authError = nil
             }
         }
+        switch duplicate {
+        case .notRun: break
+        case .clear: entry.possibleDuplicateOf = nil
+        case .sameAs(let other): entry.possibleDuplicateOf = other
+        }
+        if account.kind != Kind.token { entry.possibleDuplicateOf = nil }
         if account.endingSoon != true { entry.endedByPlan = false }
         return entry
     }
@@ -249,9 +265,7 @@ enum Transitions {
                 issue == "missing" ? Messages.hookRecordMissing : Messages.settingsChanged)
         }
         if account.kind == Kind.token && !input.tokenUsable {
-            add(
-                .tokenMissing,
-                "No token saved. Run `agent-balancer login \(account.label)` in Terminal.")
+            add(.tokenMissing, Messages.tokenMissing(account.label))
         }
         if let other = input.duplicateOf {
             add(
@@ -272,8 +286,10 @@ enum Transitions {
         var source: String?
         var threshold = 7.0
         if account.kind == Kind.token {
-            if let modified = input.tokenModified, input.tokenUsable {
-                expires = modified.addingTimeInterval(tokenLifeDays * 86_400)
+            if input.tokenUsable,
+                let start = TokenKind.createdAt(account, fileModified: input.tokenModified)
+            {
+                expires = start.addingTimeInterval(tokenLifeDays * 86_400)
                 source = "estimate"
             }
             threshold = 14
@@ -305,6 +321,10 @@ enum Transitions {
                 Issue(
                     .fableLimited, .warning,
                     "Fable limited until \(Picker.shortTime(fable.resetsAt))."))
+        }
+        if account.kind == Kind.token, let other = input.possibleDuplicateOf {
+            warnings.append(
+                Issue(.possibleDuplicate, .warning, clean(TokenKind.duplicateText(other))))
         }
         if input.settings.carriesKey {
             warnings.append(Issue(.keyInSettings, .warning, Messages.keyInSettings))

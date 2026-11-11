@@ -134,6 +134,10 @@ enum Canaries {
     }
 
     static func oauth() -> String { "sk-" + "ant-" + "oat01-" + tail() }
+    /// The shape recorded for a real setup-token: 108 characters with upper, lower, digit and dash.
+    static func oauthRealShape() -> String {
+        "sk-" + "ant-" + "oat01-" + "Aa0" + tail(27) + "-" + tail(30) + "-" + tail(33)
+    }
     static func apiKey() -> String { "sk-" + "ant-" + "api03-" + tail() }
     static func email() -> String { "pat." + tail(6).lowercased() + "@" + "contoso" + ".test" }
     static func orgId() -> String { UUID().uuidString.lowercased() }

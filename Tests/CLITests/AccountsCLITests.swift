@@ -374,8 +374,8 @@ private let refusal = "Run this in your own terminal, outside a Claude Code sess
         }
         #expect(try h.run(["config", "set", "main", "email", "new@example.com"]).status == 0)
         #expect(try account()["email"] as? String == "new@example.com")
-        #expect(try h.run(["config", "set", "main", "ends", "2026-12-31"]).status == 0)
-        #expect(try account()["endsAt"] as? String == "2026-12-31")
+        #expect(try h.run(["config", "set", "main", "ends", "2099-12-31"]).status == 0)
+        #expect(try account()["endsAt"] as? String == "2099-12-31")
         #expect(try h.run(["config", "set", "main", "ending-soon", "true"]).status == 0)
         #expect(try account()["endingSoon"] as? Bool == true)
         #expect(try h.run(["config", "set", "main", "label", "primary"]).status == 0)

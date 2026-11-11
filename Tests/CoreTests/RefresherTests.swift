@@ -121,6 +121,37 @@ import Testing
         #expect(!t.allText(skipping: file).contains(secret))
     }
 
+    @Test func theAfterProbeHookRunsTheDuplicateCheckOnEveryTokenProbe() throws {
+        let t = try setUp()
+        _ = try t.makeTokenFile(label: "pool-a", secret: Canaries.oauth())
+        _ = try t.makeTokenFile(label: "pool-b", secret: Canaries.oauth())
+        let accounts = [token("pool-a"), token("pool-b"), login()]
+        let hook = HookCalls()
+        let r = refresher(t, accounts: accounts, clock: ClockBox(Self.start), hook: hook) {
+            $0.fable.probe = false
+        }
+        // pool-b has no reading yet, so the first probe finds no match.
+        let first = r.refresh(account: token("pool-a"), force: true)
+        #expect(first.duplicate == .clear)
+        // The same stream answers pool-b, so both reset times equal pool-a's.
+        let second = r.refresh(account: token("pool-b"), force: true)
+        #expect(second.duplicate == .sameAs("pool-a"))
+        #expect(second.duplicate.issue?.code == .possibleDuplicate)
+        #expect(second.duplicate.issue?.severity == .warning)
+        // A hook the caller set still runs, once per probe.
+        #expect(hook.labels == ["pool-a", "pool-b"])
+
+        // A reading that is fresh runs no probe, and a login account never runs the check.
+        #expect(r.refresh(account: token("pool-b"), force: false).duplicate == .notRun)
+        #expect(r.refresh(account: login(), force: true).duplicate == .notRun)
+
+        // Other reset times on the next probe clear it. The stored reading goes first, so the
+        // merge reads the probe as new.
+        try t.fakeProbe("ok.jsonl", now: Self.start.addingTimeInterval(600))
+        try ReadingStore(context: t.context).delete(label: "pool-b")
+        #expect(r.refresh(account: token("pool-b"), force: true).duplicate == .clear)
+    }
+
     @Test func theHookIsNotCalledForALoginAccount() throws {
         let t = try setUp()
         let hook = HookCalls()

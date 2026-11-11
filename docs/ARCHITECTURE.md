@@ -81,7 +81,9 @@ agent-balancer/
       Config/      load, validate, migrate (schemaVersion), defaults
       Paths/       data folder, account folders, 0700 and 0600 enforcement, no-follow writer (NoFollowWriter.swift, the only file the safety scan lets write or delete)
       Runner/      Process with an argument array (never a shell), timeout, output size cap,
-                   scrubber on every captured byte
+                   scrubber on every captured byte. `ClaudeRunner.runSetupToken` runs
+                   `claude setup-token` with the person's environment and hands the raw output
+                   once to a callback of the `Tokens` module before it scrubs the remainder
       Readers/     auth status reader, probe reader (stream-json parser), sessions reader
                    (`SessionsReader`: the default folder's `sessions/` and `jobs/` records, section 8)
       Readings/    reading cache (state/readings/<label>.json), the merge rule of 6.3, and the
@@ -93,14 +95,16 @@ agent-balancer/
       Launch/      launch files: caller settings allowlist, merge, lease, upkeep (`Upkeep`, 4A.6)
       Status/      `StatusBuilder`: merges readings, sign-in checks and in-use sessions into the
                    status document and rebuilds `state/status.json` (sections 10.1 and 13)
-      Tokens/      the token file: capture, shape check, write, replace, delete
+      Tokens/      the token file: `TokenStore` (read, save, delete), `TokenCapture` (the capture and
+                   the shape check), `TokenAccounts` (install, replace and remove under the pick
+                   lock, with the launch files rewritten or deleted through `Launch`)
       History/     append-only readings history (`ReadingHistory`), state-change events
                    (`EventLog`), the rule that turns a change of state into one event
                    (`Transitions`), and the `events` and `history` answers (`Queries`)
       Scrub/       token-like string redaction used by Runner and the logger
     agent-balancer/          CLI (swift-argument-parser)
       Commands/    one file per command: Init, Doctor, Config, Link, Refresh, Pick, Status, Events,
-                   History, and the `Shared` helper that ends a writing command with the status
+                   History, Add, Login, Remove, and the `Shared` helper that ends a writing command with the status
                    rebuild
     AgentBalancerBar/        SwiftUI MenuBarExtra app (window style, LSUIElement)
   skill/agent-balancer/SKILL.md   the skill file for a user's Claude (4A.7)
@@ -275,11 +279,13 @@ as the hook record (5.7), and warn `key_in_settings` (section 9).
 
 ### 4A.4 The token kind
 
-Adding: `add <label> [--email <address>]` (kind `token` unless `--kind` says otherwise), then
-`login <label>`.
+Adding: `add <label> [--email <address>] [--ends <date>] [--ending-soon]` (kind `token` unless
+`--kind` says otherwise), then `login <label>`.
 
 1. `add` writes the registry entry only. `--email` is a note for the person. The tool shows the
-   note and never checks it against a token.
+   note and never checks it against a token. `add` refuses a label whose `tokens/<label>.json`
+   is still there from an earlier account and says to run `remove <label>` first, so a new
+   account never takes over a token it did not sign in with.
 2. `login <label>` gets the token, in a terminal and never in a chat shell. It runs
    `claude setup-token` as a child. The browser opens, the person approves, and the tool takes
    the token from the child's output without showing it. `TokenCapture`, inside the `Tokens`
@@ -287,49 +293,100 @@ Adding: `add <label> [--email <address>]` (kind `token` unless `--kind` says oth
    to the scrubber, so the scrubber never removes the token before capture and no other module
    holds an unscrubbed buffer. `TokenCapture` returns a length and shape check to its caller,
    never text. The fallback form, `login <label> --paste`, has the person run
-   `claude setup-token` themselves and paste the token at a prompt that does not echo. The token
+   `claude setup-token` themselves and paste the token at a prompt that does not echo. The pipe form
+   (spike S14) is the default and `--paste` is the fallback. A pasted or captured token must have
+   the shape `sk-ant-oat`, two digits, a dash and letters, digits, dashes or underscores; an API
+   key or any other text is refused and nothing is saved. The token
    is never a command argument and never an environment variable of the tool.
 3. The tool checks the token's shape, writes `tokens/<label>.json` (mode 0600, content
    `{"env":{"<token variable>":"<token>","AGENT_BALANCER_ACCOUNT":"<label>"}}`), records
    `tokenCreatedAt`, and runs one probe under it: the section 6.2 probe with
-   `--settings <token file>` added and no `CLAUDE_CONFIG_DIR`. The tool passes the path and does
-   not read the token to probe.
+   `--settings <token file>` added and no `CLAUDE_CONFIG_DIR`. Before each probe the `Tokens`
+   module checks that the token file is private and parses, and only a yes or no leaves it; the
+   probe gets the path and never the token value. `tokenCreatedAt` is an optional ISO 8601 time on the account's
+   config entry (7.1), set by every `login`; the config schema stays at version 1.
 4. Duplicate check: if, after that probe, the new account's weekly reset time and 5-hour reset
    time both equal another account's, `login` warns `possible_duplicate` and names the other
    label. It is a warning, not an error, because two accounts first used in the same hour could
-   match. `pick` still treats them as two accounts. The check also runs on every probe of a token
-   account, so a token file swapped for another account's token shows as `possible_duplicate`.
+   match. `pick` still treats them as two accounts. The check runs in the reading cache's
+   `afterProbe` hook, so it runs on every probe of a token account, at `login` and after it, and a
+   token file swapped for another account's token shows as `possible_duplicate`. The status keeps
+   what the last check found until the account's next probe checks again; the warning writes no
+   event.
 
-Expiry: a setup-token lasts one year. The tool shows `tokenCreatedAt` plus 365 days as
-`loginExpiresAt` with `loginExpiresSource: "estimate"`, warns `login_expiring` 14 days before, and
+Expiry: a setup-token lasts one year. The tool shows `tokenCreatedAt` plus 365 days (the token
+file's last change when the account has no `tokenCreatedAt`) as `loginExpiresAt` with `loginExpiresSource: "estimate"`, warns `login_expiring` 14 days before, and
 shows `login_rejected` when a probe gets an auth error.
 
 Replacing: `login <label>` on an account that already has a token. The new token replaces the file
-in one rename, every launch file of that label is rewritten with it, and a `token_replaced` event
-is written. The replace lists the label's launch files again under the pick lock before it
-finishes, so a file that a pick wrote during the rewrite is not missed. The tool then says, every
-time, that the old token keeps working until its year ends, because no way to cancel one is
-documented.
+in one rename, every live launch file of that label is rewritten with it, and a `token_replaced`
+event is written. A tombstone (below) is never revived. A launch file that does not parse never
+keeps the old token: one a session record names becomes a tombstone, and any other is deleted. The
+replace lists the label's launch files again under the pick lock before it finishes, so a file that
+a pick wrote during the rewrite is not missed, and the writer's leftover temporary files in
+`tokens/` and that label's launch folder are deleted. A running or sleeping session keeps the token it
+started with until its process restarts. The tool then says, every time, that the old token may
+keep working until its year ends, because no way to cancel one is documented. Whether a new token
+ends the old one is not yet known; a manual check at the token-path checkpoint records the answer,
+and until then the text holds either way.
 
-Removing: `remove <label>` deletes `tokens/<label>.json` and that label's launch files, lists the
-label's launch files again under the pick lock before it finishes, and says the same about the
-token living on. `remove` on a `folder` account also deletes that label's launch files and leases;
-it never deletes the folder.
+Removing: `remove <label>` never refuses because a session still names a launch file. Under the
+pick lock it works in this order: (a) a launch file of the label that a session record names, or
+whose lease has not ended, or any launch file when the records cannot be read cleanly, is
+overwritten with a tombstone, and every other launch file of the label is deleted; (b) the label's
+leases are deleted; (c) the launch files are listed again and (a) is repeated for any file a `pick`
+wrote meanwhile; (d) every remaining file is read back, and when one still holds a token the remove
+stops and keeps the token file and the account; (e) the writer's leftover temporary files in
+`tokens/`, `tokens/<label>.json` and the stored reading are deleted; (f) the config entry is
+deleted last, still under the pick lock, and the rebuild that follows writes the `account_removed`
+event. A crash after any step leaves a state that `remove <label>` finishes on a
+rerun, also when the config entry is already gone, and `doctor` lists a token file that has no
+account. A tombstone is valid JSON, mode 0600, in the launch file's shape, with the token variable
+set to the literal `invalid` and no other secret: a session that reads it fails to sign in instead
+of falling back to the stored login. This keeps a launch file in place while any session record
+names it, live or not, and still leaves no file holding the old token; upkeep deletes a tombstone
+once no record names it and it is older than `picker.leaseMinutes`. `remove` says the same about the
+token living on. `remove` on any kind also deletes that label's launch files, leases and stored
+reading, so a label added again never inherits them. `remove` on a `folder` account never deletes
+the folder. Every overwrite and delete goes through the no-follow writer and touches only a regular
+file owned by the user named `l-<8 hex>.json` directly under `launch/<label>/` (or the token file
+directly under `tokens/`). Any other entry, a link included, is skipped, not followed, and counted in
+the output, and the writer's own leftover temporary files in `tokens/` and in that label's launch
+folder are deleted and read back; any that could not be deleted are counted in the output.
 
-Where a token may be: the token file, the launch files of that label, and nowhere else. Not in
+Leftover temporary files: the no-follow writer writes each file whole to a `.tmp-<16 hex>` name and
+renames it into place, so a process killed between the two leaves that temporary file, which can
+hold a whole token. Every writer of `tokens/` and `launch/` holds the pick lock, so under that lock
+such a file belongs to no write in progress. `remove`, a token replace and the launch file upkeep
+(on `pick` and `refresh`) delete the ones in `tokens/` and in the launch folders: only names of that
+shape that are regular files owned by the user, directly in the folder, through the no-follow
+writer. `doctor` counts the ones that are left. A `login` checks, under the pick lock and right
+before it writes the token file, that the registry still holds the label as a token account, and
+writes nothing when it does not, so a `login` that a `remove` overtook leaves no token behind.
+
+Renaming: `config set <label> label <new>` refuses on a token account, exits 1 and writes nothing,
+because its token file and launch files carry the label; remove the account and add it again under
+the new label.
+
+Where a token may be: the token file, the launch files of that label, and nowhere else, except a
+writer's temporary file that a write killed before its rename leaves in `tokens/` or
+`launch/<label>/`; the next `remove`, token replace or upkeep pass deletes it under the pick lock
+(Leftover temporary files, above). Not in
 stdout or stderr, not in `status`, `events`, `history`, `picks.log` or the log, not in an argument
 or an environment the tool builds, not in the app. The safety script enforces the source rule: the
 Claude Code token variable name and any path under `tokens/` or `launch/` appear only in the
 `Tokens` and `Launch` modules. Other modules (`Remove`, `Uninstall`, `Doctor`) reach those folders
 only through calls those two modules offer (delete, count, has-lease) and build no path into them.
-Both folders are marked as excluded from backups.
+Both folders are marked as excluded from backups: the Paths writer sets the
+`com.apple.metadata:com_apple_backup_excludeItem` attribute on the folder handle before the first
+file lands in it.
 
 ### 4A.5 Checks per kind at pick time (fail closed)
 
 | Kind | `pick` returns a recipe only when |
 |---|---|
 | `login` | `auth status` shows the default folder logged in as the configured email and plan |
-| `token` | The token file exists, is a regular file owned by the user with mode 0600, and its last probe did not end in an auth error |
+| `token` | The token file exists, is a regular file owned by the user with mode 0600, holds a token that parses, and its last probe did not end in an auth error |
 | `folder` | `verify` passes (5.7): every link in the manifest is intact and no hook entry recorded at link time is gone. A folder account must be linked, always: a never-linked folder is refused with the reason `not linked`, because a folder without the shared settings runs with no hooks. A user with nothing to share still runs `link` once; it records an empty manifest |
 
 `init` always writes the hook record of the default folder, empty when there are no hooks. A
@@ -379,11 +436,13 @@ rules of section 7.
 
   A removal touches only a regular file owned by the user, named `l-<8 hex>.json`, directly under
   `launch/<label>/`, through the no-follow writer; a link planted there is neither followed nor
-  deleted. What a respawned background session does when its launch file is gone was never
-  measured, so the worst case is assumed (it runs on the stored login with no error), which is why
-  a named file is never deleted. Whether a running or sleeping session re-reads a rewritten launch
-  file is also unmeasured: a wake did not restart the process, so a session keeps the token it
-  started with until its process restarts.
+  deleted. In both cases the pass also deletes the writer's leftover temporary files in `tokens/`
+  and in each launch folder (Leftover temporary files, 4A.4), and `refresh` runs it even when no
+  account is set up. What a respawned background session does when its launch file is gone was
+  never measured, so the worst case is assumed (it runs on the stored login with no error), which
+  is why a named file is never deleted. Whether a running or sleeping session re-reads a rewritten
+  launch file is also unmeasured: a wake did not restart the process, so a session keeps the token
+  it started with until its process restarts.
 - **Trust and messages:** `login` and `token` sessions share the default folder, so a project
   trusted once is trusted for all of them and messages between their sessions work. Only `folder`
   accounts need the per-folder trust step and the file-only reports of 5.2.
@@ -719,6 +778,9 @@ subscription's end date, because none of its sources carries one. An account tha
 marked `endingSoon: true` (`config set <label> ending-soon true`): the picker spends such an
 account first (rule 5 in 7.2), and the tool notices the end itself on the day the plan tier drops
 (section 9, `account_ended`). `config set <label> ends <date>` sets a date that is known.
+
+A token account also carries `tokenCreatedAt`, an ISO 8601 time that `login` sets each time it
+saves a token (4A.4). It is optional, so a config from before it stays valid at schema version 1.
 
 Every account also carries `expectedPlanTier` and `accountKey`. `init` records the tier
 `auth status` shows; for an added account the first refresh after its sign-in records it.
@@ -1304,8 +1366,9 @@ the events record then keeps only each label's newest line.
   state/events.jsonl               0600   a header line with the record id, then state changes, one
                                           numbered JSON line each (10.3)
   state/current.json               0600   each label's current state, error code and since times, the
-                                          last sign-in and probe errors, and what the settings file
-                                          last showed (10.1; labels, codes, times and scrubbed text only)
+                                          last sign-in and probe errors, the label the last duplicate
+                                          check matched (4A.4), and what the settings file last showed
+                                          (10.1; labels, codes, times and scrubbed text only)
   state/leases.json                0600   open leases (internal id, label, model, time), pruned
   probe/                           0700   one fresh temporary folder per probe, removed afterwards
   locks/probe-<label>.lock        0600   one probe at a time per folder
@@ -1329,10 +1392,14 @@ written under `~/.claude` or any account folder except what the user approves in
 Token and launch files are the one exception to "never remove a regular file": the tool made them,
 so `remove`, a token replace, the upkeep rule and `uninstall` delete them, and only them: a path
 directly under `tokens/` or `launch/<label>/`, opened through the same folder handles, that
-`lstat` shows as a regular file owned by the user. A token file is written whole to a random
-temporary name in `tokens/` and renamed into place, so a reader never sees half a token and a
-crash leaves either the old file or the new one. Only the `Tokens` and `Launch` modules open these
-two folders (4A.4). `status.json`, the history, the events, the pick log and the log never hold a
+`lstat` shows as a regular file owned by the user, the writer's own leftover temporary files there
+included. `remove` also deletes the label's stored reading and its empty launch folder through the
+same writer. A token file is written whole to a random temporary name in `tokens/` and renamed into
+place, so a reader never sees half a token, and after a crash the token file is the old one or the
+new one. A crash between the write and the rename can also leave the temporary file, which may hold
+a whole token; the next `remove`, token replace or upkeep pass deletes it under the pick lock, and
+`doctor` counts it until then (4A.4). Only the `Tokens` and `Launch` modules open these two folders
+(4A.4). `status.json`, the history, the events, the pick log and the log never hold a
 token or the path of a token or launch file; the pick log records the lease id.
 
 The history and events files are append-only JSON lines with one writer, the status rebuild step,
@@ -1421,8 +1488,9 @@ Threat numbers are not reused or renumbered.
   list, and one test asserts the runner resolved the fake. No automated test calls a live `claude`.
 - **Leak test:** `Tests/CLITests/LeakTests.swift` plants a canary of each shape (an OAuth-shaped
   and an API-key-shaped token, a non-example.com email, a UUID organization id, an organization
-  name, a `/Users/<name>` path) in every input a later slice adds (fake `claude` stdout and
-  stderr, an extra `auth status` field, the probe `result` error text, a `settings.json` `env`
+  name, a `/Users/<name>` path, and a second OAuth-shaped token in the shape spike S14 recorded
+  for a real one: 108 characters with dashes) in every input a later slice adds (fake `claude`
+  stdout and stderr, an extra `auth status` field, the probe `result` error text, a `settings.json` `env`
   value, the parent environment, a token file's value, fake `setup-token` output, a pasted token,
   a caller's settings JSON). It runs every command against every scenario, collects stdout,
   stderr, logs and written files, and fails on any canary outside a token file and that label's

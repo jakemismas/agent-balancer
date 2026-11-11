@@ -104,6 +104,30 @@ public struct ClaudeRunner: Sendable {
         workingDirectory: URL? = nil,
         environment: LaunchEnvironment = .probe
     ) throws -> RunOutput {
+        try execute(
+            arguments: arguments, configDir: configDir, timeout: timeout, outputCap: outputCap,
+            passProxyEnv: passProxyEnv, workingDirectory: workingDirectory,
+            environment: environment, inheritInput: false, rawOutput: nil)
+    }
+
+    /// Runs `claude setup-token` in the person's own environment with the terminal's input, and
+    /// hands the child's raw output, standard output then standard error, to `rawOutput` once,
+    /// before any scrubbing. Only the `Tokens` module calls it, so the one unscrubbed
+    /// buffer stays there. What comes back has both scrub passes applied.
+    func runSetupToken(timeout: TimeInterval, rawOutput: @escaping (Data) -> Void) throws
+        -> RunOutput
+    {
+        try execute(
+            arguments: ["setup-token"], configDir: nil, timeout: timeout, outputCap: 1_048_576,
+            passProxyEnv: false, workingDirectory: nil, environment: .person, inheritInput: true,
+            rawOutput: rawOutput)
+    }
+
+    private func execute(
+        arguments: [String], configDir: URL?, timeout: TimeInterval, outputCap: Int,
+        passProxyEnv: Bool, workingDirectory: URL?, environment: LaunchEnvironment,
+        inheritInput: Bool, rawOutput: ((Data) -> Void)?
+    ) throws -> RunOutput {
         let exe = try locate()
         let env: [String: String]
         switch environment {
@@ -125,7 +149,7 @@ public struct ClaudeRunner: Sendable {
         let inPipe = Pipe()
         proc.standardOutput = outPipe
         proc.standardError = errPipe
-        proc.standardInput = inPipe
+        if !inheritInput { proc.standardInput = inPipe }
 
         let outCapture = Capture(cap: outputCap)
         let errCapture = Capture(cap: outputCap)
@@ -154,7 +178,7 @@ public struct ClaudeRunner: Sendable {
             errPipe.fileHandleForReading.readabilityHandler = nil
             throw ToolError("Could not start claude.", code: .checkFailed)
         }
-        try? inPipe.fileHandleForWriting.close()
+        if !inheritInput { try? inPipe.fileHandleForWriting.close() }
 
         var timedOut = false
         if finished.wait(timeout: .now() + timeout) == .timedOut {
@@ -172,6 +196,7 @@ public struct ClaudeRunner: Sendable {
 
         let (outData, outOver) = outCapture.snapshot()
         let (errData, errOver) = errCapture.snapshot()
+        rawOutput?(outData + errData)
         return RunOutput(
             status: timedOut ? -1 : proc.terminationStatus,
             stdout: Scrubber.tokenPass(outData),

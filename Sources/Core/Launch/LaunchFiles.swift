@@ -60,7 +60,10 @@ public enum LaunchFiles {
             ).reveal()
         }
         let data = try caller.merged(extraEnv: extra) + Data([0x0A])
-        try NoFollowWriter(root: context.dataRoot).put(
+        let writer = NoFollowWriter(root: context.dataRoot)
+        try writer.prepare(folders: [folder])
+        try writer.markExcludedFromBackup(folders: [folder])
+        try writer.put(
             data, folders: folders(label: account.label), name: fileName(leaseId: leaseId))
         return url
     }
@@ -106,5 +109,197 @@ extension LaunchFiles {
     /// True when the named launch file exists as a directory entry. Nothing is read.
     public static func exists(context: ToolContext, ref: LaunchRef) -> Bool {
         exists(context: context, label: ref.label, leaseId: ref.leaseId)
+    }
+}
+
+extension LaunchFiles {
+    /// The names of the launch files this tool made for `label`: `l-<8 hex>.json`, a regular file
+    /// owned by the user, directly under the label's folder. Anything else there is not ours.
+    static func ownFileNames(context: ToolContext, label: String) throws -> [String] {
+        guard ConfigValidator.isValidLabel(label) else { throw ToolError("Label is not valid.") }
+        let writer = NoFollowWriter(root: context.dataRoot)
+        let dir = folders(label: label)
+        return try writer.listNames(folders: dir).filter { name in
+            guard name.hasSuffix(".json"), isValidLeaseId(String(name.dropLast(5))),
+                let info = try? writer.info(folders: dir, name: name)
+            else { return false }
+            return info.isRegularFile && info.ownedByUser
+        }
+    }
+
+    /// The value a tombstone holds in place of a token. It is not a token, so a session that reads
+    /// the file fails to sign in instead of falling back to the stored login.
+    static let tombstoneValue = "invalid"
+
+    /// The JSON object of one launch file, or nil when it cannot be read or does not parse.
+    private static func object(context: ToolContext, label: String, name: String) -> [String: Any]?
+    {
+        guard
+            let data = try? NoFollowReader(root: context.dataRoot).read(
+                folders: folders(label: label), name: name, limit: 65_536)
+        else { return nil }
+        return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+    }
+
+    static func isTombstone(_ object: [String: Any]) -> Bool {
+        (object["env"] as? [String: Any])?[ProtectedEnv.tokenVariable] as? String == tombstoneValue
+    }
+
+    private static func put(
+        _ object: [String: Any], context: ToolContext, label: String, name: String
+    ) throws {
+        let out =
+            try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+            + Data([0x0A])
+        try NoFollowWriter(root: context.dataRoot).put(
+            out, folders: folders(label: label), name: name)
+    }
+
+    /// Overwrites one launch file with a tombstone: the launch file's shape with the token variable
+    /// set to `invalid`, the account label, and nothing else.
+    private static func writeTombstone(context: ToolContext, label: String, name: String) throws {
+        let env: [String: Any] = [
+            ProtectedEnv.tokenVariable: tombstoneValue, accountVariable: label,
+        ]
+        try put(["env": env], context: context, label: label, name: name)
+    }
+
+    /// True when a session record names the file, or when the records could not be read cleanly.
+    private static func isNamed(_ name: String, label: String, snapshot: SessionsSnapshot) -> Bool {
+        !snapshot.clean
+            || snapshot.named.contains(LaunchRef(label: label, leaseId: String(name.dropLast(5))))
+    }
+
+    /// What one pass of `rewriteToken` did.
+    struct RewritePass: Equatable {
+        /// Every file the pass looked at, so a caller that lists again stops.
+        var handled = Set<String>()
+        /// Files that now carry the new token.
+        var rewritten = 0
+    }
+
+    /// Writes the token of `label`, as the token store now holds it, into every live launch file of
+    /// the label that is not in `skipping`. A tombstone is never revived. A file that does not
+    /// parse never keeps the old token: one a session record names (or any, when the records
+    /// cannot be read cleanly) becomes a tombstone, and any other is deleted. Callers hold the
+    /// pick lock.
+    static func rewriteToken(
+        context: ToolContext, label: String, skipping: Set<String>, snapshot: SessionsSnapshot
+    ) throws -> RewritePass {
+        let token = try TokenStore.read(context: context, label: label).reveal()
+        let writer = NoFollowWriter(root: context.dataRoot)
+        var pass = RewritePass()
+        for name in try ownFileNames(context: context, label: label) where !skipping.contains(name)
+        {
+            pass.handled.insert(name)
+            guard var object = object(context: context, label: label, name: name) else {
+                if isNamed(name, label: label, snapshot: snapshot) {
+                    try writeTombstone(context: context, label: label, name: name)
+                } else {
+                    try writer.removeOwnRegularFile(folders: folders(label: label), name: name)
+                }
+                continue
+            }
+            if isTombstone(object) { continue }
+            var env = object["env"] as? [String: Any] ?? [:]
+            env[ProtectedEnv.tokenVariable] = token
+            object["env"] = env
+            try put(object, context: context, label: label, name: name)
+            pass.rewritten += 1
+        }
+        return pass
+    }
+
+    /// What `removeAll` did with the launch files of one label.
+    struct RemovalCount: Equatable {
+        var deleted = 0
+        /// Files kept as tombstones: a session record names them, their lease is open, or the
+        /// records could not be read cleanly. Upkeep removes them once nothing needs them.
+        var tombstoned = 0
+        /// Entries in the label's folder that the tool did not make. They are left alone.
+        var skipped = 0
+        /// Names of the writer's temporary shape still in the label's folder after the delete.
+        var temporariesLeft = 0
+    }
+
+    /// Deletes the temporary files the no-follow writer left in the label's folder when a write
+    /// stopped before its rename; one may hold a whole launch file, token included. Callers hold
+    /// the pick lock, which every writer of launch files holds. Returns how many names of that
+    /// shape are still there.
+    @discardableResult
+    static func deleteWriterLeftovers(context: ToolContext, label: String) throws -> Int {
+        guard ConfigValidator.isValidLabel(label) else { throw ToolError("Label is not valid.") }
+        return try NoFollowWriter(root: context.dataRoot).removeLeftoverTemporaries(
+            folders: folders(label: label))
+    }
+
+    /// How many temporary files the writer left in the launch folders of every label. Names only.
+    static func writerLeftoverCount(context: ToolContext) -> Int {
+        let writer = NoFollowWriter(root: context.dataRoot)
+        guard let labels = try? writer.listNames(folders: [folder]) else { return 0 }
+        return labels.filter(ConfigValidator.isValidLabel).reduce(0) { sum, label in
+            sum + ((try? writer.leftoverTemporaries(folders: folders(label: label)).count) ?? 0)
+        }
+    }
+
+    /// Clears every launch file of `label` (docs/ARCHITECTURE.md section 4A.4, Removing). A file
+    /// that a session record names, or whose lease in `leased` is open, or any file when the
+    /// records cannot be read cleanly, becomes a tombstone and is kept; every other file is
+    /// deleted. The folder is listed again after each pass, so a file written meanwhile is handled
+    /// too. The writer's leftover temporary files go, entries the tool did not make are counted
+    /// and left alone, and the label's folder goes when nothing else is in it. Callers hold the
+    /// pick lock.
+    static func removeAll(
+        context: ToolContext, label: String, snapshot: SessionsSnapshot, leased: Set<String>
+    ) throws -> RemovalCount {
+        let writer = NoFollowWriter(root: context.dataRoot)
+        var count = RemovalCount()
+        var handled = Set<String>()
+        for _ in 0..<5 {
+            let names = try ownFileNames(context: context, label: label).filter {
+                !handled.contains($0)
+            }
+            if names.isEmpty { break }
+            for name in names {
+                handled.insert(name)
+                if isNamed(name, label: label, snapshot: snapshot)
+                    || leased.contains(String(name.dropLast(5)))
+                {
+                    try writeTombstone(context: context, label: label, name: name)
+                    count.tombstoned += 1
+                } else if try writer.removeOwnRegularFile(
+                    folders: folders(label: label), name: name)
+                {
+                    count.deleted += 1
+                }
+            }
+        }
+        let dir = folders(label: label)
+        count.temporariesLeft = try deleteWriterLeftovers(context: context, label: label)
+        let own = Set(try ownFileNames(context: context, label: label))
+        count.skipped = try writer.listNames(folders: dir).filter {
+            !own.contains($0) && !NoFollowWriter.isTemporaryName($0)
+        }.count
+        try writer.removeEmptyFolder(parent: [folder], name: label)
+        return count
+    }
+
+    /// How many launch files of `label` may still carry a token: every one that is not a
+    /// tombstone, a file that cannot be read included. Nothing but the count leaves this call.
+    static func filesHoldingAToken(context: ToolContext, label: String) throws -> Int {
+        try ownFileNames(context: context, label: label).filter { name in
+            guard let object = object(context: context, label: label, name: name) else {
+                return true
+            }
+            return !isTombstone(object)
+        }.count
+    }
+
+    /// Whether the label's launch folder still holds a launch file that may carry a token, or a
+    /// temporary file the writer left behind.
+    static func hasLeftovers(context: ToolContext, label: String) throws -> Bool {
+        if try filesHoldingAToken(context: context, label: label) > 0 { return true }
+        let writer = NoFollowWriter(root: context.dataRoot)
+        return !(try writer.leftoverTemporaries(folders: folders(label: label)).isEmpty)
     }
 }

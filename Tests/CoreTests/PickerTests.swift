@@ -309,3 +309,76 @@ extension Account {
         return copy
     }
 }
+
+/// The end rules rank a token account exactly as they rank a login account.
+extension PickerTests {
+    static func localDay(_ date: Date) -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM-dd"
+        return f.string(from: date)
+    }
+
+    enum EndRule: CaseIterable {
+        case none, endingSoon, endsToday
+
+        func apply(_ account: inout Account) {
+            switch self {
+            case .none: break
+            case .endingSoon: account.endingSoon = true
+            case .endsToday: account.endsAt = PickerTests.localDay(PickerTests.now)
+            }
+        }
+    }
+
+    /// The position (0 or 1) pick chooses for two accounts with the same reading.
+    func winner(_ first: Account, _ second: Account) -> (Int?, String) {
+        let d = decide([
+            PickInput(account: first, reading: reading(week: 10, resetDays: 6)),
+            PickInput(account: second, reading: reading(week: 10, resetDays: 6)),
+        ])
+        return (d.chosen, d.reason)
+    }
+
+    @Test func theEndRulesRankATokenAccountAsTheyRankALoginAccount() {
+        for firstRule in EndRule.allCases {
+            for secondRule in EndRule.allCases {
+                var answers: [Int?] = []
+                for (firstKind, secondKind) in [(Kind.login, Kind.token), (Kind.token, Kind.login)]
+                {
+                    var first = Account(label: "first", kind: firstKind, role: Role.pool)
+                    var second = Account(label: "second", kind: secondKind, role: Role.pool)
+                    firstRule.apply(&first)
+                    secondRule.apply(&second)
+                    let (chosen, reason) = winner(first, second)
+                    answers.append(chosen)
+                    let marked = chosen == 0 ? firstRule : secondRule
+                    #expect(reason.contains(marked == .none ? "weekly reset" : "ends"))
+                }
+                #expect(answers[0] == answers[1], "\(firstRule) then \(secondRule)")
+            }
+        }
+        // The rules themselves: a mark moves the second account ahead, and a known end today
+        // beats the ending-soon assumption of two days.
+        for kinds in [(Kind.login, Kind.token), (Kind.token, Kind.login)] {
+            let plain = Account(label: "plain", kind: kinds.0, role: Role.pool)
+            var soon = Account(label: "soon", kind: kinds.1, role: Role.pool)
+            EndRule.endingSoon.apply(&soon)
+            #expect(winner(plain, soon).0 == 1)
+            var today = Account(label: "today", kind: kinds.0, role: Role.pool)
+            EndRule.endsToday.apply(&today)
+            #expect(winner(soon, today).0 == 1)
+            #expect(winner(today, soon).0 == 0)
+            #expect(winner(plain, Account(label: "x", kind: kinds.1, role: Role.pool)).0 == 0)
+        }
+    }
+
+    @Test func anEndedAccountIsSkippedWhateverItsKind() {
+        for kind in [Kind.login, Kind.token] {
+            let ended = Account(label: "gone", kind: kind, role: Role.pool, endsAt: "2000-01-01")
+            let d = decide([PickInput(account: ended, reading: reading(week: 10))])
+            #expect(d.chosen == nil)
+            #expect(reason(d, "gone") == "Account ended.")
+        }
+    }
+}

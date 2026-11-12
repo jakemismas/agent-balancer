@@ -313,6 +313,18 @@ import Testing
                 rule: "process", path: "Package.swift",
                 body: "import PackageDescription\nlet p = Pro" + "cess()\n"),
             Plant(rule: "xctest", path: "Tests/CoreTests/T.swift", body: "import XC" + "Test\n"),
+            Plant(
+                rule: "settingsread", path: "Sources/Core/Picker/RunService.swift",
+                body: "let f = try hooks.read" + "Settings()\n"),
+            Plant(
+                rule: "settingsread", path: "Sources/agent-balancer/Commands/Run.swift",
+                body: "let f = settings" + "State()\n"),
+            Plant(
+                rule: "settingsread", path: "Sources/Core/A/A.swift",
+                body: "let n = \"settings" + ".json\"\n"),
+            Plant(
+                rule: "settingsread", path: "Sources/Core/Picker/RunService.swift",
+                body: "let u = context.default" + "ClaudeFolder\n"),
         ]
     }
 
@@ -371,6 +383,14 @@ import Testing
                 "let n = \"CLAUDE_CODE" + "_OAUTH_TOKEN\"\nlet t = \"tok" + "ens/\"\n"
             ),
             ("Sources/Core/Launch/L.swift", "let n = \"lau" + "nch/\"\n"),
+            (
+                "Sources/Core/Links/HookRecord.swift",
+                "let f = try hooks.read" + "Settings()\nlet n = \"settings" + ".json\"\n"
+            ),
+            (
+                "Sources/agent-balancer/Commands/Doctor.swift",
+                "let f = try hooks.read" + "Settings()\n"
+            ),
             (
                 "Sources/AgentBalancerBar/UsagePage.swift",
                 "let u = \"ht" + "tps://claude.ai/settings/usage\"\n"

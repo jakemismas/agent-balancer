@@ -123,6 +123,27 @@ public struct ClaudeRunner: Sendable {
             rawOutput: rawOutput)
     }
 
+    /// Starts `claude` for a person with the terminal attached: standard input, output and error
+    /// are the caller's own, the environment is the person's minus the protected group, and the
+    /// arguments are passed as an array. Returns the child's exit status, or 128 plus the signal
+    /// number when a signal ended it.
+    public func launchAttached(arguments: [String]) throws -> Int32 {
+        let exe = try locate()
+        let proc = Process()
+        proc.executableURL = exe
+        proc.arguments = arguments
+        proc.environment = ChildEnvironment.person(context: context, configDir: nil)
+        // Left unset, the three standard streams are the caller's own.
+        do {
+            try proc.run()
+        } catch {
+            throw ToolError("Could not start claude.", code: .checkFailed)
+        }
+        proc.waitUntilExit()
+        if proc.terminationReason == .uncaughtSignal { return 128 + proc.terminationStatus }
+        return proc.terminationStatus
+    }
+
     private func execute(
         arguments: [String], configDir: URL?, timeout: TimeInterval, outputCap: Int,
         passProxyEnv: Bool, workingDirectory: URL?, environment: LaunchEnvironment,

@@ -207,4 +207,80 @@ public enum TokenAccounts {
             return label
         }
     }
+
+    /// What `uninstall` lists before it asks: counts only, no name and no path.
+    public struct Inventory: Equatable, Sendable {
+        public var tokenFiles: Int
+        public var launchFiles: Int
+        /// Launch files a session record still names.
+        public var launchFilesNamed: Int
+        /// False when the session records could not be read cleanly, so every launch file is kept
+        /// as a tombstone.
+        public var recordsReadable: Bool
+        /// Age in seconds of the oldest launch file, or nil with none.
+        public var oldestLaunchAge: TimeInterval?
+        public var openLeases: Int
+    }
+
+    public static func inventory(
+        context: ToolContext, leaseMinutes: Int = PickerSettings().leaseMinutes,
+        snapshot: SessionsSnapshot? = nil, now: Date = Date()
+    ) -> Inventory {
+        let records = snapshot ?? SessionsReader.read(context: context)
+        let launch = LaunchFiles.inventory(context: context, snapshot: records, now: now)
+        return Inventory(
+            tokenFiles: TokenStore.fileCount(context: context), launchFiles: launch.files,
+            launchFilesNamed: launch.named, recordsReadable: records.clean,
+            oldestLaunchAge: launch.oldestAge,
+            openLeases: openLeaseCount(context: context, leaseMinutes: leaseMinutes, now: now))
+    }
+
+    /// How many leases are open: a pick younger than `leaseMinutes`.
+    public static func openLeaseCount(
+        context: ToolContext, leaseMinutes: Int, now: Date = Date()
+    ) -> Int {
+        ((try? LeaseStore(context: context).current(now: now, leaseMinutes: leaseMinutes)) ?? [])
+            .count
+    }
+
+    /// What `removeEverything` did.
+    public struct Wiped: Equatable, Sendable {
+        public let tokenFiles: Int
+        public let launchFiles: Int
+        /// Launch files kept as tombstones: a session record names them, their lease is open, they
+        /// are younger than `leaseMinutes`, or the records could not be read cleanly. They hold
+        /// no token.
+        public let launchFilesKept: Int
+        /// Entries among the token and launch files that the tool did not make, left alone.
+        public let entriesSkipped: Int
+        public let temporariesLeft: Int
+    }
+
+    /// `uninstall`'s step for the token and launch folders, under the pick lock: every launch file
+    /// of every label is deleted, or overwritten with a token-free tombstone and kept when a
+    /// session record names it, an open lease holds it, it is younger than `leaseMinutes`, or the
+    /// records cannot be read cleanly; then a read-back that no launch file holds a token; then
+    /// every token file. A crash at any step leaves a state that a rerun finishes.
+    public static func removeEverything(
+        context: ToolContext, leaseMinutes: Int = PickerSettings().leaseMinutes,
+        snapshot: SessionsSnapshot? = nil, now: Date = Date()
+    ) throws -> Wiped {
+        let lock = try takeLock(context)
+        defer { lock.release() }
+        let span = Double(max(1, leaseMinutes)) * 60
+        let open = try LeaseStore(context: context).current(now: now, leaseMinutes: leaseMinutes)
+        let launch = try LaunchFiles.removeEverything(
+            context: context, snapshot: snapshot ?? SessionsReader.read(context: context),
+            leased: Set(open.map(\.id)), keepModifiedAfter: now.addingTimeInterval(-span))
+        guard try LaunchFiles.tokenHolderCount(context: context) == 0 else {
+            throw ToolError(
+                "A launch file could not be cleared, so the token files were kept. Run `agent-balancer uninstall` again."
+            )
+        }
+        let tokens = try TokenStore.deleteAll(context: context)
+        return Wiped(
+            tokenFiles: tokens.deleted, launchFiles: launch.deleted,
+            launchFilesKept: launch.tombstoned, entriesSkipped: tokens.skipped + launch.skipped,
+            temporariesLeft: launch.temporariesLeft)
+    }
 }

@@ -250,11 +250,13 @@ extension LaunchFiles {
     /// and left alone, and the label's folder goes when nothing else is in it. Callers hold the
     /// pick lock.
     static func removeAll(
-        context: ToolContext, label: String, snapshot: SessionsSnapshot, leased: Set<String>
+        context: ToolContext, label: String, snapshot: SessionsSnapshot, leased: Set<String>,
+        keepModifiedAfter: Date? = nil
     ) throws -> RemovalCount {
         let writer = NoFollowWriter(root: context.dataRoot)
         var count = RemovalCount()
         var handled = Set<String>()
+        let dir = folders(label: label)
         for _ in 0..<5 {
             let names = try ownFileNames(context: context, label: label).filter {
                 !handled.contains($0)
@@ -262,8 +264,13 @@ extension LaunchFiles {
             if names.isEmpty { break }
             for name in names {
                 handled.insert(name)
+                let young =
+                    keepModifiedAfter.map { limit in
+                        ((try? writer.info(folders: dir, name: name))?.modified ?? .distantFuture)
+                            > limit
+                    } ?? false
                 if isNamed(name, label: label, snapshot: snapshot)
-                    || leased.contains(String(name.dropLast(5)))
+                    || leased.contains(String(name.dropLast(5))) || young
                 {
                     try writeTombstone(context: context, label: label, name: name)
                     count.tombstoned += 1
@@ -274,7 +281,6 @@ extension LaunchFiles {
                 }
             }
         }
-        let dir = folders(label: label)
         count.temporariesLeft = try deleteWriterLeftovers(context: context, label: label)
         let own = Set(try ownFileNames(context: context, label: label))
         count.skipped = try writer.listNames(folders: dir).filter {
@@ -301,5 +307,85 @@ extension LaunchFiles {
         if try filesHoldingAToken(context: context, label: label) > 0 { return true }
         let writer = NoFollowWriter(root: context.dataRoot)
         return !(try writer.leftoverTemporaries(folders: folders(label: label)).isEmpty)
+    }
+}
+
+/// Whole-tree calls for `doctor` and `uninstall`. They return counts and ages only, never a name,
+/// a path or any content of a launch file.
+extension LaunchFiles {
+    /// What the launch folders hold right now.
+    public struct Inventory: Equatable, Sendable {
+        /// Launch files the tool made, across every label.
+        public var files = 0
+        /// Of those, the files a session record still names. Zero when the records cannot be read.
+        public var named = 0
+        /// Age in seconds of the oldest launch file, or nil with no file.
+        public var oldestAge: TimeInterval?
+    }
+
+    /// The labels that have a launch folder.
+    static func labels(context: ToolContext) -> [String] {
+        let writer = NoFollowWriter(root: context.dataRoot)
+        return ((try? writer.listNames(folders: [folder])) ?? []).filter(
+            ConfigValidator.isValidLabel)
+    }
+
+    public static func inventory(
+        context: ToolContext, snapshot: SessionsSnapshot, now: Date
+    ) -> Inventory {
+        let writer = NoFollowWriter(root: context.dataRoot)
+        var result = Inventory()
+        for label in labels(context: context) {
+            for name in (try? ownFileNames(context: context, label: label)) ?? [] {
+                result.files += 1
+                if snapshot.named.contains(
+                    LaunchRef(label: label, leaseId: String(name.dropLast(5))))
+                {
+                    result.named += 1
+                }
+                if let info = try? writer.info(folders: folders(label: label), name: name) {
+                    let age = max(0, now.timeIntervalSince(info.modified))
+                    result.oldestAge = max(result.oldestAge ?? 0, age)
+                }
+            }
+        }
+        return result
+    }
+
+    /// What `removeEverything` did, summed over every label.
+    struct WipeCount: Equatable {
+        var deleted = 0
+        var tombstoned = 0
+        var skipped = 0
+        var temporariesLeft = 0
+    }
+
+    /// Clears the launch files of every label as `removeAll` does for one: a file a session record
+    /// names, an open lease holds, that is modified after `keepModifiedAfter`, or any file when
+    /// the records cannot be read cleanly, becomes a tombstone and stays with its folders; every
+    /// other file goes. The launch folder goes when it is empty. Callers hold the pick lock.
+    static func removeEverything(
+        context: ToolContext, snapshot: SessionsSnapshot, leased: Set<String>,
+        keepModifiedAfter: Date
+    ) throws -> WipeCount {
+        var total = WipeCount()
+        for label in labels(context: context) {
+            let one = try removeAll(
+                context: context, label: label, snapshot: snapshot, leased: leased,
+                keepModifiedAfter: keepModifiedAfter)
+            total.deleted += one.deleted
+            total.tombstoned += one.tombstoned
+            total.skipped += one.skipped
+            total.temporariesLeft += one.temporariesLeft
+        }
+        try NoFollowWriter(root: context.dataRoot).removeEmptyFolder(parent: [], name: folder)
+        return total
+    }
+
+    /// How many launch files across every label may still carry a token.
+    static func tokenHolderCount(context: ToolContext) throws -> Int {
+        try labels(context: context).reduce(0) {
+            $0 + (try filesHoldingAToken(context: context, label: $1))
+        }
     }
 }

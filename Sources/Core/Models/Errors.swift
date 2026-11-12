@@ -59,6 +59,9 @@ public enum Messages {
         "Hook record missing. Run `agent-balancer link --accept-source-change` in Terminal."
     public static let settingsChanged =
         "Settings changed. Run `agent-balancer link --accept-source-change` in Terminal."
+    /// `run` found no verdict that matches the settings file as it is now.
+    public static let settingsNotChecked =
+        "Settings changed since the last check. Run `agent-balancer doctor` in Terminal."
     public static let keyInSettings =
         "Settings carry an API key or key helper. Token accounts are skipped."
     public static let notSetUp = "Setup has not run. Run `agent-balancer init`."

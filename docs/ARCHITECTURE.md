@@ -64,7 +64,8 @@ These rules hold in every slice. Breaking one is a critical defect.
 13. No personal email address appears in the repository. Tests, fixtures, docs and mocks use
     `example.com`.
 
-`scripts/check-safety.sh` scans `Sources/` for rules 1, 2, 4, 7, 9 and 10 as text, and scans
+`scripts/check-safety.sh` scans `Sources/` for rules 1, 2, 4, 7, 9 and 10 as text, checks that only
+the readers rule 3 names open the settings file, and scans
 `Sources/`, `Tests/`, `docs/` and `skill/` for emails and organization ids. Rules 3, 5, 6, 8, 11
 and 12 are behavior, and tests cover them.
 
@@ -79,22 +80,30 @@ agent-balancer/
     Core/                    library, no UI
       Models/      Account, Window, Reading, AccountStatus, StatusFile, PickResult, Config
       Config/      load, validate, migrate (schemaVersion), defaults
-      Paths/       data folder, account folders, 0700 and 0600 enforcement, no-follow writer (NoFollowWriter.swift, the only file the safety scan lets write or delete)
+      Paths/       data folder, account folders, 0700 and 0600 enforcement, no-follow writer (NoFollowWriter.swift, the only file the safety scan lets write or delete), `FileStamp` (a stat of a path: device, inode, size, modification and change time, never an open)
       Runner/      Process with an argument array (never a shell), timeout, output size cap,
                    scrubber on every captured byte. `ClaudeRunner.runSetupToken` runs
                    `claude setup-token` with the person's environment and hands the raw output
-                   once to a callback of the `Tokens` module before it scrubs the remainder
+                   once to a callback of the `Tokens` module before it scrubs the remainder.
+                   `ClaudeRunner.launchAttached` starts `claude` for `run` with the terminal's own
+                   input and output and the person's environment minus the protected group (6.2)
       Readers/     auth status reader, probe reader (stream-json parser), sessions reader
                    (`SessionsReader`: the default folder's `sessions/` and `jobs/` records, section 8)
       Readings/    reading cache (state/readings/<label>.json), the merge rule of 6.3, and the
                    refresher that runs probes under a lock per account
       Env/         the one shared group of protected environment names (6.2)
-      Picker/      pure function: (config, readings, now, model) -> PickResult
+      Picker/      pure function: (config, readings, now, model) -> PickResult; `RunService.swift`
+                   adds `PickService.prepareRun`, the checks, lease and launch file of `run`
       Accounts/    AccountKind (login, token, folder): each kind's checks, probe context and
                    recipe parts; the only place that branches on kind
       Launch/      launch files: caller settings allowlist, merge, lease, upkeep (`Upkeep`, 4A.6)
       Status/      `StatusBuilder`: merges readings, sign-in checks and in-use sessions into the
                    status document and rebuilds `state/status.json` (sections 10.1 and 13)
+      Doctor/      `DoctorChecks`: the launch file count and oldest age, and the synced-folder test,
+                   both used by the `doctor` command (the other checks stay in the command)
+      Uninstall/   `Uninstall`: the plan `uninstall` lists and the removal after the typed word,
+                   built on `TokenAccounts.removeEverything` and the listed-link removal of
+                   `HookRecord`
       Tokens/      the token file: `TokenStore` (read, save, delete), `TokenCapture` (the capture and
                    the shape check), `TokenAccounts` (install, replace and remove under the pick
                    lock, with the launch files rewritten or deleted through `Launch`)
@@ -104,7 +113,7 @@ agent-balancer/
       Scrub/       token-like string redaction used by Runner and the logger
     agent-balancer/          CLI (swift-argument-parser)
       Commands/    one file per command: Init, Doctor, Config, Link, Refresh, Pick, Status, Events,
-                   History, Add, Login, Remove, and the `Shared` helper that ends a writing command with the status
+                   History, Add, Login, Remove, Run, Uninstall, and the `Shared` helper that ends a writing command with the status
                    rebuild
     AgentBalancerBar/        SwiftUI MenuBarExtra app (window style, LSUIElement)
   skill/agent-balancer/SKILL.md   the skill file for a user's Claude (4A.7)
@@ -227,6 +236,17 @@ Two ways to apply a recipe:
   environment is the launcher's own, minus every name in `unsetEnv`, plus `env`. The argument
   array is `claude`, the launcher's own flags, then `args`. `launchPrefix` and `launchArgs` are
   null for a launcher, so no typed line can be built from a launcher pick.
+
+`run` is a launcher of its own kind: its argument array is `--settings <launch file>`, then the
+person's arguments, and its printed line is `claude`, `launchArgs`, then the person's arguments
+quoted. The settings pair comes first so nothing the person typed can take it or turn it into
+prompt text, and a value-taking option or a second double dash after it cannot reach it. `run`
+refuses, before it writes anything, a `--settings` in the person's arguments (`--settings` or
+`--settings=...`, because a recipe carries exactly one) and a first argument that is a `claude`
+command name such as `auth` or `mcp` (it would act on the default login, not start a session).
+`run --print-command` is a typing caller: it applies the ambient rule (4A.3) and the rule for an
+inherited token or key through the same predicate as a typed `pick`, and refuses for that label,
+writing nothing, when either applies.
 
 `pick` never launches and never prints a token. In schema version 1 a recipe is returned only for
 an account that passed its kind's checks at pick time (4A.5).
@@ -397,6 +417,22 @@ accounts too, with `settings_changed` and the text "Hook record missing. Run
 command hash other than 64 lowercase hex digits counts as unreadable, so no other value of it is
 ever printed.
 
+`run` runs the `login` and `token` checks above without the reading check, and it never opens the
+default folder's `settings.json`. It takes the settings checks from the verdict a reader saved
+(`state/settings-seen.json`): the hook entries, `disableAllHooks`, whether the settings carry a key,
+and the stamp of the file (device, inode, size, modification time and change time, for the path and
+for what it resolves to). `init`, `doctor`, `pick`, `verify` and `link --accept-source-change`
+save it, only when the stamp is the same before and after their read. `run` stats the file, never
+opens it, and compares the stamp and the live hook record. It refuses with `settings_changed` and
+the text "Settings changed since the last check. Run `agent-balancer doctor` in Terminal." when the
+verdict is missing, unreadable, malformed or older than the file's stamp, when the stamp cannot be
+taken, or when the settings path is a folder, a special file or a link that goes nowhere. A hook
+record that is missing or changed gives the texts above. A token account is refused with
+`key_in_settings` when the verdict says the settings carry a key. A change time cannot be put back
+by an ordinary call, so a same-size edit with the modification time restored still refuses. Every
+settings edit therefore makes `run` refuse until a reader records it again. This verdict is not the
+`verify` cache of 5.7.
+
 `pick --full-login` offers only `login` and `folder` accounts, for a session that needs
 connectors, Remote Control or the claude.ai skills. Without it every kind competes on the picker
 rules of section 7.
@@ -450,11 +486,19 @@ rules of section 7.
 ### 4A.7 What ships for other people's Claude
 
 1. **A skill file**, `skill/agent-balancer/SKILL.md`, in the repo and in the Homebrew share
-   folder. It tells a user's Claude when to call `status` and `pick` and how to apply a recipe. The
-   README gives the one line that links it into the user's skills folder. The tool itself never
-   writes inside `~/.claude`.
+   folder. It has front matter with a name and a one-sentence description. It tells a user's
+   Claude to read with `status --json --cached`, to run `pick --json` before every launch, to apply
+   `env` and `args` (or the typed strings) the same way for every account, to give its own
+   settings to `pick --settings` and never to `claude`, never to branch on `kind`, never to open a
+   launch file, and to use `--full-login` when a session needs connectors. A test greps for each
+   of those commands and rules, and the banned-string check covers the file. The README gives the
+   one line that links it into the user's skills folder (slice 11). The tool itself never writes
+   inside `~/.claude`.
 2. **Versioned JSON output.** `schemaVersion` fields, the golden-output tests and
-   `docs/CONTRACT.md`.
+   `docs/CONTRACT.md`, the public copy of section 16: both kinds of caller, the exit codes,
+   `--exclude`, `--full-login`, the fields stable in schema version 1, `events` and `history`, and
+   the rule that information is not authority. It says `configDir` is not a contract field and
+   names no orchestrator, guard or client.
 3. **A deny-rule snippet** in the README Limits section: permission deny rules for
    `~/.agent-balancer/tokens/` and `~/.agent-balancer/launch/`, for the user to paste into their
    own Claude Code settings. The tool never writes it. It narrows threat T26 and is advisory
@@ -490,7 +534,8 @@ by the user.
 Consent commands (`link`, `unlink`, `link --repair`, `link --accept-source-change`,
 `schedule install`, `uninstall`, `config set-main`, `config set`, `remove`) refuse to run in a chat
 shell, so a chat cannot type the label through a pseudo terminal. `run` and `login` never start
-`claude` in a chat shell either. The Manage accounts window (section 11) runs `add`, `remove`,
+`claude` in a chat shell either. `run` there prints the command to type in your own terminal,
+`agent-balancer run <label> -- <arguments>`, and writes nothing. The Manage accounts window (section 11) runs `add`, `remove`,
 `config set <label> ends|ending-soon` and `login` for a person who clicks, and it turns itself off
 when the app's own environment carries the chat-shell variable.
 
@@ -572,7 +617,8 @@ never on disk) and before `run`. Each check is a refusal that removes the accoun
 5. for `pick` only, a reading is fresh enough.
 
 `run` and `login` use `verify --no-reading` (checks 1 to 4), so a new account can be started
-before its first reading. Missing, stale or unreadable counts as failed. `link --repair` re-links
+before its first reading. For the default folder, `run` takes check 3 from the saved verdict of
+4A.5 and does not read `settings.json`; that verdict is a file, and is not the cache above. Missing, stale or unreadable counts as failed. `link --repair` re-links
 only after the same typed approval. A changed hook set is re-accepted only with
 `link --accept-source-change`, which prints the hook entries added and removed (event, matcher and
 command hash, never the command text, which can hold secrets) and whether `disableAllHooks` is
@@ -940,7 +986,7 @@ short scrubbed text the menu shows as is.
 | `login_rejected` | `auth status` says logged out, or the probe returns an auth error | error | "Login rejected. Run `agent-balancer login pool-b` in Terminal." |
 | `wrong_account` | `auth status` email differs from config | error | "Folder is logged in as another account." |
 | `duplicate_login` | two configured accounts report one email | error | "Logged in as the same account as pool-a. Log one folder into its own account." |
-| `settings_changed` | a hook entry recorded at link time is gone or changed (5.7); or, after `init`, the hook record is missing or unreadable (4A.5) | error on every affected account, shown as one banner | "Settings changed. Run `agent-balancer link --accept-source-change` in Terminal." |
+| `settings_changed` | a hook entry recorded at link time is gone or changed (5.7); or, after `init`, the hook record is missing or unreadable (4A.5); or, for `run`, the saved verdict is missing or older than the file | error on every affected account, shown as one banner | "Settings changed. Run `agent-balancer link --accept-source-change` in Terminal." For `run`, with no verdict that matches the file's stamp: "Settings changed since the last check. Run `agent-balancer doctor` in Terminal." |
 | `plan_changed` | `planTier` differs from `expectedPlanTier` | error | "Plan is max_5x, expected max_20x." |
 | `account_ended` | `endsAt` passed; or, for an account marked `endingSoon`, the first reading where `planTier` differs from `expectedPlanTier` or is missing. Once ended that way it stays ended until `config set <label> ending-soon false` | ended | "Account ended." |
 | `check_failed` | probe timeout, no `rate_limit_event`, unparsable output, `claude` missing | error | "Check failed: probe timed out after 60 s." |
@@ -1336,13 +1382,55 @@ the events record then keeps only each label's newest line.
   until it is signed.
 - **Update:** `brew upgrade` for the CLI; the app is replaced from the new zip. Config carries
   `schemaVersion`; the CLI migrates forward and keeps a dated backup.
+- **Run:** `agent-balancer run <label> [--print-command] [-- <claude arguments>]` starts Claude Code
+  on the named account, for a person. It runs the kind's checks of 4A.5 without the reading check
+  (a new account starts before its first reading), refuses when they fail even for an explicit
+  label (`token_missing` for a missing or widened token file, `login_rejected` for a logged-out
+  login), takes a lease and writes one launch file under the pick lock as `pick` does, and starts
+  `claude` with the terminal attached and the environment of 6.2 for a person: the user's own minus
+  the protected group. The settings checks come from the verdict a reader saved, and `run` refuses
+  when it is missing or older than the file (4A.5); it opens no settings file. The argument array is
+  `--settings <launch file>`, then the person's arguments (4A.2), which refuses a `--settings` of
+  their own and a first argument that is a `claude` command name. It writes one `state/picks.log`
+  line, and drops the launch file and lease when `claude` cannot be started. The exit status of
+  `claude` is the exit status of `run`. `--print-command` is a typing caller (4A.2): it applies the
+  ambient rule and the inherited token or key rule, prints the literal line (`claude`, `launchArgs`,
+  then the person's arguments quoted) and starts nothing; the line names the launch file and never
+  holds a token. In a chat shell `run`, with or without `--print-command`, prints the line to type in
+  your own terminal, `agent-balancer run <label> -- <arguments>` (arguments display-safe and shell
+  quoted), on standard output and the refusal on standard error, writes nothing (no launch file, no
+  lease, no token read), never starts `claude` and exits 1 (5.1). `run` never picks an account, and
+  an orchestrator never uses it.
 - **Uninstall, in this order:** `agent-balancer uninstall`, then delete the app from Applications,
-  then `brew uninstall agent-balancer`. `agent-balancer uninstall` shows what the tool created
-  (links, `links.json`, state, logs, the LaunchAgent if installed, with its `launchctl bootout`
-  line), then removes its own files only after the typed word `uninstall` in the user's own
-  terminal (refused in a chat shell, 5.1). Account folders and their logins belong to the user and
-  are never deleted. Only `agent-balancer uninstall` deletes every token and launch file, after
-  the typed word.
+  then `brew uninstall agent-balancer`. `agent-balancer uninstall` lists what the tool created
+  as counts, never names or paths: the links and `links.json`, the token files, the launch files
+  and how many of them a session record still names, state (`state/events.jsonl` and
+  `state/history/` included), logs, backups and the config (and the LaunchAgent with its
+  `launchctl bootout` line once one exists). It then removes its own files only after the typed
+  word `uninstall` in the user's own terminal (refused in a chat shell, 5.1). Account folders and
+  their logins belong to the user and are never deleted, and `uninstall` says the tokens
+  themselves may keep working until their year ends, because no way to cancel one is documented.
+  The steps:
+  1. Each link listed in `links.json` goes only while `lstat` shows a symlink directly inside
+     `accounts/<label>/.claude/` with the recorded target. A path that is now a regular file, a
+     folder or a link to somewhere else stays.
+  2. Under the pick lock, every launch file of every label is deleted, except a file that a
+     session record still names, that an open lease holds, or that is younger than
+     `picker.leaseMinutes`, and except every file when the session records cannot be read
+     cleanly. Each such file is overwritten with a token-free tombstone and kept, with its
+     folders, exactly as `remove` keeps one (4A.4). A read-back then proves that no launch file
+     holds a token before any token file goes.
+  3. Every token file goes, and the writer's leftover temporary files with them.
+  4. State, logs, backups, locks, `links.json` and `config.json` go. Entries the tool did not
+     make stay, and are counted.
+
+  Why a named file is kept as a tombstone and not deleted (#25): a session record that names a
+  launch file may belong to a session that still reads the file, so the record keeps naming a path
+  that must stay in place, as for `remove` (4A.4). A tombstone holds the token variable set to
+  `invalid` and the account label, so a session that reads it fails to sign in instead of falling
+  back to the stored login of the default folder, which is another account. After `uninstall` no
+  launch file holds a token, whether or not a session record names it. Only `agent-balancer
+  uninstall` and `remove` delete token files in bulk, after the typed word.
 
 ## 13. Data folder layout and permissions
 
@@ -1357,7 +1445,8 @@ the events record then keeps only each label's newest line.
                                           upkeep rule in 4A.6
   accounts/<label>/.claude/        0700   folder accounts only (section 5.1); the tool writes only
                                           the links listed in links.json
-  links.json                       0600   link manifest: link, target, hook fingerprint at link time
+  links.json                       0600   link manifest: `links` (each a `path` and the `target` it
+                                          points to) and the hook fingerprint at link time
   state/status.json                0600   last merged status (what the menu reads)
   state/readings/<label>.json      0600   last reading per account, with source and time
   state/picks.log                  0600   one line per pick: time, model, label or none, lease id
@@ -1369,6 +1458,9 @@ the events record then keeps only each label's newest line.
                                           last sign-in and probe errors, the label the last duplicate
                                           check matched (4A.4), and what the settings file last showed
                                           (10.1; labels, codes, times and scrubbed text only)
+  state/settings-seen.json         0600   the verdict a reader saved for `run`: hook entries,
+                                          `disableAllHooks`, a key flag and the settings file's
+                                          stamp (4A.5); no env name and no value
   state/leases.json                0600   open leases (internal id, label, model, time), pruned
   probe/                           0700   one fresh temporary folder per probe, removed afterwards
   locks/probe-<label>.lock        0600   one probe at a time per folder
@@ -1604,6 +1696,11 @@ public copy.
     and it can report to a session in another folder only through a file (5.2).
 12. **Separate callers** are serialized only by the pick lock and the lease: launch within
     `leaseMinutes` or pick again.
+
+13. **Commands for people, not callers:** `run`, `uninstall`, `remove`, `login` and `link` are for a
+    person in their own terminal. `docs/CONTRACT.md` says so, and the skill file tells a user's
+    Claude never to run them. In a chat shell `run` prints the command to type in a terminal and
+    writes nothing.
 
 Notes for the caller's side: the caller's own policy must allow `--settings <launch file>` in a
 typed line; its launch check must ask the supervisor the recipe points at, not the default one;

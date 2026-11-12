@@ -50,4 +50,29 @@ extension TokenStore {
             folders: TokenPaths.folders
         ).count) ?? 0
     }
+
+    /// Deletes every token file this tool made (a regular file owned by the user, directly under
+    /// the token folder) and the writer's leftover temporary files, then the folder when it is
+    /// empty. Entries the tool did not make are counted and left alone. Callers hold the pick lock.
+    static func deleteAll(context: ToolContext) throws -> (deleted: Int, skipped: Int) {
+        let writer = NoFollowWriter(root: context.dataRoot)
+        try deleteWriterLeftovers(context: context)
+        var deleted = 0
+        for name in try writer.listNames(folders: TokenPaths.folders) {
+            if try writer.removeOwnRegularFile(folders: TokenPaths.folders, name: name) {
+                deleted += 1
+            }
+        }
+        let skipped = try writer.listNames(folders: TokenPaths.folders).count
+        try writer.removeEmptyFolder(parent: [], name: TokenPaths.folderName)
+        return (deleted, skipped)
+    }
+
+    /// How many token files the token folder holds. Names only.
+    static func fileCount(context: ToolContext) -> Int {
+        let names =
+            (try? NoFollowWriter(root: context.dataRoot).listNames(folders: TokenPaths.folders))
+            ?? []
+        return names.filter { $0.hasSuffix(".json") }.count
+    }
 }

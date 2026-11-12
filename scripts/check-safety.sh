@@ -54,6 +54,10 @@ scan credfile 'credentials\.json|\.claude\.json' '' $SCAN
 scan process '\bProcess\b|NSTask|posix_spawn|\bsystem\(|\bpopen\(|\bexecv[a-z]*\(|\bdlopen\(' 'Sources/Core/Runner/' $SCAN
 scan fileread '[cC]ontentsOf|FileHandle|\bfopen\(|\bopen\(|contents\(atPath|InputStream|\b(openat|freopen|fdopen|opendir|fdopendir|readlink|readlinkat|mmap)\(|NSData\(|Data\(referencing|UserDefaults|NSUbiquitousKeyValueStore|CFPreferences|AppStorage|enumerator\(at|subpathsOfDirectory' 'Sources/Core/Paths/' $SCAN
 scan envread 'ProcessInfo|\bgetenv\(|\bsetenv\(|\benviron\b' 'Sources/Core/Env/' $SCAN
+# Only the readers named in the architecture open the default folder's settings file: `HookRecord`,
+# the pick service and the `init`, `doctor` and `link` commands. `run` uses the saved verdict.
+scan settingsread 'readSettings|settingsState\(|settings\.json' 'Sources/(Core/Links/HookRecord|Core/Picker/PickService|agent-balancer/Commands/(Init|Doctor|Link))\.swift:' $SCAN
+scan settingsread 'defaultClaudeFolder' 'Sources/(Core/Env/Env|Core/Links/HookRecord|Core/Runner/ChildEnvironment|Core/Readers/SessionsReader)\.swift:' $SCAN
 scan secstr '"[^"]*(security |curl)[^"]*"' '' $SCAN
 scan tokenstring 'CLAUDE_CODE_OAUTH_TOKEN|"tokens"|tokens/' 'Sources/Core/Tokens/' $SCAN Tests
 scan tokenstring '"launch"|launch/' 'Sources/Core/Launch/' $SCAN Tests

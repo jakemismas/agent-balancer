@@ -26,6 +26,7 @@ public enum Layout {
     public static let pickLockName = "pick.lock"
     public static let leasesName = "leases.json"
     public static let picksLogName = "picks.log"
+    public static let settingsSeenName = "settings-seen.json"
 
     public static func readingName(_ label: String) -> String { label + ".json" }
     public static func lockName(_ label: String) -> String { "probe-" + label + ".lock" }

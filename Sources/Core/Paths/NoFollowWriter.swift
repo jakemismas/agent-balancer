@@ -426,3 +426,57 @@ extension NoFollowWriter {
         return unlinkat(dir, name, AT_REMOVEDIR) == 0
     }
 }
+
+extension NoFollowWriter {
+    /// Deletes `<root>/<folders...>/<name>` only when `lstat` shows a symbolic link owned by the
+    /// user whose target text equals `target`. A regular file, a folder, a link with another target
+    /// and anything missing stay as they are. Returns whether a link was removed.
+    @discardableResult
+    public func removeLink(folders: [String], name: String, target: String) throws -> Bool {
+        try Paths.checkName(name)
+        let dir = try NoFollowWriter.openFolder(root: root, folders: folders, create: false)
+        if dir < 0 { return false }
+        defer { close(dir) }
+        var st = stat()
+        guard fstatat(dir, name, &st, AT_SYMLINK_NOFOLLOW) == 0,
+            (st.st_mode & S_IFMT) == S_IFLNK, st.st_uid == getuid()
+        else { return false }
+        var buffer = [CChar](repeating: 0, count: Int(PATH_MAX) + 1)
+        let length = readlinkat(dir, name, &buffer, buffer.count - 1)
+        guard length > 0 else { return false }
+        let actual = String(
+            decoding: buffer[0..<length].map { UInt8(bitPattern: $0) }, as: UTF8.self)
+        guard actual == target else { return false }
+        return unlinkat(dir, name, 0) == 0
+    }
+
+    /// Whether `<root>/<folders...>/<name>` is a symbolic link owned by the user with that target.
+    public func hasLink(folders: [String], name: String, target: String) throws -> Bool {
+        try Paths.checkName(name)
+        let dir = try NoFollowWriter.openFolder(root: root, folders: folders, create: false)
+        if dir < 0 { return false }
+        defer { close(dir) }
+        var st = stat()
+        guard fstatat(dir, name, &st, AT_SYMLINK_NOFOLLOW) == 0,
+            (st.st_mode & S_IFMT) == S_IFLNK, st.st_uid == getuid()
+        else { return false }
+        var buffer = [CChar](repeating: 0, count: Int(PATH_MAX) + 1)
+        let length = readlinkat(dir, name, &buffer, buffer.count - 1)
+        guard length > 0 else { return false }
+        return String(decoding: buffer[0..<length].map { UInt8(bitPattern: $0) }, as: UTF8.self)
+            == target
+    }
+
+    /// Lists the names directly under `<root>/<folders...>` that `lstat` shows as folders owned by
+    /// the user. A link to a folder is not one.
+    public func listFolders(folders: [String]) throws -> [String] {
+        let dir = try NoFollowWriter.openFolder(root: root, folders: folders, create: false)
+        if dir < 0 { return [] }
+        defer { close(dir) }
+        return try NoFollowWriter.entries(of: dir).sorted().filter { name in
+            var st = stat()
+            return fstatat(dir, name, &st, AT_SYMLINK_NOFOLLOW) == 0
+                && (st.st_mode & S_IFMT) == S_IFDIR && st.st_uid == getuid()
+        }
+    }
+}

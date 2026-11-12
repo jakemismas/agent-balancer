@@ -128,6 +128,14 @@ private func tombstone(_ label: String) -> [String: String] {
     }
 }
 
+/// Runs `body` on its own thread: a race test must not wait on the shared dispatch pool, which
+/// other tests in the same run can use up.
+func onOwnThread(_ body: @escaping @Sendable () -> Void) {
+    let thread = Thread(block: body)
+    thread.stackSize = 1 << 20
+    thread.start()
+}
+
 final class Box<T>: @unchecked Sendable {
     private let lock = NSLock()
     private var stored: T?
@@ -177,13 +185,13 @@ final class Box<T>: @unchecked Sendable {
         let group = DispatchGroup()
         let context = t.context
         group.enter()
-        DispatchQueue.global().async {
+        onOwnThread {
             _ = try? TokenAccounts.install(context: context, label: "pool-race", token: fresh)
             group.leave()
         }
         #expect(inside.wait(timeout: .now() + 20) == .success)
         group.enter()
-        DispatchQueue.global().async {
+        onOwnThread {
             _ = try? service.pick(PickRequest())
             group.leave()
         }
@@ -209,14 +217,14 @@ final class Box<T>: @unchecked Sendable {
             let group = DispatchGroup()
             let context = t.context
             group.enter()
-            DispatchQueue.global().async {
+            onOwnThread {
                 _ = try? TokenAccounts.removeFiles(
                     context: context, label: "pool-rm", snapshot: .empty)
                 group.leave()
             }
             for _ in 0..<3 {
                 group.enter()
-                DispatchQueue.global().async {
+                onOwnThread {
                     _ = try? service.pick(PickRequest())
                     group.leave()
                 }
@@ -311,7 +319,7 @@ extension TokenPickRaceTests {
                 context: context, account: tokenAccount("pool-mid"), leaseId: "l-0dd0dd01",
                 caller: .none)
             group.enter()
-            DispatchQueue.global().async {
+            onOwnThread {
                 _ = try? service.pick(PickRequest())
                 group.leave()
             }
@@ -666,7 +674,7 @@ extension RemoveAndReplaceRuleTests {
         let done = DispatchSemaphore(value: 0)
         let context = t.context
         let token = Canaries.oauth()
-        DispatchQueue.global().async {
+        onOwnThread {
             do {
                 _ = try TokenAccounts.install(
                     context: context, label: "pool-lr", token: token, requireAccount: true)

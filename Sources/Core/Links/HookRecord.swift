@@ -66,9 +66,21 @@ public enum HookRecordStatus: Equatable, Sendable {
     case changed(HookDiff)
 }
 
+/// One link the tool made for a folder account: where it sits and what it points to.
+public struct LinkEntry: Codable, Equatable, Sendable {
+    public var path: String
+    public var target: String
+
+    public init(path: String, target: String) {
+        self.path = path
+        self.target = target
+    }
+}
+
 struct HookRecordFile: Codable, Equatable {
     var schemaVersion: Int
     var defaultFolder: DefaultFolderRecord?
+    var links: [LinkEntry]?
 }
 
 struct DefaultFolderRecord: Codable, Equatable {
@@ -161,11 +173,88 @@ public struct HookRecord: Sendable {
     }
 
     /// The default folder's settings. A missing file is an empty set; one that does not parse
-    /// throws.
+    /// throws. When the file's stamp is the same before and after the read, the outcome is saved
+    /// as the verdict that `run` uses in place of reading the file (`seenVerdict`). No other code
+    /// opens the file.
     public func readSettings() throws -> SettingsFacts {
         let url = context.defaultClaudeFolder.appendingPathComponent("settings.json")
-        guard let data = try NoFollowReader.readOutside(url) else { return .empty }
-        return try Self.parse(data)
+        let before = try? SettingsStamp.take(url)
+        let outcome: Result<SettingsFacts, Error>
+        do {
+            if let data = try NoFollowReader.readOutside(url) {
+                outcome = .success(try Self.parse(data))
+            } else {
+                outcome = .success(.empty)
+            }
+        } catch {
+            outcome = .failure(error)
+        }
+        if let before, before == (try? SettingsStamp.take(url)) {
+            saveVerdict(stamp: before, facts: try? outcome.get())
+        }
+        return try outcome.get()
+    }
+
+    // MARK: The settings verdict
+
+    /// What a reader saw: the stamp of the file, then the hooks and the key flag, or `readable`
+    /// false when the file could not be read or parsed. No env name and no value is kept.
+    struct VerdictFile: Codable, Equatable {
+        var schemaVersion: Int
+        var stamp: SettingsStamp
+        var readable: Bool
+        var hooks: [HookEntry]
+        var disableAllHooks: Bool
+        var carriesKey: Bool
+    }
+
+    func saveVerdict(stamp: SettingsStamp, facts: SettingsFacts?) {
+        let file = VerdictFile(
+            schemaVersion: 1, stamp: stamp, readable: facts != nil, hooks: facts?.hooks ?? [],
+            disableAllHooks: facts?.disableAllHooks ?? false, carriesKey: facts?.carriesKey ?? false
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard var data = try? encoder.encode(file) else { return }
+        data.append(0x0A)
+        // A failed save leaves the older verdict, which no longer matches the file, so `run` refuses.
+        try? writer.put(data, folders: Layout.stateFolders, name: Layout.settingsSeenName)
+    }
+
+    /// What `run` may take from the settings of the default folder: a reason to refuse, or the key
+    /// flag. It stats the file and never opens it.
+    public struct SeenSettings: Equatable, Sendable {
+        public var issue: String?
+        public var carriesKey: Bool
+    }
+
+    /// The verdict a reader saved, valid only while the file's stamp is unchanged. A missing,
+    /// unreadable, malformed or older verdict, a stamp that cannot be taken, and a settings path
+    /// that is not a regular file all refuse. The hook record is compared live, so a record that
+    /// changed after the verdict is caught too.
+    public func seenVerdict() -> SeenSettings {
+        let stale = SeenSettings(issue: Messages.settingsNotChecked, carriesKey: false)
+        let url = context.defaultClaudeFolder.appendingPathComponent("settings.json")
+        guard let stamp = try? SettingsStamp.take(url), stamp.isRegularOrAbsent,
+            let data = try? reader.read(
+                folders: Layout.stateFolders, name: Layout.settingsSeenName),
+            let file = try? JSONDecoder().decode(VerdictFile.self, from: data),
+            file.schemaVersion == 1, file.readable, file.stamp == stamp,
+            file.hooks.allSatisfy({
+                HookEntry.isHash($0.fingerprint) && HookEntry.isHash($0.commandHash)
+            })
+        else { return stale }
+        let facts = SettingsFacts(
+            hooks: file.hooks, disableAllHooks: file.disableAllHooks,
+            apiKeyHelperPresent: file.carriesKey, keyEnvNames: [])
+        switch status(current: facts) {
+        case .missing:
+            return SeenSettings(issue: Messages.hookRecordMissing, carriesKey: file.carriesKey)
+        case .changed:
+            return SeenSettings(issue: Messages.settingsChanged, carriesKey: file.carriesKey)
+        case .matches:
+            return SeenSettings(issue: nil, carriesKey: file.carriesKey)
+        }
     }
 
     // MARK: The record
@@ -182,12 +271,27 @@ public struct HookRecord: Sendable {
         return file
     }
 
+    /// The link list of the file as it stands, so a save never drops it. A file whose list cannot
+    /// be decoded stops the save: a record that is only missing or has a bad hook part still keeps
+    /// its list.
+    private func linksToKeep() throws -> [LinkEntry]? {
+        guard let data = try reader.read(folders: [], name: Self.fileName) else { return nil }
+        struct LinksOnly: Decodable { var links: [LinkEntry]? }
+        guard let parsed = try? JSONDecoder().decode(LinksOnly.self, from: data) else {
+            throw ToolError(
+                "links.json cannot be read, so the record was not saved and its link list is kept. Move links.json aside and run this again."
+            )
+        }
+        return parsed.links
+    }
+
     /// Writes the fingerprint of `facts` as the default folder's record.
     public func record(_ facts: SettingsFacts) throws {
         let file = HookRecordFile(
             schemaVersion: 1,
             defaultFolder: DefaultFolderRecord(
-                disableAllHooks: facts.disableAllHooks, hooks: facts.hooks))
+                disableAllHooks: facts.disableAllHooks, hooks: facts.hooks),
+            links: try linksToKeep())
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         var data = try encoder.encode(file)
@@ -211,5 +315,49 @@ public struct HookRecord: Sendable {
         guard let d = diff(current: facts) else { return .missing }
         if !d.removed.isEmpty || d.disableAllHooks { return .changed(d) }
         return .matches(added: d.added.count)
+    }
+
+    // MARK: Links
+
+    /// The links `links.json` lists, or none when the record is missing or unreadable.
+    public func listedLinks() -> [LinkEntry] { loadFile()?.links ?? [] }
+
+    /// Where a listed link sits as folders under the data folder, or nil when it is not directly
+    /// inside `accounts/<label>/.claude/`. Nothing outside the data folder is ever named.
+    func location(of entry: LinkEntry) -> (folders: [String], name: String)? {
+        let root = context.dataRoot.standardizedFileURL.pathComponents
+        let parts = URL(fileURLWithPath: entry.path).standardizedFileURL.pathComponents
+        guard !entry.path.contains("/../"), parts.count == root.count + 4,
+            Array(parts.prefix(root.count)) == root
+        else { return nil }
+        let rest = Array(parts.suffix(4))
+        guard rest[0] == "accounts", ConfigValidator.isValidLabel(rest[1]), rest[2] == ".claude"
+        else { return nil }
+        return (Array(rest.prefix(3)), rest[3])
+    }
+
+    /// Whether a listed link is still a symlink with the recorded target.
+    public func isIntact(_ entry: LinkEntry) -> Bool {
+        guard let spot = location(of: entry) else { return false }
+        return (try? writer.hasLink(folders: spot.folders, name: spot.name, target: entry.target))
+            ?? false
+    }
+
+    /// Removes each listed link that is still a symlink with the recorded target. A path that is
+    /// a regular file, a folder or a link to somewhere else stays. Returns the counts.
+    public func removeListedLinks() -> (removed: Int, kept: Int) {
+        var removed = 0
+        var kept = 0
+        for entry in listedLinks() {
+            guard let spot = location(of: entry),
+                (try? writer.removeLink(
+                    folders: spot.folders, name: spot.name, target: entry.target)) == true
+            else {
+                kept += 1
+                continue
+            }
+            removed += 1
+        }
+        return (removed, kept)
     }
 }

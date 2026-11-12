@@ -86,6 +86,19 @@ struct DoctorCommand: ParsableCommand {
             )
         }
 
+        let launch = DoctorChecks.launchFiles(context: context, snapshot: sessions, now: now)
+        if let oldest = launch.oldestAge {
+            print(
+                "launch files: \(launch.count), oldest \(DoctorChecks.describe(age: oldest)) old")
+        } else {
+            print("launch files: 0")
+        }
+        if let service = DoctorChecks.syncedFolder(context: context) {
+            print(
+                "Warning: the data folder sits in \(service). Tokens and launch files would sync to other devices. Move your home data out of it."
+            )
+        }
+
         let hooks = HookRecord(context: context)
         do {
             let facts = try hooks.readSettings()

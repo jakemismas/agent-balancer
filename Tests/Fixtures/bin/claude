@@ -72,4 +72,6 @@ case "$1" in
     exit 0
     ;;
 esac
+# An interactive launch: any other arguments end with the status a test chose, 2 by default.
+if [ -f "$dir/default.exit" ]; then exit "$(cat "$dir/default.exit")"; fi
 exit 2

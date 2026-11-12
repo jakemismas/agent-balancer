@@ -67,3 +67,22 @@
   whose token file outlived its account, and `login --paste` refuses to read when the terminal
   cannot hide the input.
 - `config set <label> label <new>` refuses on a token account and writes nothing.
+- Add `run <label> [--print-command] [-- <claude arguments>]`: starts Claude Code on one account
+  with a lease and one launch file, the checks of `pick` without the reading check, the terminal
+  attached and the person's environment minus the protected group. `--settings <launch file>` comes
+  before the person's arguments; a `--settings` of their own and a first argument that is a
+  `claude` command name are refused before anything is written. `run` never opens the default
+  folder's settings file: `init`, `doctor`, `pick`, `verify` and `link --accept-source-change` save a
+  verdict with the file's stamp, and `run` refuses when it is missing or older than the file.
+  `--print-command` prints the launch line and applies the ambient and inherited token or key rules
+  as a typed `pick` does. A chat shell gets the line to type in your own terminal and exit 1, with
+  or without `--print-command`, and nothing is written.
+- Saving the hook record refuses when `links.json` cannot be decoded, so the link list is never
+  dropped.
+- Add `uninstall`: lists the tool's files as counts, then removes them after the typed word. A
+  launch file that a session record names, an open lease holds or that is younger than the lease
+  window is overwritten with a token-free tombstone and kept. Listed links go only while they are
+  still the symlink the tool made.
+- Extend `doctor` with the launch file count, the age of the oldest and a warning for a data
+  folder in a synced location.
+- Add `skill/agent-balancer/SKILL.md` and `docs/CONTRACT.md`, the public contract for callers.

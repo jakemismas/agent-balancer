@@ -10,7 +10,10 @@ public enum ChildEnvironment {
 
     /// True when `folder` is the default Claude Code folder, which never gets `CLAUDE_CONFIG_DIR`.
     static func isDefaultFolder(_ folder: URL, context: ToolContext) -> Bool {
-        folder.standardizedFileURL.path == context.defaultClaudeFolder.standardizedFileURL.path
+        func plain(_ url: URL) -> String { url.resolvingSymlinksInPath().standardizedFileURL.path }
+        return folder.standardizedFileURL.path
+            == context.defaultClaudeFolder.standardizedFileURL.path
+            || plain(folder) == plain(context.defaultClaudeFolder)
     }
 
     /// Allowlist for probe and `auth status` children. Everything else is dropped, including the

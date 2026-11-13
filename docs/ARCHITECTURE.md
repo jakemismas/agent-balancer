@@ -36,8 +36,8 @@ These rules hold in every slice. Breaking one is a critical defect.
    modules read it. Other modules reach `tokens/` and `launch/` through calls those two offer. The
    token is never printed, logged, passed as an argument or put in an environment the tool builds.
 2. No Keychain or Security framework API. No read of `.credentials.json` or `.claude.json`.
-3. The settings file of the default folder is read only by `init`, `doctor`, `pick`, `verify` and
-   `link --accept-source-change`, through the hook record, and only for hook entries, the
+3. The settings file of the default folder is read only by `init`, `doctor`, `pick`, `verify`,
+   `link <label>` and `link --accept-source-change`, through the hook record, and only for hook entries, the
    `disableAllHooks` flag, whether `apiKeyHelper` is present, and the names (never values) of `env`
    keys.
 4. No network code: no `URLSession`, no Network framework, no socket API. No child process other
@@ -258,9 +258,24 @@ inherited `CLAUDE_CONFIG_DIR` chooses the folder and its supervisor. An inherite
 stored login in a foreground launch and does not reach a background worker. A token in
 `--settings` reaches a background worker. Each rule fails closed:
 
-1. `pick --caller typed` (the default) with `CLAUDE_CONFIG_DIR` set in its own environment offers
-   only `folder` accounts, whose prefix overrides it. `login` and `token` candidates are skipped
-   with the reason `ambient CLAUDE_CONFIG_DIR set`.
+1. `pick --caller typed` (the default) offers a prefix-less candidate (`login` or `token`) only
+   where the caller's own folder is shown to be the default one. A `folder` account is always
+   offered, because its literal prefix overrides whatever the caller holds. The `login` and
+   `token` candidates are skipped when any of these holds, judged from variable and file names
+   only (never a file's content):
+   a. `CLAUDE_CONFIG_DIR` is set, empty included: reason `ambient CLAUDE_CONFIG_DIR set`.
+   b. `CLAUDE_JOB_DIR` is set and is not exactly `<home>/.claude/jobs/<one segment>`, checked as
+      text (absolute, no `.` or `..` segment, no link resolved), in any shell: reason
+      `ambient session folder not default`.
+   c. The shell is a chat shell (5.1) with neither variable set, unless a file named
+      `<CLAUDE_PID>.json` (`CLAUDE_PID` all digits) is found by name in the default folder's
+      `sessions/` and in no folder account's `sessions/`: reason `chat folder not confirmed
+      default`. A missing or non-numeric `CLAUDE_PID`, an unreadable `sessions/` and two matches
+      all skip.
+   With no candidate left, `pick` exits 2. `run --print-command` uses the same predicate, and
+   `doctor` prints one line for the session folder (`default`, `folder <label>` or
+   `not confirmed`), by label only. A launcher caller and a shell that is not a chat with neither
+   variable set are unchanged. The tool never sets `CLAUDE_CONFIG_DIR` to the default path.
 2. `pick --caller typed` with a token or key variable in its own environment (the Claude Code
    token variable, `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`) answers with
    `backgroundOnly: true` for every kind, a folder pick included. The caller uses that recipe only
@@ -531,6 +546,19 @@ refuses, leaving the folder as it was, when a destination exists and is not the 
 link, a destination parent is a link, the folder is the default folder, or the folder is not owned
 by the user.
 
+`link <label>` lists every link, its resolved target and what `lstat` shows at the destination,
+then asks for the label typed back before it changes anything (`--dry-run` stops after the list).
+It links whichever of `settings.json`, `CLAUDE.md`, `skills/`, `agents/` and `commands/` exist and
+never anything else. A run again adds links for sources that exist by then and leaves the rest.
+`link --repair <label>` replaces a link the tool made whose recorded target has moved and removes
+one whose source is gone, after the same typed approval. `unlink <label>` removes a listed link
+only while it is still a symlink with the recorded target, then forgets the account's entries, so
+the account counts as not linked. In this version `sharedSource` must be the default folder,
+because the hook record covers that folder's settings; any other value makes `link` refuse. A
+folder is also refused when it is a link or is not owned by the user. `remove` on a folder account
+deletes the registry entry, the label's launch files (a recent pick's file included, because none
+holds a token) and its leases, forgets the label's manifest entries, and never touches the folder.
+
 Consent commands (`link`, `unlink`, `link --repair`, `link --accept-source-change`,
 `schedule install`, `uninstall`, `config set-main`, `config set`, `remove`) refuse to run in a chat
 shell, so a chat cannot type the label through a pseudo terminal. `run` and `login` never start
@@ -538,6 +566,25 @@ shell, so a chat cannot type the label through a pseudo terminal. `run` and `log
 `agent-balancer run <label> -- <arguments>`, and writes nothing. The Manage accounts window (section 11) runs `add`, `remove`,
 `config set <label> ends|ending-soon` and `login` for a person who clicks, and it turns itself off
 when the app's own environment carries the chat-shell variable.
+
+Applying a change also needs a person at a terminal. `link <label>` and `link --repair <label>`
+(after the list), `link --accept-source-change [--all]` (after the printed hook entries) and
+`unlink <label>` check that standard input is a terminal before they ask for the typed label (or
+the word `accept`), and refuse before the prompt, writing nothing, when it is not: "Applying needs
+an interactive terminal. Run this in your own terminal and type the label (or `accept`) when
+asked. Nothing was changed." Piping the label in does not count. The check is one closure
+(`isatty` on standard input) with no variable, flag or file that turns it off. `--dry-run`
+changes nothing and needs no terminal, and an editor's integrated terminal (only `CLAUDECODE`
+set) passes. `init` and `uninstall` ask through the same prompt helper and are unchanged: `init`
+checks for a terminal itself when it must ask for a label, and `uninstall` keeps its typed word
+without this check.
+
+While the person reads the list, nothing is locked. After the typed answer, `link`, `link
+--repair` and `unlink` take `locks/links.lock`, read the account's entries again and write only
+if they equal the entries the list was built from; otherwise they refuse, writing nothing, and
+say to run the command again (the approval was for that list). `link --accept-source-change` does
+the same with the default folder's hook record. `remove` and `uninstall` only clear entries and
+check nothing.
 
 The chat-shell test is `CLAUDE_CODE_CHILD_SESSION` present with any value, empty included. Claude
 Code sets it in the subprocesses of its shell tools, hook commands and status line commands, and
@@ -567,7 +614,10 @@ default-folder candidate with reason `ambient CLAUDE_CONFIG_DIR set` when that v
 its own environment (4A.3), and keeps ranking the rest. The folder in the prefix must match
 `^/([A-Za-z0-9._-]+/)*[A-Za-z0-9._-]+$` with no `.` or `..` segment, and a label must match
 `^[a-z0-9][a-z0-9-]{0,31}$`. The config validator rejects anything else at load time, so a bad
-value fails everywhere, and every printed command goes through one renderer. `--model` only
+value fails everywhere (for a folder account it also rejects, at every save, a folder that is a
+link, is wider than 0700 or is not owned by the user, and a data folder path that is not
+absolute, has a `.` or `..` segment or fails the folder pattern; a folder that does not exist
+yet passes; the save is the only place the validator runs this rule, and every use of the folder (`link`, `verify`, `pick`, `run`, `login`) opens it without following a link and refuses a folder that is a link or not owned by the user). A save that finds such a folder refuses for every account until it is fixed, and its error names the account and the fix: make the folder mode 0700 and owned by you, or run `agent-balancer remove <label>`. Every printed command goes through one renderer. `--model` only
 chooses the budget rule and must match `^[A-Za-z0-9][A-Za-z0-9._:\[\]-]{0,63}$`. It is never
 printed into a command. A literal path in the prefix is required, never a substitution, so the
 account stays visible to a reader.
@@ -615,6 +665,32 @@ never on disk) and before `run`. Each check is a refusal that removes the accoun
    so adding a hook passes and removing or changing one fails;
 4. `claude auth status --json` shows the folder's own `configDirectory` and the expected login;
 5. for `pick` only, a reading is fresh enough.
+
+`verify <label>` prints each failure with its code and exits 1 when any check fails (a login or
+token label is refused: it verifies folder accounts only). Check 4 compares the folder that
+`auth status` reports with the account's own folder after links and `.` segments are resolved; the
+runner redacts long random-looking runs in what it captures, so a `[redacted]` marker stands only
+for text inside one path segment and never matches a `/`. Every segment without a marker must
+match literally. The reported value must be an absolute path with as many segments as the
+folder, a last segment with no marker, and at least one other segment with no marker. A marker
+in the label segment (the one before the last) matches only a label of 7 or more characters, the
+shortest text the redaction can replace (`sk-ant-`); a shorter label can never be redacted. A
+`configDirectory` that is missing, empty, not a string, not absolute, only markers or short of
+segments counts as a failed check 4 for a folder account ("Check failed: the folder of this
+sign-in could not be confirmed." or "...the sign-in is not in this account's own folder."), so
+`pick`, `run`, `login` and `verify` all refuse. Check 2 also fails a shared source (`settings.json`,
+`CLAUDE.md`, `skills/`, `agents/`, `commands/`) that exists in the default folder, by `lstat` with
+no read, while the manifest lists no link for it; the failure is the broken-link text, and
+`link --repair <label>` (or `link <label>`) adds the link after the same typed approval. Repair
+still refuses, writing nothing, when the source is a link that goes nowhere, is not owned by you
+or is not a plain file or folder, or when the destination in the account folder is in the way;
+each refusal names the item to fix (in the default folder or in the account folder) and says to
+run the same command again, and the broken-link text says so too. A folder whose
+manifest has no `settings.json` link is not hit by a hook change, because it loads none of those
+hooks. Failures map to these texts: never linked, `not_linked` ("Settings not shared. Run
+`agent-balancer link <label>` in Terminal."); a broken link or target, `settings_changed` ("A
+shared link is broken. Run `agent-balancer link --repair <label>` in Terminal. If repair refuses, fix the item it names, in the default folder or in the account folder, then run it again."); a changed hook
+set, `settings_changed` with the `--all` text of section 9.
 
 `run` and `login` use `verify --no-reading` (checks 1 to 4), so a new account can be started
 before its first reading. For the default folder, `run` takes check 3 from the saved verdict of
@@ -946,7 +1022,9 @@ reading does it draw the possibly-used span hatched and label the row "Fable: up
 ## 8. In-use detection
 
 A session counts toward an account by the launch file its records name (4A.6). The default folder
-is the only folder read in this version.
+and the folder of each folder account are read, one pass each. A session whose record sits in an
+account's own folder counts toward that account, whatever launch file it names, and the launch
+files its records name are protected like any other.
 
 - Records are `sessions/*.json` (one per running session) and `jobs/*/state.json` in the default
   folder. The tool reads ids, names, state and launch file names from them and drops every other
@@ -986,7 +1064,7 @@ short scrubbed text the menu shows as is.
 | `login_rejected` | `auth status` says logged out, or the probe returns an auth error | error | "Login rejected. Run `agent-balancer login pool-b` in Terminal." |
 | `wrong_account` | `auth status` email differs from config | error | "Folder is logged in as another account." |
 | `duplicate_login` | two configured accounts report one email | error | "Logged in as the same account as pool-a. Log one folder into its own account." |
-| `settings_changed` | a hook entry recorded at link time is gone or changed (5.7); or, after `init`, the hook record is missing or unreadable (4A.5); or, for `run`, the saved verdict is missing or older than the file | error on every affected account, shown as one banner | "Settings changed. Run `agent-balancer link --accept-source-change` in Terminal." For `run`, with no verdict that matches the file's stamp: "Settings changed since the last check. Run `agent-balancer doctor` in Terminal." |
+| `settings_changed` | a link of a folder account is broken, or a hook entry recorded at link time is gone or changed (5.7); or, after `init`, the hook record is missing or unreadable (4A.5); or, for `run`, the saved verdict is missing or older than the file | error on every affected account, shown as one banner | "Settings changed. Run `agent-balancer link --accept-source-change` in Terminal." For `run`, with no verdict that matches the file's stamp: "Settings changed since the last check. Run `agent-balancer doctor` in Terminal." |
 | `plan_changed` | `planTier` differs from `expectedPlanTier` | error | "Plan is max_5x, expected max_20x." |
 | `account_ended` | `endsAt` passed; or, for an account marked `endingSoon`, the first reading where `planTier` differs from `expectedPlanTier` or is missing. Once ended that way it stays ended until `config set <label> ending-soon false` | ended | "Account ended." |
 | `check_failed` | probe timeout, no `rate_limit_event`, unparsable output, `claude` missing | error | "Check failed: probe timed out after 60 s." |
@@ -1373,7 +1451,7 @@ the events record then keeps only each label's newest line.
 - **One account per folder, for good.** A folder is signed into one account and stays on it,
   because saved thinking from a model works only in the account that produced it, and a chat that
   meets a second sign-in loses it. `login <label>` runs only while the folder is logged out and
-  checks the email afterwards. `add`, `login` and the README print "Never sign a different account
+  checks the email afterwards. It exits 1 when the folder holds a different account (a wrong email or plan) or when the folder cannot be confirmed as its own, and says so. `add`, `login` and the README print "Never sign a different account
   into a folder that already has chats. Add a new folder for the new account instead." A folder
   found on another account shows `wrong_account`, drops out of `pick`, and its fix text says to
   sign the expected account back in, not to relabel the folder.
@@ -1421,7 +1499,8 @@ the events record then keeps only each label's newest line.
      folders, exactly as `remove` keeps one (4A.4). A read-back then proves that no launch file
      holds a token before any token file goes.
   3. Every token file goes, and the writer's leftover temporary files with them.
-  4. State, logs, backups, locks, `links.json` and `config.json` go. Entries the tool did not
+  4. State, logs, backups, locks, `links.json` and `config.json` go. Before that, the links and
+     linked labels in `links.json` are cleared, so a file that stays lists none. Entries the tool did not
      make stay, and are counted.
 
   Why a named file is kept as a tombstone and not deleted (#25): a session record that names a
@@ -1446,7 +1525,19 @@ the events record then keeps only each label's newest line.
   accounts/<label>/.claude/        0700   folder accounts only (section 5.1); the tool writes only
                                           the links listed in links.json
   links.json                       0600   link manifest: `links` (each a `path` and the `target` it
-                                          points to) and the hook fingerprint at link time
+                                          points to), `linkedLabels` (the folder accounts a `link`
+                                          run finished for, an empty list of links included) and
+                                          the hook fingerprint at link time. Every change takes
+                                          `locks/links.lock` for the whole read and write, and a
+                                          change refuses, writing nothing, when the schema
+                                          version is not 1 or the link list or the linked labels
+                                          do not decode (and, for a links change, when the hook
+                                          record does not decode or holds a hash that is not 64
+                                          lowercase hex digits). `link --accept-source-change`
+                                          replaces a damaged hook record and keeps the links.
+                                          A `link`, `link --repair` or `unlink` also writes
+                                          only while the account's entries are still the ones
+                                          the person was shown
   state/status.json                0600   last merged status (what the menu reads)
   state/readings/<label>.json      0600   last reading per account, with source and time
   state/picks.log                  0600   one line per pick: time, model, label or none, lease id
@@ -1466,6 +1557,7 @@ the events record then keeps only each label's newest line.
   locks/probe-<label>.lock        0600   one probe at a time per folder
   locks/pick.lock                  0600   one pick decision at a time (section 7.2 rule 7)
   locks/history.lock               0600   one writer at a time for the history and events files
+  locks/links.lock                 0600   one writer at a time for links.json
   logs/agent-balancer.log          0600   scrubbed lines from the status rebuild (rotation at 1 MB
                                           is not built yet)
   backups/config-<date>.json       0600   before every migration

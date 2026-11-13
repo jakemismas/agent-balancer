@@ -2,9 +2,36 @@ import Core
 import Foundation
 
 enum Shared {
+    /// Records the plan of an account that has none yet. A plan already recorded is never changed.
+    static func recordExpectedTiers(context: ToolContext, tiers: [String: String]) throws {
+        guard !tiers.isEmpty else { return }
+        try TokenAccounts.updateConfig(context: context) { config in
+            for (label, tier) in tiers {
+                if let index = config.accounts.firstIndex(where: { $0.label == label }),
+                    config.accounts[index].expectedPlanTier == nil
+                {
+                    config.accounts[index].expectedPlanTier = tier
+                }
+            }
+        }
+    }
+
     /// Consent commands refuse in a chat shell. The message never suggests unsetting a variable.
     static func requireOwnTerminal(_ context: ToolContext) throws {
         if context.inChatShell { throw ToolError(Messages.chatShellRefusal) }
+    }
+
+    /// Applying a change needs a person at a terminal to type the answer back.
+    static func requireTerminal(
+        isTerminal: @Sendable () -> Bool = ConsentTerminal.standardInputIsTerminal
+    ) throws {
+        try ConsentTerminal.require(isTerminal: isTerminal)
+    }
+
+    /// An address that is safe as one argument: no leading hyphen, space, quote or control character.
+    static func isPlainEmail(_ text: String) -> Bool {
+        let pattern = #"\A[A-Za-z0-9._%+][A-Za-z0-9._%+-]*@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\z"#
+        return text.range(of: pattern, options: .regularExpression) != nil
     }
 
     static func line(_ issue: Issue) -> String {

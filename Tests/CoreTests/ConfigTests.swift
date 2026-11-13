@@ -30,9 +30,9 @@ import Testing
         #expect(message(config([login("a"), login("b")]))?.contains("one login") == true)
     }
 
-    @Test func rejectsFolderAndUnknownKindAndRole() {
+    @Test func acceptsTheFolderKindAndRejectsUnknownKindAndRole() {
         let folder = Account(label: "f", kind: Kind.folder, role: Role.pool)
-        #expect(message(config([folder]))?.contains("not available") == true)
+        #expect(message(config([folder])) == nil)
         let odd = Account(label: "o", kind: "weird", role: Role.pool)
         #expect(message(config([odd]))?.contains("unknown kind") == true)
         let role = Account(label: "o", kind: Kind.token, role: "boss")

@@ -81,9 +81,32 @@ struct HookRecordFile: Codable, Equatable {
     var schemaVersion: Int
     var defaultFolder: DefaultFolderRecord?
     var links: [LinkEntry]?
+    /// The folder accounts a `link` run completed for. An empty manifest still counts as linked.
+    var linkedLabels: [String]?
 }
 
-struct DefaultFolderRecord: Codable, Equatable {
+/// The five things a folder account may share with the shared source, in the order they are
+/// linked. Nothing else is ever linked.
+public enum SharedItems {
+    public struct Item: Equatable, Sendable {
+        public let name: String
+        public let isFolder: Bool
+    }
+
+    public static let settingsName = "settings.json"
+    public static let all: [Item] = [
+        Item(name: settingsName, isFolder: false), Item(name: "CLAUDE.md", isFolder: false),
+        Item(name: "skills", isFolder: true), Item(name: "agents", isFolder: true),
+        Item(name: "commands", isFolder: true),
+    ]
+}
+
+/// The default folder's record as it was when a person reviewed it.
+public struct HookRecordSnapshot: Sendable {
+    let value: DefaultFolderRecord?
+}
+
+struct DefaultFolderRecord: Codable, Equatable, Sendable {
     var disableAllHooks: Bool
     var hooks: [HookEntry]
 }
@@ -271,33 +294,242 @@ public struct HookRecord: Sendable {
         return file
     }
 
-    /// The link list of the file as it stands, so a save never drops it. A file whose list cannot
-    /// be decoded stops the save: a record that is only missing or has a bad hook part still keeps
-    /// its list.
-    private func linksToKeep() throws -> [LinkEntry]? {
-        guard let data = try reader.read(folders: [], name: Self.fileName) else { return nil }
-        struct LinksOnly: Decodable { var links: [LinkEntry]? }
-        guard let parsed = try? JSONDecoder().decode(LinksOnly.self, from: data) else {
-            throw ToolError(
-                "links.json cannot be read, so the record was not saved and its link list is kept. Move links.json aside and run this again."
-            )
+    /// What a save keeps of the file as it stands: the link list, the linked labels and the
+    /// default folder's record. A file whose link list or linked labels cannot be decoded stops
+    /// every save. One whose default folder record cannot be decoded stops a links save, and only
+    /// the save of a new default folder record, which replaces it, goes ahead.
+    private struct Kept: Decodable {
+        var schemaVersion: Int?
+        var links: [LinkEntry]?
+        var linkedLabels: [String]?
+        var defaultFolder: DefaultFolderRecord?
+        /// True when a `defaultFolder` value is present and does not decode.
+        var defaultFolderUnreadable = false
+
+        enum CodingKeys: String, CodingKey {
+            case schemaVersion, links, linkedLabels, defaultFolder
         }
-        return parsed.links
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            schemaVersion = try c.decodeIfPresent(Int.self, forKey: .schemaVersion)
+            links = try c.decodeIfPresent([LinkEntry].self, forKey: .links)
+            linkedLabels = try c.decodeIfPresent([String].self, forKey: .linkedLabels)
+            if c.contains(.defaultFolder), !(try c.decodeNil(forKey: .defaultFolder)) {
+                do {
+                    let record = try c.decode(DefaultFolderRecord.self, forKey: .defaultFolder)
+                    // The same rule `loadFile` applies, so a save never works from a view that
+                    // dropped a record the readers cannot read.
+                    if record.hooks.allSatisfy({
+                        HookEntry.isHash($0.fingerprint) && HookEntry.isHash($0.commandHash)
+                    }) {
+                        defaultFolder = record
+                    } else {
+                        defaultFolderUnreadable = true
+                    }
+                } catch {
+                    defaultFolderUnreadable = true
+                }
+            }
+        }
+
+        init() {}
     }
 
-    /// Writes the fingerprint of `facts` as the default folder's record.
-    public func record(_ facts: SettingsFacts) throws {
-        let file = HookRecordFile(
-            schemaVersion: 1,
-            defaultFolder: DefaultFolderRecord(
-                disableAllHooks: facts.disableAllHooks, hooks: facts.hooks),
-            links: try linksToKeep())
+    private static let unreadableText =
+        "links.json cannot be read, so nothing was saved and the file is unchanged. Move links.json aside, run `agent-balancer link --accept-source-change` to record the hooks again, then run `agent-balancer link <label>` again for each folder account."
+
+    private static let unreadableDefaultText =
+        "The hook record in links.json cannot be read, so nothing was saved and the file is unchanged. Run `agent-balancer link --accept-source-change` to record the hooks again. The links stay listed."
+
+    private func kept(replacingDefault: Bool = false) throws -> Kept {
+        guard let data = try reader.read(folders: [], name: Self.fileName) else { return Kept() }
+        guard let parsed = try? JSONDecoder().decode(Kept.self, from: data),
+            parsed.schemaVersion == 1
+        else { throw ToolError(Self.unreadableText) }
+        if parsed.defaultFolderUnreadable && !replacingDefault {
+            throw ToolError(Self.unreadableDefaultText)
+        }
+        return parsed
+    }
+
+    /// Holds one lock for a whole read-modify-write of `links.json`, so two writers never lose
+    /// each other's change.
+    private func locked<T>(_ body: () throws -> T) throws -> T {
+        guard
+            let lock = try writer.acquireLock(
+                folders: Layout.locksFolders, name: Layout.linksLockName, wait: 30)
+        else { throw ToolError("Another change to links.json is running. Try again in a moment.") }
+        defer { lock.release() }
+        return try body()
+    }
+
+    private func saveFile(_ file: HookRecordFile) throws {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         var data = try encoder.encode(file)
         data.append(0x0A)
         try writer.put(data, folders: [], name: Self.fileName)
     }
+
+    /// Writes the fingerprint of `facts` as the default folder's record.
+    public func record(_ facts: SettingsFacts) throws {
+        try record(facts, ifRecordIs: nil)
+    }
+
+    /// With `ifRecordIs`, writes only while the default folder's record is still the one the
+    /// person was shown the difference against (nil inside the value means no record).
+    public func record(_ facts: SettingsFacts, ifRecordIs expected: HookRecordSnapshot?) throws {
+        try locked {
+            if let expected, loadFile()?.defaultFolder != expected.value {
+                throw ToolError(
+                    "The hook record changed after you were shown the difference, so nothing was recorded. Run `agent-balancer link --accept-source-change` again."
+                )
+            }
+            let old = try kept(replacingDefault: true)
+            try saveFile(
+                HookRecordFile(
+                    schemaVersion: 1,
+                    defaultFolder: DefaultFolderRecord(
+                        disableAllHooks: facts.disableAllHooks, hooks: facts.hooks),
+                    links: old.links, linkedLabels: old.linkedLabels))
+        }
+    }
+
+    /// Replaces the links listed for one folder account and marks it linked or not. Every other
+    /// account's entries and the default folder's record stay as they are.
+    public func saveLinks(label: String, entries: [LinkEntry], linked: Bool) throws {
+        try locked { try saveLinksHeld(label: label, entries: entries, linked: linked) }
+    }
+
+    /// The caller holds the links lock.
+    private func saveLinksHeld(label: String, entries: [LinkEntry], linked: Bool) throws {
+        let old = try kept()
+        let others = (old.links ?? []).filter { location(of: $0)?.folders[1] != label }
+        var labels = (old.linkedLabels ?? []).filter { $0 != label }
+        if linked { labels.append(label) }
+        try saveFile(
+            HookRecordFile(
+                schemaVersion: 1, defaultFolder: old.defaultFolder, links: others + entries,
+                linkedLabels: labels.sorted()))
+    }
+
+    /// What `links.json` holds for one folder account: its listed links and whether it is marked
+    /// linked.
+    public struct LinkState: Equatable, Sendable {
+        public var entries: [LinkEntry]
+        public var linked: Bool
+    }
+
+    public func linkState(for label: String) -> LinkState {
+        LinkState(entries: entries(for: label), linked: isLinked(label))
+    }
+
+    /// Runs `body` under the links lock when the account's record is still `expected`, the state a
+    /// person approved a change against. Otherwise nothing runs and nothing is written. The lock
+    /// is not held while a person is asked, only from this check to the final save.
+    public func changeLinks<T>(
+        label: String, expecting expected: LinkState,
+        _ body: (_ save: (_ entries: [LinkEntry], _ linked: Bool) throws -> Void) throws -> T
+    ) throws -> T {
+        try locked {
+            // Refuses before anything else runs when part of the file cannot be read.
+            _ = try kept()
+            guard linkState(for: label) == expected else {
+                throw ToolError(
+                    "The links of '\(Display.safe(label, limit: 32))' changed after you were shown them, so nothing was changed. Run the command again."
+                )
+            }
+            return try body { entries, linked in
+                try saveLinksHeld(label: label, entries: entries, linked: linked)
+            }
+        }
+    }
+
+    /// Forgets every folder account's links and linked mark, keeping the default folder's record.
+    /// `uninstall` calls it after the links are removed, so a file that stays says nothing is linked.
+    public func forgetAllLinks() throws {
+        try locked {
+            let old = try kept()
+            try saveFile(
+                HookRecordFile(
+                    schemaVersion: 1, defaultFolder: old.defaultFolder, links: [], linkedLabels: [])
+            )
+        }
+    }
+
+    /// True once a `link` run finished for this folder account.
+    public func isLinked(_ label: String) -> Bool {
+        loadFile()?.linkedLabels?.contains(label) ?? false
+    }
+
+    /// The links listed for one folder account.
+    public func entries(for label: String) -> [LinkEntry] {
+        listedLinks().filter { location(of: $0)?.folders[1] == label }
+    }
+
+    /// The first shared source that exists in the default folder (by `lstat`, nothing opened) while
+    /// the folder account's list has no link for it, or nil.
+    public func firstUnlinkedSource(for label: String) -> String? {
+        let listed = Set(
+            entries(for: label).map { URL(fileURLWithPath: $0.path).lastPathComponent })
+        return SharedItems.all.first { item in
+            var st = stat()
+            let path = context.defaultClaudeFolder.appendingPathComponent(item.name).path
+            return !listed.contains(item.name) && lstat(path, &st) == 0
+        }?.name
+    }
+
+    /// True when the folder account's list holds the shared settings link.
+    public func sharesSettings(_ label: String) -> Bool {
+        entries(for: label).contains {
+            URL(fileURLWithPath: $0.path).lastPathComponent == SharedItems.settingsName
+        }
+    }
+
+    /// Removes one listed link when it is still a symlink with the recorded target.
+    @discardableResult
+    public func removeLink(_ entry: LinkEntry) -> Bool {
+        guard let spot = location(of: entry) else { return false }
+        return
+            (try? writer.removeLink(folders: spot.folders, name: spot.name, target: entry.target))
+            ?? false
+    }
+
+    /// The shared source folder. Only the default folder is supported in this version, because the
+    /// hook record covers that folder's settings.
+    public static func sharedSource(config: Config, context: ToolContext) throws -> URL {
+        let text = config.sharedSource
+        let expanded =
+            text == "~"
+            ? context.home.path
+            : text.hasPrefix("~/") ? context.home.path + String(text.dropFirst(1)) : text
+        let given = URL(fileURLWithPath: expanded).standardizedFileURL
+        guard given.path == context.defaultClaudeFolder.standardizedFileURL.path else {
+            throw ToolError(
+                "sharedSource must be the default folder in this version, because the hook record covers that folder's settings."
+            )
+        }
+        return context.defaultClaudeFolder
+    }
+
+    /// What the default folder's settings show now against the record: the refusal text, its kind
+    /// (`missing` or `changed`) and whether the settings carry a key. Names only.
+    public func currentState() -> (issue: String?, kind: String?, carriesKey: Bool) {
+        do {
+            let facts = try readSettings()
+            switch status(current: facts) {
+            case .missing: return (Messages.hookRecordMissing, "missing", facts.carriesKey)
+            case .changed: return (Messages.settingsChanged, "changed", facts.carriesKey)
+            case .matches: return (nil, nil, facts.carriesKey)
+            }
+        } catch {
+            return ("settings.json could not be read or parsed.", "changed", false)
+        }
+    }
+
+    /// The record as it stands now, to pass back to `record(_:ifRecordIs:)`.
+    public func snapshot() -> HookRecordSnapshot { HookRecordSnapshot(value: recorded()) }
 
     /// The recorded hooks, or nil when the record is missing or unreadable.
     func recorded() -> DefaultFolderRecord? { loadFile()?.defaultFolder }

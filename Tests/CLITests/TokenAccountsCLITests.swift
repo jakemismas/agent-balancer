@@ -108,7 +108,7 @@ private func oauth() -> String { Canary.realShapeToken() }
         let before = cli.read("config.json")
         for args in [
             ["add", "Bad Label"], ["add", "main"], ["add", "lab", "--kind", "login"],
-            ["add", "lab", "--kind", "folder"], ["add", "lab", "--email", "nope"],
+            ["add", "lab", "--kind", "bogus"], ["add", "lab", "--email", "nope"],
             ["add", "lab", "--ends", "soon"], ["add", "lab", "--ends", "2020-01-01"],
             ["add", "lab", "--ends", "2026-02-30"],
         ] {
@@ -116,8 +116,8 @@ private func oauth() -> String { Canary.realShapeToken() }
             #expect(out.status == 1, "\(args)")
         }
         #expect(cli.read("config.json") == before)
-        let folder = try cli.run(["add", "lab", "--kind", "folder"])
-        #expect(text(folder.stderr).contains("Only the token kind is available in this version."))
+        let bogus = try cli.run(["add", "lab", "--kind", "bogus"])
+        #expect(text(bogus.stderr).contains("The kind must be token or folder."))
         let today = Self.localDay(Date())
         #expect(try cli.run(["add", "lab", "--ends", today]).status == 0)
         let entry = try #require(try config(cli).first { $0["label"] as? String == "lab" })

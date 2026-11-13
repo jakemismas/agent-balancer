@@ -86,6 +86,20 @@ public enum Recipe {
         "CLAUDE_CODE_USE_VERTEX",
     ]
 
+    /// The names a launcher removes, less `CLAUDE_CONFIG_DIR` when the recipe's `env` sets it.
+    public static func unsetNames(env: [String: String]) -> [String] {
+        unsetNames.filter { env[$0] == nil }
+    }
+
+    /// `CLAUDE_CONFIG_DIR='<folder>' `, written in front of `claude` for a folder account. The
+    /// folder must pass the path pattern of docs/ARCHITECTURE.md section 5.2.
+    public static func launchPrefix(configDir: String) throws -> String {
+        guard FolderPaths.isValidPath(configDir) else {
+            throw ToolError("The account folder path cannot be written safely into a command line.")
+        }
+        return "\(ProtectedEnv.configDirVariable)='\(configDir)' "
+    }
+
     /// `--settings '<path>'`. A path with a quote or a control character is refused, because the
     /// string is typed into a shell line.
     public static func launchArgs(settingsPath: String) throws -> String {

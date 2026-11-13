@@ -171,6 +171,45 @@ private func text(_ data: Data) -> String { String(decoding: data, as: UTF8.self
         #expect(!cli.fakeRecord("args.log").contains("--settings"))
     }
 
+    @Test func printCommandRefusesAJobFolderThatIsNotTheDefaultOneForLoginAndToken() throws {
+        let secret = Canary.realShapeToken()
+        let cli = try setUp(token: secret)
+        defer { cli.cleanup() }
+        let before = cli.dataEntries().map(\.path).sorted()
+        let home = cli.home.path
+        let values = [
+            home + "/.agent-balancer/accounts/spare/.claude/jobs/abc",
+            home + "/.claude/jobs/../other", "relative/jobs/abc", home + "/.claude/jobs/a/b",
+        ]
+        for value in values {
+            for label in ["main", "pool-a"] {
+                let out = try cli.run(
+                    ["run", "--print-command", label], env: ["CLAUDE_JOB_DIR": value])
+                #expect(out.status == 1, "\(label) \(value)")
+                #expect(text(out.stdout).isEmpty, "\(label) \(value)")
+                #expect(
+                    text(out.stderr).contains("ambient session folder not default"),
+                    "\(label) \(value)")
+                #expect(!text(out.stderr).contains(secret))
+            }
+        }
+        #expect(cli.dataEntries().map(\.path).sorted() == before)
+        #expect(!cli.fakeRecord("args.log").contains("--settings"))
+    }
+
+    @Test func printCommandPrintsTheLineInADefaultJobFolder() throws {
+        let cli = try setUp(token: Canary.realShapeToken())
+        defer { cli.cleanup() }
+        let job = cli.home.path + "/.claude/jobs/abc123"
+        for label in ["main", "pool-a"] {
+            let out = try cli.run(
+                ["run", "--print-command", label], env: ["CLAUDE_JOB_DIR": job])
+            #expect(out.status == 0, "\(label) \(text(out.stderr))")
+            #expect(text(out.stdout).hasPrefix("claude --settings '"), "\(label)")
+            #expect(!text(out.stdout).contains("CLAUDE_CONFIG_DIR"))
+        }
+    }
+
     @Test func runRefusesAfterASettingsEditUntilAReaderRecordsItAgain() throws {
         let cli = try setUp()
         defer { cli.cleanup() }

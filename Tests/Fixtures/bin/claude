@@ -6,6 +6,13 @@ printf '%s\n' "$*" >> "$dir/args.log"
 env | cut -d= -f1 | sort > "$dir/env-names.txt"
 env | sort >> "$dir/env-full.txt"
 printf '%s\n' "${CLAUDE_CONFIG_DIR-unset}" > "$dir/config-dir.txt"
+printf '%s\n' "${CLAUDE_CONFIG_DIR-unset}" >> "$dir/config-dirs.log"
+
+# A sign-in the test staged: it takes effect when the fake is started for an interactive launch or
+# for `auth login`, the two ways a person signs in.
+sign_in() {
+  if [ -f "$dir/auth-after-sign-in.json" ]; then cp "$dir/auth-after-sign-in.json" "$dir/auth.json"; fi
+}
 
 if [ -f "$dir/delay" ]; then sleep "$(cat "$dir/delay")"; fi
 if [ -f "$dir/stderr.txt" ]; then cat "$dir/stderr.txt" >&2; fi
@@ -26,6 +33,10 @@ case "$1" in
     exit 0
     ;;
   auth)
+    if [ "$2" = "login" ]; then
+      sign_in
+      exit 0
+    fi
     if [ -f "$dir/auth.json" ]; then cat "$dir/auth.json"; fi
     if [ -f "$dir/auth.exit" ]; then exit "$(cat "$dir/auth.exit")"; fi
     exit 0
@@ -73,5 +84,6 @@ case "$1" in
     ;;
 esac
 # An interactive launch: any other arguments end with the status a test chose, 2 by default.
+sign_in
 if [ -f "$dir/default.exit" ]; then exit "$(cat "$dir/default.exit")"; fi
 exit 2

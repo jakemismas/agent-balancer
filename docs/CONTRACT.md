@@ -40,6 +40,16 @@ seconds and wait up to 30 seconds for the pick lock.
 
 A recipe is returned only for an account that passed its checks at pick time.
 
+A typed pick offers a `login` or `token` account only where your own session is shown to run in
+the default folder; from inside another folder it offers folder accounts, each with its own
+`launchPrefix`, or exits 2.
+
+A folder account is offered only when its folder is shown to be its own: the sign-in must report
+an absolute `configDirectory` that is that folder, and a missing or unclear report refuses the
+account. A shared source that appeared after `link` also refuses it until `link --repair`. If repair
+refuses, its message names the item to fix and the command to run again.
+A damaged `links.json` (including a hook record with a malformed hash) stops `link` and `unlink`, which write nothing and name the command that clears it.
+
 `configDir` is not a contract field. A caller never builds an account folder path from anything it
 reads.
 `status --json` shows `configDir` for people to read, not for a caller to use.
@@ -128,3 +138,7 @@ refuse to start a session or change anything inside a Claude Code chat shell. A 
 recipe from `pick` and does not use them. In a chat shell `run`
 writes nothing, starts nothing and prints the line to type in your own terminal,
 `agent-balancer run <label> -- <arguments>`, then exits 1.
+
+Applying a link change (`link`, `link --repair`, `link --accept-source-change`, `unlink`) also needs a
+person at an interactive terminal who types the label (or `accept`) back. Input from a pipe is
+refused before the prompt and nothing changes; `link --dry-run` needs no terminal.

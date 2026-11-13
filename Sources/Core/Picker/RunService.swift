@@ -10,6 +10,8 @@ public struct RunLaunch: Sendable {
     /// The literal launch line: `claude`, `launchArgs`, then the person's arguments. It names the
     /// launch file and never holds a token.
     public let line: String
+    /// The account folder to start `claude` in, for a folder account; nil for the other kinds.
+    public let configDir: URL?
 }
 
 /// The first argument names a `claude` subcommand: `run` starts a session, and such a verb would
@@ -129,7 +131,8 @@ extension PickService {
         // variable cannot change where a started session lands.
         let request = PickRequest(caller: printOnly ? .typed : .launcher)
         if let skip = preSkip(
-            account, request: request, ambientConfigDir: printOnly && ambient.configDir,
+            account, request: request,
+            prefixlessReason: printOnly ? SessionFolder.prefixlessReason(context: context) : nil,
             settingsIssue: seen.issue, carriesKey: seen.carriesKey, runner: runner,
             observations: &observations)
         {
@@ -171,10 +174,19 @@ extension PickService {
         lock.release()
         StatusBuilder.rebuildQuietly(context: context, observations: observations)
 
+        var configDir: URL?
+        var prefix = ""
+        if account.kind == Kind.folder {
+            let dir = try FolderPaths.configDir(context: context, label: label)
+            configDir = dir
+            prefix = try Recipe.launchPrefix(configDir: dir.path)
+        }
         let line =
-            (["claude", launchArgs] + arguments.map(Self.shellQuote)).joined(separator: " ")
+            prefix
+            + (["claude", launchArgs] + arguments.map(Self.shellQuote)).joined(separator: " ")
         return RunLaunch(
-            label: label, leaseId: id, arguments: ["--settings", path] + arguments, line: line)
+            label: label, leaseId: id, arguments: ["--settings", path] + arguments, line: line,
+            configDir: configDir)
     }
 
     /// Drops the launch file and the lease of a run whose session could not be started, so no

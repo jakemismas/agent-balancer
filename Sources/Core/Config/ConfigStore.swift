@@ -47,7 +47,7 @@ public struct ConfigStore: Sendable {
 
     /// Validates, then writes. With `backup`, the file as it was goes to `backups/` first.
     public func save(_ config: Config, backup: Bool = false) throws {
-        try ConfigValidator.validate(config)
+        try ConfigValidator.validate(config, context: context)
         if backup, let old = try reader.read(folders: [], name: Self.fileName) {
             try writer.put(old, folders: ["backups"], name: try backupName())
         }

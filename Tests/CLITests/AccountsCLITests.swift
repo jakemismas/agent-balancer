@@ -416,7 +416,8 @@ private let refusal = "Run this in your own terminal, outside a Claude Code sess
             ["link", "--accept-source-change"],
         ]
         for args in commands {
-            let out = try h.run(args, env: ["CLAUDE_CODE_CHILD_SESSION": ""], stdin: "accept\n")
+            let out = try h.runOnTerminal(
+                args, env: ["CLAUDE_CODE_CHILD_SESSION": ""], typing: "accept\n")
             #expect(out.status == 1, "\(args)")
             #expect(text(out.stderr).contains(refusal), "\(args)")
             #expect(!text(out.stderr).lowercased().contains("unset"), "\(args)")
@@ -452,11 +453,11 @@ private let refusal = "Run this in your own terminal, outside a Claude Code sess
         let added = "added-" + tail(10)
         try h.settings(hookSettings([keep, added]))
 
-        let wrong = try h.run(["link", "--accept-source-change"], stdin: "nope\n")
+        let wrong = try h.runOnTerminal(["link", "--accept-source-change"], typing: "nope\n")
         #expect(wrong.status == 1)
         #expect(try h.run(["doctor"]).status == 1)
 
-        let out = try h.run(["link", "--accept-source-change"], stdin: "accept\n")
+        let out = try h.runOnTerminal(["link", "--accept-source-change"], typing: "accept\n")
         let s = text(out.stdout)
         #expect(out.status == 0, "\(text(out.stderr))")
         #expect(s.contains("added: 1") && s.contains("removed: 1"))
@@ -470,7 +471,7 @@ private let refusal = "Run this in your own terminal, outside a Claude Code sess
         defer { h.cleanup() }
         try FileManager.default.removeItem(at: h.dataRoot.appendingPathComponent("links.json"))
         #expect(try h.run(["doctor"]).status == 1)
-        let out = try h.run(["link", "--accept-source-change"], stdin: "accept\n")
+        let out = try h.runOnTerminal(["link", "--accept-source-change"], typing: "accept\n")
         #expect(out.status == 0, "\(text(out.stderr))")
         #expect(try h.run(["doctor"]).status == 0)
         #expect(h.expectPrivateModes().isEmpty)
@@ -481,7 +482,8 @@ private let refusal = "Run this in your own terminal, outside a Claude Code sess
         defer { h.cleanup() }
         #expect(try h.run(["link"]).status == 1)
         #expect(
-            try h.run(["link", "main", "--accept-source-change"], stdin: "accept\n").status == 1)
+            try h.runOnTerminal(["link", "main", "--accept-source-change"], typing: "accept\n")
+                .status == 1)
     }
 
     // MARK: safety
@@ -499,7 +501,7 @@ private let refusal = "Run this in your own terminal, outside a Claude Code sess
             _ = try h.run(step)
             #expect(h.expectPrivateModes().isEmpty, "after \(step)")
         }
-        _ = try h.run(["link", "--accept-source-change"], stdin: "accept\n")
+        _ = try h.runOnTerminal(["link", "--accept-source-change"], typing: "accept\n")
         #expect(h.expectPrivateModes().isEmpty)
     }
 

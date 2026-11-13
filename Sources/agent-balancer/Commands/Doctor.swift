@@ -60,7 +60,31 @@ struct DoctorCommand: ParsableCommand {
                 print("  " + Shared.line(issue))
             }
             if check.hasError { failed = true }
+            if account.kind == Kind.folder {
+                switch Verifier.linkFacts(context: context, label: account.label).verdict {
+                case .ok:
+                    print("  links: intact")
+                case .notLinked:
+                    print(
+                        "  "
+                            + Shared.line(
+                                Issue(.notLinked, .error, Messages.notLinked(account.label))))
+                    failed = true
+                case .broken(let detail):
+                    print(
+                        "  "
+                            + Shared.line(
+                                Issue(
+                                    .settingsChanged, .error,
+                                    Messages.linkBroken(account.label) + " "
+                                        + Display.safe(detail, limit: 120))))
+                    failed = true
+                }
+                print("  trust: \(Messages.trustStep)")
+                print("  note: \(Messages.notCarriedOver)")
+            }
         }
+        print("session folder: \(SessionFolder.describe(context: context, config: config))")
 
         for label in TokenAccounts.labelsWithoutAccount(context: context, config: config) {
             print(

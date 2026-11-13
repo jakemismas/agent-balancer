@@ -46,7 +46,10 @@ public struct PickService: Sendable {
         let model = PickModel.parse(request.model)
         let started = clock()
         let inherited = AmbientState(context.ambient)
-        let ambientConfigDir = inherited.configDir
+        // Only a typed line is prefix-less for a login or token account, so only it needs proof
+        // that the caller's own folder is the default one (DECISIONS D-83).
+        let prefixlessReason =
+            request.caller == .typed ? SessionFolder.prefixlessReason(context: context) : nil
         let ambientKey = inherited.key
 
         // Settings of the default folder: hook record, and key names (never values).
@@ -62,7 +65,7 @@ public struct PickService: Sendable {
         let runner = ClaudeRunner(context: context)
         for account in config.accounts {
             if let skip = preSkip(
-                account, request: request, ambientConfigDir: ambientConfigDir,
+                account, request: request, prefixlessReason: prefixlessReason,
                 settingsIssue: settingsIssue, carriesKey: carriesKey, runner: runner,
                 observations: &observations)
             {
@@ -116,6 +119,7 @@ public struct PickService: Sendable {
         var leaseId: String?
         var path: URL?
         var typedArgs: String?
+        var typedPrefix = ""
         while true {
             let inputs = config.accounts.map {
                 PickInput(
@@ -134,6 +138,11 @@ public struct PickService: Sendable {
                     settingsPath: LaunchFiles.fileURL(
                         context: context, label: account.label, leaseId: id
                     ).path)
+                if account.kind == Kind.folder {
+                    typedPrefix = try Recipe.launchPrefix(
+                        configDir: FolderPaths.configDir(context: context, label: account.label)
+                            .path)
+                }
             }
             do {
                 path = try LaunchFiles.create(
@@ -163,15 +172,21 @@ public struct PickService: Sendable {
             result.backgroundOnly = request.caller == .typed && ambientKey
         } else if label != nil, let path {
             let settingsPath = path.path
-            result.env = [:]
+            var env: [String: String] = [:]
+            if let label, config.account(label)?.kind == Kind.folder,
+                let dir = try? FolderPaths.configDir(context: context, label: label)
+            {
+                env[ProtectedEnv.configDirVariable] = dir.path
+            }
+            result.env = env
             result.args = ["--settings", settingsPath]
             switch request.caller {
             case .typed:
-                result.launchPrefix = ""
+                result.launchPrefix = typedPrefix
                 result.launchArgs = typedArgs
                 result.backgroundOnly = ambientKey
             case .launcher:
-                result.unsetEnv = Recipe.unsetNames
+                result.unsetEnv = Recipe.unsetNames(env: env)
             }
         }
         if !request.dryRun {
@@ -201,20 +216,7 @@ public struct PickService: Sendable {
 
     /// What the default folder's settings file shows: the hook record state and key names.
     func settingsState() -> (issue: String?, kind: String?, carriesKey: Bool) {
-        let hooks = HookRecord(context: context)
-        do {
-            let facts = try hooks.readSettings()
-            switch hooks.status(current: facts) {
-            case .missing:
-                return (Messages.hookRecordMissing, "missing", facts.carriesKey)
-            case .changed:
-                return (Messages.settingsChanged, "changed", facts.carriesKey)
-            case .matches:
-                return (nil, nil, facts.carriesKey)
-            }
-        } catch {
-            return ("settings.json could not be read or parsed.", "changed", false)
-        }
+        HookRecord(context: context).currentState()
     }
 
     /// Why an account is left out, and the state code when one applies.
@@ -229,21 +231,33 @@ public struct PickService: Sendable {
 
     /// A reason to leave an account out before any probe, or nil.
     func preSkip(
-        _ account: Account, request: PickRequest, ambientConfigDir: Bool, settingsIssue: String?,
+        _ account: Account, request: PickRequest, prefixlessReason: String?, settingsIssue: String?,
         carriesKey: Bool, runner: ClaudeRunner, observations: inout StatusObservations
     ) -> Skip? {
         if request.exclude.contains(account.label) { return Skip("excluded by caller") }
         if let ends = Picker.endsAtEnd(account.endsAt), clock() >= ends {
             return Skip("account ended")
         }
-        guard account.kind == Kind.login || account.kind == Kind.token else {
+        guard Kind.all.contains(account.kind) else {
             return Skip("this account kind is not available in this version")
         }
         if request.fullLogin && account.kind == Kind.token {
             return Skip("token sessions have no connectors")
         }
-        if request.caller == .typed && ambientConfigDir {
-            return Skip("ambient CLAUDE_CONFIG_DIR set")
+        // A folder account's recipe carries its own literal prefix, which beats whatever the
+        // caller's environment holds. A login or token recipe has no prefix.
+        if let prefixlessReason, account.kind != Kind.folder { return Skip(prefixlessReason) }
+        if account.kind == Kind.folder {
+            let outcome = Verifier.failures(
+                context: context, account: account, runner: runner, settingsIssue: settingsIssue,
+                now: clock(), stopAtFirst: true)
+            if let check = outcome.check {
+                observations.auth[account.label] = AuthObservation(check)
+            }
+            if let failure = outcome.failures.first {
+                return Skip(failure.reason, code: failure.code)
+            }
+            return nil
         }
         if let settingsIssue { return Skip(settingsIssue, code: .settingsChanged) }
         if account.kind == Kind.token {

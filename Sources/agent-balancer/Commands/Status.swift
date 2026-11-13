@@ -18,11 +18,12 @@ struct StatusCommand: ParsableCommand {
         let config = try ConfigStore(context: context).loadRequired()
         var observations = StatusObservations()
         if !cached {
-            // Only the login account is checked, with `auth status`. A status never probes and
-            // never runs a command for a token account.
+            // Only a login or folder account is checked, with `auth status`. A status never probes
+            // and never runs a command for a token account.
             let runner = ClaudeRunner(context: context)
             let now = Date()
-            for account in config.accounts where account.kind == Kind.login {
+            for account in config.accounts
+            where account.kind == Kind.login || account.kind == Kind.folder {
                 guard let handler = AccountKinds.handler(for: account.kind) else { continue }
                 let check = handler.check(account: account, runner: runner, now: now)
                 observations.auth[account.label] = AuthObservation(check)

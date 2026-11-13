@@ -88,6 +88,8 @@ public enum Uninstall {
         let links = HookRecord(context: context).removeListedLinks()
         result.linksRemoved = links.removed
         result.linksKept = links.kept
+        // The file may stay (a path that is not a regular file of the user's); it must not claim a link.
+        try? HookRecord(context: context).forgetAllLinks()
 
         let wiped = try TokenAccounts.removeEverything(
             context: context, leaseMinutes: leaseMinutes, snapshot: snapshot, now: now)

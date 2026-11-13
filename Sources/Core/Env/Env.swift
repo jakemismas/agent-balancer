@@ -12,10 +12,14 @@ public enum Env {
 public struct ToolContext: Sendable {
     public let home: URL
     public let ambient: [String: String]
+    /// The user id a folder or link target must belong to. It is the real user's; a test sets
+    /// another to stand in for a foreign owner.
+    public let ownerId: uid_t
 
-    public init(home: URL, ambient: [String: String]) {
+    public init(home: URL, ambient: [String: String], ownerId: uid_t = getuid()) {
         self.home = home
         self.ambient = ambient
+        self.ownerId = ownerId
     }
 
     public static func current() -> ToolContext {

@@ -53,6 +53,25 @@ struct RefreshCommand: ParsableCommand {
         Upkeep.runLocked(context: context, config: config)
         var observations = StatusObservations()
         observations.add(results)
+        // The first refresh after a sign-in fixes the plan the account is expected to keep.
+        var tiers: [String: String] = [:]
+        let runner = ClaudeRunner(context: context)
+        for account in accounts
+        where account.expectedPlanTier == nil
+            && (account.kind == Kind.login || account.kind == Kind.folder)
+        {
+            guard let outcome = results.first(where: { $0.label == account.label }),
+                !outcome.failed, let handler = AccountKinds.handler(for: account.kind)
+            else { continue }
+            let check = handler.check(account: account, runner: runner, now: Date())
+            observations.auth[account.label] = AuthObservation(check)
+            if check.signedIn, !check.issues.contains(where: { $0.code == .wrongAccount }),
+                let tier = check.planTier
+            {
+                tiers[account.label] = tier
+            }
+        }
+        try Shared.recordExpectedTiers(context: context, tiers: tiers)
         Shared.rebuildStatus(context, observations: observations)
         if failed { throw ExitCode.failure }
     }

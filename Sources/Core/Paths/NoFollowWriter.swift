@@ -88,7 +88,9 @@ public struct NoFollowWriter: Sendable {
 
     /// Opens the data root, then each folder below it, with `O_NOFOLLOW | O_DIRECTORY`. A folder
     /// that is a link, not owned by the user, or wider than 0700 is refused.
-    static func openFolder(root: URL, folders: [String], create: Bool) throws -> Int32 {
+    static func openFolder(
+        root: URL, folders: [String], create: Bool, ownerId: uid_t = getuid()
+    ) throws -> Int32 {
         if create { _ = mkdir(root.path, 0o700) }
         var dir = open(root.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
         guard dir >= 0 else {
@@ -96,7 +98,7 @@ public struct NoFollowWriter: Sendable {
             throw ToolError("Refused the data folder: it is missing or is a link.")
         }
         do {
-            try verifyFolder(dir)
+            try verifyFolder(dir, ownerId: ownerId)
             for name in folders {
                 try Paths.checkName(name)
                 if create { _ = mkdirat(dir, name, 0o700) }
@@ -110,7 +112,7 @@ public struct NoFollowWriter: Sendable {
                 }
                 close(dir)
                 dir = next
-                try verifyFolder(dir)
+                try verifyFolder(dir, ownerId: ownerId)
             }
         } catch {
             if dir >= 0 { close(dir) }
@@ -124,9 +126,9 @@ public struct NoFollowWriter: Sendable {
         openat(dir, name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
     }
 
-    private static func verifyFolder(_ fd: Int32) throws {
+    private static func verifyFolder(_ fd: Int32, ownerId: uid_t) throws {
         var st = stat()
-        guard fstat(fd, &st) == 0, st.st_uid == getuid(), st.st_mode & 0o077 == 0 else {
+        guard fstat(fd, &st) == 0, st.st_uid == ownerId, st.st_mode & 0o077 == 0 else {
             throw ToolError("Refused a data folder that is not yours or is wider than 0700.")
         }
     }
@@ -477,6 +479,24 @@ extension NoFollowWriter {
             var st = stat()
             return fstatat(dir, name, &st, AT_SYMLINK_NOFOLLOW) == 0
                 && (st.st_mode & S_IFMT) == S_IFDIR && st.st_uid == getuid()
+        }
+    }
+}
+
+extension NoFollowWriter {
+    /// Creates the symbolic link `<root>/<folders...>/<name>` that points at `target`, an absolute
+    /// path. The folders must already exist and pass the folder checks; a name that is taken, a
+    /// link included, is refused and left as it is.
+    public func makeLink(folders: [String], name: String, target: String) throws {
+        try Paths.checkName(name)
+        guard target.hasPrefix("/"), !target.contains("\0") else {
+            throw ToolError("Refused a link target that is not an absolute path.")
+        }
+        let dir = try NoFollowWriter.openFolder(root: root, folders: folders, create: false)
+        guard dir >= 0 else { throw ToolError("The folder for the link does not exist.") }
+        defer { close(dir) }
+        guard symlinkat(target, dir, name) == 0 else {
+            throw ToolError("Could not create the link \(name).")
         }
     }
 }

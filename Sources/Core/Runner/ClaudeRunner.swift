@@ -126,13 +126,13 @@ public struct ClaudeRunner: Sendable {
     /// Starts `claude` for a person with the terminal attached: standard input, output and error
     /// are the caller's own, the environment is the person's minus the protected group, and the
     /// arguments are passed as an array. Returns the child's exit status, or 128 plus the signal
-    /// number when a signal ended it.
-    public func launchAttached(arguments: [String]) throws -> Int32 {
+    /// number when a signal ended it. A folder account's folder goes in as `CLAUDE_CONFIG_DIR`.
+    public func launchAttached(arguments: [String], configDir: URL? = nil) throws -> Int32 {
         let exe = try locate()
         let proc = Process()
         proc.executableURL = exe
         proc.arguments = arguments
-        proc.environment = ChildEnvironment.person(context: context, configDir: nil)
+        proc.environment = ChildEnvironment.person(context: context, configDir: configDir)
         // Left unset, the three standard streams are the caller's own.
         do {
             try proc.run()

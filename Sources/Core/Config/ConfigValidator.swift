@@ -35,7 +35,7 @@ public enum ConfigValidator {
 
     /// Throws on the first problem found, with a message that names the field and never a value
     /// that could be personal.
-    public static func validate(_ config: Config) throws {
+    public static func validate(_ config: Config, context: ToolContext? = nil) throws {
         guard config.schemaVersion == Config.currentSchema else {
             throw ToolError(
                 "Config schema version \(config.schemaVersion) is not supported. This version reads version \(Config.currentSchema)."
@@ -116,14 +116,13 @@ public enum ConfigValidator {
                 throw ToolError(
                     "Account '\(label)' has an unknown kind. Use login, token or folder.")
             }
-            if account.kind == Kind.folder {
-                throw ToolError(
-                    "Account '\(label)': the folder kind is not available in this version.")
-            }
             guard Role.all.contains(account.role) else {
                 throw ToolError("Account '\(label)' has an unknown role. Use main or pool.")
             }
             if account.kind == Kind.login { logins += 1 }
+            if account.kind == Kind.folder, let context {
+                try FolderPaths.requireUsable(context: context, label: account.label)
+            }
             if let ends = account.endsAt, !isValidDate(ends) {
                 throw ToolError("Account '\(label)': ends must be a date like 2026-12-31.")
             }

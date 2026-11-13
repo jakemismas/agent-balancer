@@ -15,6 +15,12 @@ struct TokenInfo: Sendable {
     var modified: Date?
 }
 
+/// What the status shows for one folder account: the manifest verdict and the folder as `~` text.
+struct FolderInfo: Sendable {
+    var facts: FolderFacts
+    var display: String
+}
+
 /// Merges readings, sign-in checks and in-use sessions into the status document, and rebuilds
 /// `state/status.json` (docs/ARCHITECTURE.md sections 4, 10.1 and 13).
 public enum StatusBuilder {
@@ -23,7 +29,7 @@ public enum StatusBuilder {
     static func build(
         config: Config, readings: [String: Reading], previous: CurrentFile,
         observations: StatusObservations, sessions: SessionsSnapshot, tokens: [String: TokenInfo],
-        launchExists: (LaunchRef) -> Bool, now: Date
+        launchExists: (LaunchRef) -> Bool, now: Date, folders: [String: FolderInfo] = [:]
     ) -> StatusBuild {
         var current = CurrentFile()
         current.prunedAt = previous.prunedAt
@@ -64,7 +70,12 @@ public enum StatusBuilder {
         let loginLabel = config.loginAccount?.label
         for session in sessions.live {
             var labels = Set(session.refs.map(\.label))
-            if labels.isEmpty, let loginLabel { labels = [loginLabel] }
+            // A session in an account's own folder counts toward that account.
+            if let owner = session.folderLabel {
+                labels = [owner]
+            } else if labels.isEmpty, let loginLabel {
+                labels = [loginLabel]
+            }
             for label in labels { live[label, default: []].append(session) }
         }
         var missing: [String: Int] = [:]
@@ -94,7 +105,8 @@ public enum StatusBuilder {
                         config.account(other) == nil ? nil : other
                     },
                     tokenUsable: token?.usable ?? false,
-                    tokenModified: token?.modified, config: config, now: now))
+                    tokenModified: token?.modified, config: config, now: now,
+                    folder: folders[account.label]?.facts))
             if let count = missing[account.label], count > 0 {
                 let text =
                     count == 1
@@ -180,7 +192,7 @@ public enum StatusBuilder {
                     }, unknown: false) : .unknownValue
             let row = Self.row(
                 account: account, config: config, reading: reading, entry: next,
-                evaluation: evaluation, inUse: inUse, now: now,
+                evaluation: evaluation, inUse: inUse, now: now, folder: folders[account.label],
                 showSince: !(next.state == "ok" && next.lastReadingAt == nil))
             rows.append(row)
 
@@ -201,9 +213,17 @@ public enum StatusBuilder {
         }
         var banner: StatusIssue?
         if let issue = settings.issue {
+            // `--all` is named only when a linked folder account is hit too.
+            let folderHit = config.accounts.contains {
+                $0.kind == Kind.folder && folders[$0.label]?.facts.verdict == .ok
+                    && folders[$0.label]?.facts.sharesSettings == true
+            }
+            let missing = issue == "missing"
             banner = StatusIssue(
                 code: StateCode.settingsChanged.rawValue,
-                text: issue == "missing" ? Messages.hookRecordMissing : Messages.settingsChanged)
+                text: folderHit
+                    ? (missing ? Messages.hookRecordMissingAll : Messages.settingsChangedAll)
+                    : (missing ? Messages.hookRecordMissing : Messages.settingsChanged))
         }
         let document = StatusDocument(
             generatedAt: now, banner: banner, accounts: rows,
@@ -236,7 +256,8 @@ public enum StatusBuilder {
 
     static func row(
         account: Account, config: Config, reading: Reading?, entry: CurrentEntry,
-        evaluation e: Transitions.Evaluation, inUse: InUseStatus, now: Date, showSince: Bool
+        evaluation e: Transitions.Evaluation, inUse: InUseStatus, now: Date,
+        folder: FolderInfo? = nil, showSince: Bool
     ) -> AccountStatus {
         func window(_ w: WindowReading?, source: String) -> WindowStatus? {
             w.map {
@@ -282,12 +303,13 @@ public enum StatusBuilder {
         }
         return AccountStatus(
             label: account.label, email: account.email, role: account.role, kind: account.kind,
-            fullLogin: account.kind != Kind.token, configDir: nil, accountKey: account.accountKey,
-            endingSoon: account.endingSoon == true, linked: nil, state: e.state,
+            fullLogin: account.kind != Kind.token, configDir: folder?.display,
+            accountKey: account.accountKey, endingSoon: account.endingSoon == true,
+            linked: folder.map { $0.facts.verdict == .ok }, state: e.state,
             stateSince: showSince ? entry.since : nil, limited: limited,
             error: e.error.map { StatusIssue(code: $0.code.rawValue, text: $0.text) },
             warnings: e.warnings.map { StatusIssue(code: $0.code.rawValue, text: $0.text) },
-            planTier: account.kind == Kind.login ? entry.planTier : nil, weekly: weekly,
+            planTier: account.kind == Kind.token ? nil : entry.planTier, weekly: weekly,
             fable: fable, fiveHour: window(reading?.fiveHour, source: source),
             readingsAge: reading.map { max(0, Int(now.timeIntervalSince($0.readAt))) },
             inUse: inUse, endsAt: account.endsAt, loginExpiresAt: e.loginExpiresAt,
@@ -349,10 +371,19 @@ public enum StatusBuilder {
             }
         }
         let sessions = SessionsReader.read(context: context)
+        var folders: [String: FolderInfo] = [:]
+        for account in config.accounts where account.kind == Kind.folder {
+            guard let dir = try? FolderPaths.configDir(context: context, label: account.label)
+            else { continue }
+            folders[account.label] = FolderInfo(
+                facts: Verifier.linkFacts(context: context, label: account.label),
+                display: context.display(dir))
+        }
         let built = build(
             config: config, readings: readings, previous: previous, observations: observations,
             sessions: sessions, tokens: tokens,
-            launchExists: { LaunchFiles.exists(context: context, ref: $0) }, now: now)
+            launchExists: { LaunchFiles.exists(context: context, ref: $0) }, now: now,
+            folders: folders)
 
         var current = built.current
         let events = EventLog(context: context)

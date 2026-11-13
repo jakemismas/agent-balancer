@@ -547,7 +547,7 @@ final class Counter: @unchecked Sendable {
         folder["hooks"] = hooks
         root["defaultFolder"] = folder
         try JSONSerialization.data(withJSONObject: root).write(to: url)
-        let out = try cli.run(["link", "--accept-source-change"], stdin: "nope\n")
+        let out = try cli.runOnTerminal(["link", "--accept-source-change"], typing: "nope\n")
         #expect(plain(out))
         #expect(!text(out).contains("]0;x"))
         #expect(text(out).contains("No hook record exists"))

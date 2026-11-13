@@ -105,7 +105,7 @@ public enum TokenAccounts {
     public static func removeFiles(
         context: ToolContext, label: String,
         leaseMinutes: Int = PickerSettings().leaseMinutes, snapshot: SessionsSnapshot? = nil,
-        finish: () throws -> Void = {}
+        keepsRecentPicks: Bool = true, finish: () throws -> Void = {}
     ) throws -> Removed {
         let lock = try takeLock(context)
         defer { lock.release() }
@@ -113,8 +113,14 @@ public enum TokenAccounts {
         let leaseStore = LeaseStore(context: context)
         let leases = try leaseStore.current(now: now, leaseMinutes: 525_600)
         let span = Double(max(1, leaseMinutes)) * 60
-        let open = Set(
-            leases.filter { $0.label == label && now.timeIntervalSince($0.at) < span }.map(\.id))
+        // A recent pick's file is kept as a tombstone so its session can still start. A folder
+        // account's files hold no token, so its remove drops them and the leases together.
+        let open =
+            keepsRecentPicks
+            ? Set(
+                leases.filter { $0.label == label && now.timeIntervalSince($0.at) < span }.map(\.id)
+            )
+            : []
         let launch = try LaunchFiles.removeAll(
             context: context, label: label,
             snapshot: snapshot ?? SessionsReader.read(context: context), leased: open)
@@ -141,11 +147,12 @@ public enum TokenAccounts {
     /// lock finds the entry gone and an entry another command saved after `config` was loaded is
     /// kept. `config` gives only the lease span. With no entry, it finishes a remove that stopped
     /// part way.
-    public static func removeAccount(context: ToolContext, label: String, config: Config) throws
-        -> Removed
-    {
+    public static func removeAccount(
+        context: ToolContext, label: String, config: Config, keepsRecentPicks: Bool = true
+    ) throws -> Removed {
         try removeFiles(
-            context: context, label: label, leaseMinutes: config.picker.leaseMinutes
+            context: context, label: label, leaseMinutes: config.picker.leaseMinutes,
+            keepsRecentPicks: keepsRecentPicks
         ) {
             let store = ConfigStore(context: context)
             guard var fresh = try store.load(),

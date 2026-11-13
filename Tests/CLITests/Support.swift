@@ -41,6 +41,38 @@ enum Support {
         return Output(status: task.terminationStatus, stdout: outData, stderr: errData)
     }
 
+    /// Runs with a pseudo-terminal as standard input, so the command sees a terminal. `input` is
+    /// typed once the process is running, then end of input follows.
+    static func runOnTerminal(
+        _ exe: URL, _ args: [String], env: [String: String], input: String = ""
+    ) throws -> Output {
+        var master: Int32 = -1
+        var slave: Int32 = -1
+        guard openpty(&master, &slave, nil, nil, nil) == 0 else {
+            throw MissingBinary()
+        }
+        defer {
+            close(master)
+            close(slave)
+        }
+        let task = Process()
+        task.executableURL = exe
+        task.arguments = args
+        task.environment = env
+        let out = Pipe()
+        let err = Pipe()
+        task.standardOutput = out
+        task.standardError = err
+        task.standardInput = FileHandle(fileDescriptor: slave, closeOnDealloc: false)
+        try task.run()
+        let typed = Array((input + "\u{4}").utf8)
+        _ = Darwin.write(master, typed, typed.count)
+        let outData = out.fileHandleForReading.readDataToEndOfFile()
+        let errData = err.fileHandleForReading.readDataToEndOfFile()
+        task.waitUntilExit()
+        return Output(status: task.terminationStatus, stdout: outData, stderr: errData)
+    }
+
     static func makeTempDir() throws -> URL {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("ab-test-\(UUID().uuidString)")
@@ -129,6 +161,15 @@ struct CLIHome {
         var env = ["HOME": home.path, "PATH": "/usr/bin:/bin"]
         for (k, v) in extra { env[k] = v }
         return try Support.run(exe, args, env: env, stdin: stdin.map { Data($0.utf8) })
+    }
+
+    /// Like `run`, with a terminal as standard input.
+    func runOnTerminal(_ args: [String], env extra: [String: String] = [:], typing: String = "")
+        throws -> Support.Output
+    {
+        var env = ["HOME": home.path, "PATH": "/usr/bin:/bin"]
+        for (k, v) in extra { env[k] = v }
+        return try Support.runOnTerminal(exe, args, env: env, input: typing)
     }
 
     func read(_ relative: String) -> String {

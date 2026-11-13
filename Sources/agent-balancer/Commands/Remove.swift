@@ -22,8 +22,14 @@ struct RemoveCommand: ParsableCommand {
             throw ToolError("No account is labelled '\(Display.safe(label))'.")
         }
         let kind = index.map { config.accounts[$0].kind }
+        if kind == Kind.folder {
+            // Forgotten first: a stop part way leaves a folder that counts as not linked, which
+            // fails closed, never one that looks linked after it is added again.
+            try HookRecord(context: context).saveLinks(label: label, entries: [], linked: false)
+        }
         let removed = try TokenAccounts.removeAccount(
-            context: context, label: label, config: config)
+            context: context, label: label, config: config,
+            keepsRecentPicks: kind != Kind.folder)
         if index != nil {
             print("Removed '\(Display.safe(label))'.")
         } else {
@@ -49,6 +55,12 @@ struct RemoveCommand: ParsableCommand {
         }
         if removed.tokenFile {
             print("Deleted the token file.")
+        }
+        if kind == Kind.folder {
+            let folder = try FolderPaths.configDir(context: context, label: label)
+            print(
+                "The folder \(context.display(folder)) stays, with its login and the links in it. To delete it, delete that folder yourself. To take the links out first, run `agent-balancer unlink \(label)` before you remove the account."
+            )
         }
         if kind == Kind.token || removed.tokenFile {
             print(

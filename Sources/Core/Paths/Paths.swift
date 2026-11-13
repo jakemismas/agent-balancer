@@ -24,6 +24,7 @@ public enum Layout {
     public static let probeFolderPrefix = "p-"
     public static let stateFolders = ["state"]
     public static let pickLockName = "pick.lock"
+    public static let linksLockName = "links.lock"
     public static let leasesName = "leases.json"
     public static let picksLogName = "picks.log"
     public static let settingsSeenName = "settings-seen.json"

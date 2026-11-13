@@ -86,3 +86,28 @@
 - Extend `doctor` with the launch file count, the age of the oldest and a warning for a data
   folder in a synced location.
 - Add `skill/agent-balancer/SKILL.md` and `docs/CONTRACT.md`, the public contract for callers.
+- Add folder accounts: `add --kind folder`, `link <label>` (a dry run, then typed approval),
+  `link --repair`, `unlink`, `link --accept-source-change [--all]`, `verify <label> [--no-reading]`,
+  `login <label>` and `login <label> --browser` for a folder, and the folder recipe
+  (`CLAUDE_CONFIG_DIR` in `env` and `launchPrefix`). A folder must be linked, or `pick` skips it
+  with the reason `not linked` and `status` shows `not_linked`. `pick` and `run` verify a folder
+  before every recipe, `status` fills `linked` and `configDir`, in-use counts the sessions in a
+  folder's own `sessions/`, and a typed `pick` offers a prefix-less account only where the
+  caller's own folder is shown to be the default one.
+- Fail closed for folder accounts: a sign-in that does not report its own folder, or reports
+  one that cannot be matched, is refused by `pick`, `run`, `login` and `verify`; a `[redacted]`
+  marker stands only for text inside one path segment. The config validator refuses a folder
+  that is a link, is wider than 0700 or is not owned by the user. `verify` fails on a shared
+  source that appeared after `link`, and `link --repair` adds it. Changes to `links.json` take a
+  lock and refuse, writing nothing, when part of the file cannot be decoded, including a hook
+  record with a malformed hash; `link --accept-source-change` replaces that record and keeps the
+  links. A `[redacted]` marker in the label segment of a reported folder matches only a label of
+  7 or more characters. `uninstall` clears
+  the links listed in `links.json`.
+- Require an interactive terminal to apply `link`, `link --repair`, `link --accept-source-change`
+  and `unlink`: standard input that is a pipe is refused before the prompt, nothing changes, and
+  `--dry-run` needs no terminal. These commands now refuse, writing nothing, when the account's
+  links changed after the list was shown, and `link --accept-source-change` does the same for the
+  hook record. Repair refusals and the broken-link text name the item to fix, the save-time error
+  for an unusable folder names the fix, the links record refusal lists every step, and `login`
+  for a folder exits 1 on a different account or when the folder cannot be confirmed as its own.

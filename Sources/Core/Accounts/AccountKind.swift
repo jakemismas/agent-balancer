@@ -32,6 +32,7 @@ public enum AccountKinds {
     public static func handler(for kind: String) -> AccountKindHandler? {
         switch kind {
         case Kind.login: return LoginKind()
+        case Kind.folder: return FolderKind()
         default: return nil
         }
     }
@@ -63,6 +64,14 @@ extension AccountKinds {
         switch account.kind {
         case Kind.login: return ProbeContext()
         case Kind.token: return try TokenKind.probeContext(account: account, context: context)
+        case Kind.folder:
+            guard FolderPaths.state(context: context, label: account.label) == .ready else {
+                throw ToolError(
+                    "Account '\(Display.safe(account.label))': its folder is missing or is a link.",
+                    code: .checkFailed)
+            }
+            return ProbeContext(
+                configDir: try FolderPaths.configDir(context: context, label: account.label))
         default:
             throw ToolError(
                 "Account '\(Display.safe(account.label))': this kind is not probed in this version.",

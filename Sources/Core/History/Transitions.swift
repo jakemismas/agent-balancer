@@ -172,6 +172,8 @@ enum Transitions {
         var tokenModified: Date?
         var config: Config
         var now: Date
+        /// What the link manifest says about a folder account. Nil for every other kind.
+        var folder: FolderFacts? = nil
     }
 
     struct Evaluation {
@@ -259,10 +261,24 @@ enum Transitions {
                 add(code, record.text)
             }
         }
-        if let issue = input.settings.issue {
+        let missingRecord = input.settings.issue == "missing"
+        if account.kind == Kind.folder, let facts = input.folder {
+            switch facts.verdict {
+            case .notLinked: add(.notLinked, Messages.notLinked(account.label))
+            case .broken: add(.settingsChanged, Messages.linkBroken(account.label))
+            case .ok:
+                // A folder that shares the settings link is hit by a hook change like every other
+                // account; one that shares none has no hooks to lose.
+                if input.settings.issue != nil, facts.sharesSettings {
+                    add(
+                        .settingsChanged,
+                        missingRecord ? Messages.hookRecordMissingAll : Messages.settingsChangedAll)
+                }
+            }
+        } else if input.settings.issue != nil {
             add(
                 .settingsChanged,
-                issue == "missing" ? Messages.hookRecordMissing : Messages.settingsChanged)
+                missingRecord ? Messages.hookRecordMissing : Messages.settingsChanged)
         }
         if account.kind == Kind.token && !input.tokenUsable {
             add(.tokenMissing, Messages.tokenMissing(account.label))
@@ -273,7 +289,8 @@ enum Transitions {
                 "Logged in as the same account as \(other). Log one folder into its own account.")
         }
         let order: [StateCode] = [
-            .loginRejected, .settingsChanged, .tokenMissing, .wrongAccount, .duplicateLogin,
+            .loginRejected, .settingsChanged, .notLinked, .tokenMissing, .wrongAccount,
+            .duplicateLogin,
             .planChanged, .checkFailed,
         ]
         errors.sort {

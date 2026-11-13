@@ -6,11 +6,17 @@ public struct LiveSession: Equatable, Sendable {
     public var id: String
     public var name: String?
     public var refs: [LaunchRef]
+    /// The folder account whose own folder holds this session's record, or nil for the default
+    /// folder. A session in an account's folder counts toward that account.
+    public var folderLabel: String?
 
-    public init(id: String, name: String? = nil, refs: [LaunchRef] = []) {
+    public init(
+        id: String, name: String? = nil, refs: [LaunchRef] = [], folderLabel: String? = nil
+    ) {
         self.id = id
         self.name = name
         self.refs = refs
+        self.folderLabel = folderLabel
     }
 }
 
@@ -57,10 +63,40 @@ public enum SessionsReader {
         var refs: [LaunchRef]
     }
 
+    /// The default folder and the folder of every folder account, one pass each. A session in an
+    /// account's folder is tagged with that account.
     public static func read(
         context: ToolContext, isAlive: (Int) -> Bool = SessionsReader.processIsAlive
     ) -> SessionsSnapshot {
-        let base = context.defaultClaudeFolder
+        var snapshot = readFolder(context.defaultClaudeFolder, owner: nil, isAlive: isAlive)
+        let labels: [String]
+        do {
+            labels = try accountLabels(context)
+        } catch {
+            snapshot.clean = false
+            return snapshot
+        }
+        for label in labels {
+            guard let dir = try? FolderPaths.configDir(context: context, label: label) else {
+                snapshot.clean = false
+                continue
+            }
+            let more = readFolder(dir, owner: label, isAlive: isAlive)
+            snapshot.clean = snapshot.clean && more.clean
+            snapshot.live += more.live
+            snapshot.named.formUnion(more.named)
+        }
+        return snapshot
+    }
+
+    /// The names under `accounts/` that are valid labels. A missing folder is an empty list.
+    static func accountLabels(_ context: ToolContext) throws -> [String] {
+        let folder = context.dataRoot.appendingPathComponent("accounts", isDirectory: true)
+        return (try NoFollowReader.listOutside(folder) ?? []).filter(ConfigValidator.isValidLabel)
+    }
+
+    static func readFolder(_ base: URL, owner: String?, isAlive: (Int) -> Bool) -> SessionsSnapshot
+    {
         var clean = true
         var entries: [Entry] = []
         var jobs: [Job] = []
@@ -147,7 +183,10 @@ public enum SessionsReader {
             seen.insert(entry.sessionId)
             var all = entry.refs
             for ref in job?.refs ?? [] where !all.contains(ref) { all.append(ref) }
-            live.append(LiveSession(id: entry.sessionId, name: entry.name ?? job?.name, refs: all))
+            live.append(
+                LiveSession(
+                    id: entry.sessionId, name: entry.name ?? job?.name, refs: all,
+                    folderLabel: owner))
         }
         return SessionsSnapshot(clean: clean, live: live, named: named)
     }
@@ -196,5 +235,85 @@ public enum SessionsReader {
             return object.values.flatMap { refs(in: $0, depth: depth + 1) }
         }
         return []
+    }
+}
+
+/// Where the caller's own session runs, judged from variables and file names only, never from a
+/// file's content (DECISIONS D-83). A typed `pick` or `run --print-command` writes a line with no
+/// folder prefix for a `login` or `token` account, and that line is only right in the default
+/// folder.
+public enum SessionFolder {
+    /// True when `path` is exactly `<default folder>/jobs/<one segment>`, judged by the text of the
+    /// path alone: no link is resolved and no file is read.
+    static func isDefaultJobFolder(_ path: String, context: ToolContext) -> Bool {
+        guard path.hasPrefix("/") else { return false }
+        let parts = path.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+        let base = context.defaultClaudeFolder.path.split(separator: "/").map(String.init)
+        guard parts.first == "", parts.count == base.count + 3 else { return false }
+        let rest = Array(parts.dropFirst())
+        guard Array(rest.prefix(base.count)) == base, rest[base.count] == "jobs" else {
+            return false
+        }
+        let segment = rest[base.count + 1]
+        return !segment.isEmpty && segment != "." && segment != ".."
+            && !(parts.last?.isEmpty ?? true)
+    }
+
+    private static func sessionNames(_ folder: URL) -> [String]? {
+        do { return try NoFollowReader.listOutside(folder) ?? [] } catch { return nil }
+    }
+
+    /// Why a prefix-less recipe is not offered, or nil when the caller's folder is shown to be the
+    /// default one or no proof is asked for.
+    public static func prefixlessReason(context: ToolContext) -> String? {
+        let configDir = context.ambient[ProtectedEnv.configDirVariable]
+        let jobDir = context.ambient["CLAUDE_JOB_DIR"]
+        if configDir != nil { return "ambient CLAUDE_CONFIG_DIR set" }
+        if let jobDir {
+            return isDefaultJobFolder(jobDir, context: context)
+                ? nil : "ambient session folder not default"
+        }
+        guard context.inChatShell else { return nil }
+        let notConfirmed = "chat folder not confirmed default"
+        guard let pid = context.ambient["CLAUDE_PID"], !pid.isEmpty,
+            pid.allSatisfy({ $0.isASCII && $0.isNumber })
+        else { return notConfirmed }
+        let name = pid + ".json"
+        let own = context.defaultClaudeFolder.appendingPathComponent("sessions", isDirectory: true)
+        guard let here = sessionNames(own), here.contains(name) else { return notConfirmed }
+        guard let labels = try? SessionsReader.accountLabels(context) else { return notConfirmed }
+        for label in labels {
+            guard let dir = try? FolderPaths.configDir(context: context, label: label),
+                let there = sessionNames(dir.appendingPathComponent("sessions", isDirectory: true)),
+                !there.contains(name)
+            else { return notConfirmed }
+        }
+        return nil
+    }
+
+    /// For `doctor`: `default`, `folder <label>` or `not confirmed`. Labels only, no path.
+    public static func describe(context: ToolContext, config: Config) -> String {
+        if let dir = context.ambient[ProtectedEnv.configDirVariable] {
+            for account in config.accounts where account.kind == Kind.folder {
+                if let own = try? FolderPaths.configDir(context: context, label: account.label),
+                    own.path == dir
+                {
+                    return "folder \(account.label)"
+                }
+            }
+            return "not confirmed"
+        }
+        if let jobDir = context.ambient["CLAUDE_JOB_DIR"] {
+            if isDefaultJobFolder(jobDir, context: context) { return "default" }
+            for account in config.accounts where account.kind == Kind.folder {
+                if let own = try? FolderPaths.configDir(context: context, label: account.label),
+                    jobDir.hasPrefix(own.path + "/jobs/")
+                {
+                    return "folder \(account.label)"
+                }
+            }
+            return "not confirmed"
+        }
+        return prefixlessReason(context: context) == nil ? "default" : "not confirmed"
     }
 }

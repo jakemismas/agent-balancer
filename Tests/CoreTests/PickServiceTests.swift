@@ -574,10 +574,12 @@ import Testing
         #expect(probes() == 2)
     }
 
-    @Test func aFolderAccountIsRefusedInThisVersionSoNoSupervisorRowApplies() throws {
+    @Test func aNeverLinkedFolderIsSkippedAsNotLinked() throws {
         let folder = Account(label: "f", kind: Kind.folder, role: Role.pool)
-        #expect(throws: ToolError.self) {
-            _ = try ConfigValidator.validate(Config(accounts: [folder]))
-        }
+        let (t, service) = try setUp([folder])
+        let result = try service.pick(PickRequest())
+        #expect(result.label == nil)
+        #expect(result.candidates.first?.reason == "not linked")
+        #expect(!t.home.path.isEmpty)
     }
 }

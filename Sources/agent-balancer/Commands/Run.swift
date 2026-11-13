@@ -34,7 +34,8 @@ struct RunCommand: ParsableCommand {
         }
         let status: Int32
         do {
-            status = try ClaudeRunner(context: context).launchAttached(arguments: launch.arguments)
+            status = try ClaudeRunner(context: context).launchAttached(
+                arguments: launch.arguments, configDir: launch.configDir)
         } catch {
             service.abandon(launch)
             throw error

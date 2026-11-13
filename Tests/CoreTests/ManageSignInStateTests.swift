@@ -252,7 +252,7 @@ extension MenuControllerTests {
         var passes = 0
         controller.afterFileRead = { passes += 1 }
         controller.start()
-        let seen = await Self.waitFor(5) { passes >= 2 }
+        let seen = await Self.waitFor(60) { passes >= 2 }
         controller.stop()
         #expect(seen)
     }

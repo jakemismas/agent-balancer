@@ -44,13 +44,22 @@ public struct ReadingStore: Sendable {
     }
 
     /// Merges a probe reading into the stored one and saves it. `callsHook` is true for a token
-    /// account.
+    /// account. A reading with no weekly use, or with no 5-hour use while one is stored, is refused
+    /// with `check_failed` and nothing is saved (docs/ARCHITECTURE.md section 6.2).
     @discardableResult
     public func record(
         _ incoming: Reading, label: String, callsHook: Bool, fable: FableSettings, now: Date
     ) throws -> Reading {
+        let stored = try load(label: label)
+        // This is the one place a probe reading is saved, so the check holds for every caller.
+        guard incoming.sevenDay != nil else {
+            throw ToolError(ProbeReader.noWeekly, code: .checkFailed)
+        }
+        if stored?.fiveHour != nil && incoming.fiveHour == nil {
+            throw ToolError(ProbeReader.noFiveHour, code: .checkFailed)
+        }
         let merged = ReadingMerge.merge(
-            stored: try load(label: label), incoming: incoming, fableSettings: fable, now: now)
+            stored: stored, incoming: incoming, fableSettings: fable, now: now)
         try save(merged, label: label)
         if callsHook { afterProbe(label, merged) }
         return merged

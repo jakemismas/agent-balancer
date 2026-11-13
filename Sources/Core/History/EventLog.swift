@@ -91,6 +91,9 @@ public struct EventLog: Sendable {
         public var cutTail = false
         /// A line in the middle does not parse, a number does not rise, or the header is missing.
         public var damaged = false
+        /// Lines that do not parse, hold a value the tool never writes, or whose number does not
+        /// rise.
+        public var unreadable = 0
     }
 
     static func encoder() -> JSONEncoder {
@@ -137,6 +140,7 @@ public struct EventLog: Sendable {
                 continue
             }
             // An unparseable last line is cut off; anywhere else it marks the file damaged.
+            out.unreadable += 1
             if isLast { out.cutTail = true } else { out.damaged = true }
         }
         if out.recordId == nil && !out.events.isEmpty { out.damaged = true }
@@ -227,9 +231,12 @@ public struct EventLog: Sendable {
     }
 
     /// Drops lines older than `retentionDays`, except the newest line of each label. With 0 days
-    /// only each label's newest line stays. Returns true when the file changed.
+    /// only each label's newest line stays. A rewrite also drops a last line that does not parse,
+    /// and `dropped` hears how many lines went that way. Returns true when the file changed.
     @discardableResult
-    public func prune(retentionDays: Int, now: Date) throws -> Bool {
+    public func prune(
+        retentionDays: Int, now: Date, dropped: (_ count: Int) -> Void = { _ in }
+    ) throws -> Bool {
         guard
             let data = try reader.read(
                 folders: Layout.stateFolders, name: Self.fileName, limit: Self.readLimit)
@@ -245,6 +252,7 @@ public struct EventLog: Sendable {
         guard kept.count != parsed.events.count else { return false }
         parsed.events = kept
         try writer.put(try body(parsed), folders: Layout.stateFolders, name: Self.fileName)
+        if parsed.unreadable > 0 { dropped(parsed.unreadable) }
         return true
     }
 }

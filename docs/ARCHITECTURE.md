@@ -820,7 +820,7 @@ strings only, so editing the script a command points to is not seen.
 | Source | Gives | Cost | When |
 |---|---|---|---|
 | `claude auth status --json` | Logged in or not, email, `planTier`, `subscriptionType`, `loginExpiresAt`, `configDirectory` | Free (no model call) | Every refresh, every folder |
-| One-turn probe | `rate_limit_event.rate_limit_info`: status, `unifiedWindows.five_hour` and `seven_day` utilization (0 to 1 on the wire; a value outside that range is `check_failed`) and `resetsAt` | About $0.008 API-equivalent | Only when the stored reading is older than `picker.maxReadingAgeMinutes`, or on `refresh --force` |
+| One-turn probe | `rate_limit_event.rate_limit_info`: status, `unifiedWindows.five_hour` and `seven_day` utilization (0 to 1 on the wire; a value outside that range, in any window with a valid name, is `check_failed`, 6.2) and `resetsAt` | About $0.008 API-equivalent | Only when the stored reading is older than `picker.maxReadingAgeMinutes`, or on `refresh --force` |
 
 The probe reports utilization as a fraction from 0 to 1. The reader converts it once, at parse
 time, to percent from 0 to 100 with one decimal (0.456 becomes 45.6). Every stored reading, every
@@ -852,8 +852,18 @@ claude -p "Reply with the single word OK." --model haiku --tools "" --disallowed
   does not know the flag, the row shows `check_failed` with the scrubbed error text; the probe
   never falls back to normal mode silently. With `safeMode` off, each probe runs the folder's
   hooks once, and `doctor` and the README privacy list say so.
-- A probe reply counts as a reading only when at least one `rate_limit_event` carries a window
-  with a `utilization` value. Events with no such value give `check_failed`, never an empty reading.
+- A probe reply counts as a reading only when it carries a `seven_day` usage value, and also a
+  `five_hour` usage value when it names `five_hour` (an entry with or without a value) or the
+  stored reading holds one. Otherwise it gives `check_failed` (the reply carried no weekly, or
+  no 5-hour, usage) and nothing is stored. The reason: the merge would keep the stored copy of the
+  missing window under the new reading's `readAt`, and `pick` would judge the account, the main
+  account included, on old use as if it were current. A window entry with no `utilization` key
+  adds no value, and a reply with no usage value at all gives `check_failed`, never an empty
+  reading. The reading cache checks the weekly part and the stored 5-hour part again where every
+  probe reading is saved, so no path records a probe reading without them. So once a `five_hour`
+  is stored, a reply without one is refused: if the service stops sending it for an account,
+  every probe of that account gives `check_failed` until its stored reading is deleted (`remove`
+  deletes it).
 - Fable probe check, recorded on 2026-11-10 with the exact probe form above and a Fable model. A
   first, cold run with a 0.05 USD cap spent 0.099 USD in about 4 seconds and was cut off
   (`error_max_budget_usd`, no `rate_limit_event`, so no reading). A second run with a 1.00 USD cap
@@ -867,12 +877,25 @@ claude -p "Reply with the single word OK." --model haiku --tools "" --disallowed
   as it is until they are.
 - A reset time from the probe must lie within the window it belongs to, measured from the time of
   the probe: no more than 300 seconds before it, and no more than one window length plus 300
-  seconds after it. The window length is 5 hours for `five_hour`, 7 days for `seven_day` and the
-  Fable window, and 31 days for a window name the tool does not know. A reset time that is
-  outside that range, is not a number or a date, or is a boolean gives `check_failed`, like a
-  usage value outside 0 to 1, and nothing is stored. A missing or null reset time is stored as
-  unknown. Numbers above 100 billion are read as milliseconds. The same range of years, 2000
-  to 2200, applies to dates read from `auth status`.
+  seconds after it. It is stored rounded to the minute, and both the time the probe gave and the
+  rounded time must lie in that range, so rounding never widens it: a time even 1 second outside
+  is refused, never rounded back in. The window length is 5 hours for `five_hour`; 7 days for
+  `seven_day`, the Fable window and any other name that starts with `seven_day`; and 31 days for
+  any other name. A reset time that is outside that range, is not a number or a date, or is a
+  boolean gives `check_failed`, like a usage value outside 0 to 1, and nothing is stored. A
+  missing or null reset time is stored as unknown. Numbers above 100 billion are read as
+  milliseconds. The same range of years, 2000 to 2200, applies to dates read from `auth status`.
+- These checks apply to every window entry with a valid name and a `utilization` key, whatever
+  its name and whether or not the cap below keeps it: a usage value that is null, not a number or
+  outside 0 to 1, or a reset time that is malformed or outside its window's range, gives
+  `check_failed` for the whole reply, and nothing is stored. The reason: the parser fails closed,
+  and a reply that carries a value the tool cannot trust does not vouch for its other values. The
+  cost: if the service starts sending such a value in any window, every account's probe gives
+  `check_failed` until the parser changes, and no account is picked on a guess meanwhile.
+- A reply keeps `five_hour`, `seven_day` and the Fable window, which never count toward a cap, and
+  at most 14 other window names: the first in name order across the whole reply, so the choice
+  never depends on the order the reply lists them in. Every entry is checked as above before the
+  cap applies, so a bad value in a name past the cap still gives `check_failed`.
 - A lock file per account folder stops two probes of one account at once. A caller that finds the
   lock held waits up to its deadline and then uses the stored reading. `refresh` and `pick` skip a
   probe when the stored reading is younger than `picker.maxReadingAgeMinutes`, unless
@@ -924,21 +947,59 @@ case (not eligible), never as zero use.
 
 Readings merge by one rule: within one window (the same `resetsAt`, to the minute) stored use
 never goes down, so each new reading is merged as the maximum for that window. A reading that
-claims a later `resetsAt` before the stored reset time has passed is discarded. A stored
-`resetsAt` further ahead than its window length plus 10 minutes (a file from before the bounds of
-6.2, or an edited one) is not trusted, so the next valid reading replaces it. A stored file that
-does not decode as a whole reads as no reading, and the next good probe writes a new one; a stored
-reset time that does not decode reads as unknown, and a stored use outside 0 to 100 is dropped. A reading whose
+claims a later `resetsAt` before the stored reset time has passed is discarded. Whether a stored
+reset time has passed is judged at the new reading's own time (its `readAt`, the clock read when
+its probe ended), never at a later read of the clock. So a reset time
+decides how long a stored use holds, and a fake one that passes the range of 6.2 holds its window
+the same way: the merge keeps the stored use, and discards every reading with another reset
+time, until that reset time has passed. For `five_hour`, `seven_day` and the Fable window, the
+windows a pick reads, a held window keeps its reset time but never less use than the newest reply
+gives: a higher use in a discarded reading still raises it, with that reading's `readAt`, so a
+hold can make an account look busier than the reply says, never freer. When one reply names one
+of these windows more than once, its entries merge by the same rule, and because they were read
+at one moment the highest use among them stands, in any order, with one exception, also in any
+order: an entry whose reset time had passed when the reply was read is left out when another
+entry's reset time is later or unknown, because its window had ended, so its use never counts
+toward the window after it. The range caps the hold at
+one window length plus 300 seconds after the probe that reported it: 5 hours 5 minutes for
+`five_hour`, 7 days 5 minutes for `seven_day`, the Fable window and any other name that starts
+with `seven_day`, and 31 days 5 minutes for any other name. From that time on,
+the next reading with a later reset time replaces it. A stored `resetsAt` more than its window
+length plus 600 seconds after the new reading's time (a file from before the bounds of 6.2, an
+edited one, or a reading taken while the clock ran ahead) is not trusted, so the next valid
+reading replaces it at once. A stored file that does not decode as a whole reads as no reading,
+and the next good probe writes a new one; a stored reset time that does not decode reads as
+unknown, and a stored use outside 0 to 100 is dropped. A reading whose
 `resetsAt` has passed, that has no weekly value, or that is dated more than 60 seconds in the
 future counts as stale: it is refreshed first, and the account is skipped with
 `window reset, refresh failed` or `no weekly reading` if that refresh fails. A `pick` forces the
 probe for a candidate whose stored reading has a passed reset time, even when it is younger than
 `picker.maxReadingAgeMinutes`. For a `main`
 account a launch is allowed only on a probe reading from the current window no older than
-`picker.maxReadingAgeMinutes`. The pre-pick refreshes run in parallel and `pick` answers within
-`picker.deadlineSeconds` (default 45); a candidate whose refresh fails or misses the deadline is
-skipped with `check_failed`; a probe left running past the deadline ends on its own and `pick`
-does not wait for it.
+`picker.maxReadingAgeMinutes`. The pre-pick refreshes run in parallel (at most 8 probes at once,
+6.4) and `pick` answers within `picker.deadlineSeconds` (default 45); a candidate whose refresh
+fails with `check_failed`, or whose plain probe is still running at the deadline, is skipped as
+stale and recorded as `check_failed`, one whose probe had not begun by then is judged on its
+stored reading, with nothing recorded for it, and one whose Fable probe alone is still running is
+recorded by its plain step (6.4). `pick` does not wait for a probe left running past the
+deadline, and its process ends with its answer, so what that probe reads is saved only if the
+probe ends before that process does.
+
+Stored window names that no reading reports are evicted, and the rule is the same for every name.
+When a probe reading is merged before it is saved, each stored window that the reading does not
+carry is dropped when its `readAt` is more than 32 days before the new reading's time, or more
+than 60 seconds after it (a clock that moved back). A window's `readAt` is never later than the
+last reading that carried it, so a name that no reading has reported for more than 32 days goes
+at the next saved reading; and 32 days is longer than any window a reset time may span (31 days
+plus 300 seconds), so a window whose reset time may still be ahead stays. A dropped name that a
+later reading reports again starts over. Then at most 14 stored names other than `five_hour` and
+`seven_day` stay: those the new reading carries first, then the newest `readAt`, then name order.
+Every recorded probe reading carries `seven_day`, and carries `five_hour` whenever the stored
+reading holds one (6.2), so neither is ever a name the reading leaves out, and eviction never
+removes them; the merge also keeps them itself, so a later change to the probe rule cannot turn a
+picker refusal into a pick. Nothing is evicted when a file is loaded, after a failed probe, or
+when only the Fable probe time is saved, and eviction never touches the Fable reading, the
+reading's own `readAt` or the file format.
 
 ### 6.4 Refresh cadence and daily cost
 
@@ -954,6 +1015,23 @@ than `picker.maxReadingAgeMinutes`, so real cost can be lower than the table.
 | On demand only (about 20 launches a day) | about 20 | about $0.16 |
 
 The default is 60 minutes in the background plus the on-demand refresh before `pick`.
+
+One refresh runs at most 8 probes at once (`Refresher.maxProbesAtOnce`). Each probe is its own
+`claude` process, so a long account list would otherwise start that many processes together; 8
+is above the 5 accounts this table assumes, so a usual refresh or pick never waits. With more
+accounts, the rest wait for a free slot and each is probed as soon as one frees, so every account
+is still read. Each refresh starts at a randomly chosen account and takes the rest in list order,
+going back to the top after the last, so when more accounts are slow than there are slots, the
+accounts left waiting change from one refresh to the next instead of always being the last ones
+in the config. When a pick's deadline passes, no probe begins after it, plain or Fable. An account
+whose probe has not begun, still waiting for a slot or for its lock, is not probed, and nothing
+is recorded for it: only a probe that ran changes an account's status, so its status, events and
+history keep what they showed, and the pick judges it on its stored reading (a stale one is
+skipped with `stale reading, refresh failed`). An account whose plain probe is still running at
+the deadline is recorded as `check_failed`. An account whose Fable probe is still running is
+recorded by its plain step alone, a fresh stored reading or a plain probe that finished. `pick`
+does not wait for that Fable probe, and its process ends with its answer, so what the Fable probe
+reads is saved by the usual rules only if the probe ends before that process does.
 
 The menu app runs `agent-balancer refresh` at launch when `status.json` is missing or older than
 `refresh.backgroundMinutes`, then on its own timer at that interval, and runs
@@ -1177,7 +1255,7 @@ short scrubbed text the menu shows as is.
 | `settings_changed` | a link of a folder account is broken, or a hook entry recorded at link time is gone or changed (5.7); or, after `init`, the hook record is missing or unreadable (4A.5); or, for `run`, the saved verdict is missing or older than the file | error on every affected account, shown as one banner | "Settings changed. Run `agent-balancer link --accept-source-change` in Terminal." For `run`, with no verdict that matches the file's stamp: "Settings changed since the last check. Run `agent-balancer doctor` in Terminal." |
 | `plan_changed` | `planTier` differs from `expectedPlanTier` | error | "Plan is max_5x, expected max_20x." |
 | `account_ended` | `endsAt` passed; or, for an account marked `endingSoon`, the first reading where `planTier` differs from `expectedPlanTier` or is missing. Once ended that way it stays ended until the flag is cleared (`config set <label> ending-soon false`, `ends <date>` or `ends none`) | ended | "Account ended." |
-| `check_failed` | probe timeout, no `rate_limit_event`, unparsable output, `claude` missing | error | "Check failed: probe timed out after 60 s." |
+| `check_failed` | probe timeout, no `rate_limit_event`, unparsable output, `claude` missing, a reply with no weekly use (or no 5-hour use when one is named or stored), a bad value in any window with a valid name | error | "Check failed: probe timed out after 60 s." |
 | `limited` | probe status not `allowed`, or weekly or 5-hour use at or above `limitedAtPercent`; a full Fable sub-cap alone is the warning below | limited | "Limited until Wed 4:00 PM." |
 | `fable_limited` (warning) | Fable use is readable and at or above `limitedAtPercent` of the Fable cap; only Fable picks skip the account | ok | "Fable limited until Thu 9:00 AM." |
 | `login_expiring` (warning) | `loginExpiresAt` within 7 days; for a token account within 14 days of its estimated end (4A.4) | ok | "Login expires Dec 7." |
@@ -1438,6 +1516,25 @@ The record of state changes. It answers "what changed since I last looked": the 
   empty record). `gap` is true when `--after` is below `oldestSeq - 1` (an event after the
   caller's cursor was pruned) or above `cursor`; the caller then reads `status --json` once and
   carries on from the new `cursor`. `--after 0` on a record that still holds seq 1 is not a gap.
+- An event is written at least once for a change the next rebuild can still see, such as one in
+  the config or a stored reading. If `state/current.json` cannot be saved after the events were
+  (section 13), the next rebuild compares with the old file, finds those changes again and writes
+  them again with new `seq` numbers. A repeat has a higher `seq`, the `at` of the rebuild that
+  wrote it, and the same `label`, `type`, `code`, `window`, `resetsAt` and `notBefore` as the
+  first copy; only its `text` can read differently. A caller reads each event as the state it
+  reports for its label (limited until a time, an error code, recovered, added, removed), never
+  as a count, so a repeat restates what the first copy reported and applying it again changes
+  nothing. A change only a probe or a sign-in check saw (a probe error, a rejected login, or a
+  recovery from one) is kept only in `current.json`, so after that file failed to save, or the
+  events step failed, it is seen again only when a later probe or sign-in check of that account
+  sees it, and until then `status --json` holds the state of the last rebuild that saved
+  `current.json`. If the state has gone back to what the old file holds by the time a rebuild
+  could see a change again, that rebuild finds no change and writes nothing: the record keeps a
+  change the state no longer shows (a `recovered` for an account that is in error again, or an
+  `error` for one that recovered) until the label's next event, and when the events step itself
+  failed, the change gets no event at all. So after a failed save a label's last event and
+  `status --json` can disagree, and either can be behind until the label's next event; `pick`
+  decides from live checks either way.
 - Each answer carries `recordId`, a random id made when `events.jsonl` is created: `r-` and six
   lowercase hex digits. A caller that sees a `recordId` it does not know treats that as a gap too:
   the record was started over.
@@ -1475,11 +1572,27 @@ time, for a chart or a burn-rate estimate.
 
 The rebuild step appends one line for an account when a number, a reset time or the state differs
 from that account's last line, at most one line per 15 minutes unless the state changed, so a gap
-means nothing was read. `--since` defaults to 24 hours back and `--limit` to 500 readings per
-account (the newest ones, listed oldest first). `--since` takes an ISO 8601 time or a span such as
+means nothing was read. An append also compares the line with the last line in the account's
+file and writes nothing when the account, the numbers, the reset times, the state and the source
+are the same, so appends are idempotent: a rebuild that runs again after a failed step (section
+13) never writes a reading twice. `--since` defaults to 24 hours back and `--limit` to 500
+readings per account (the newest ones, listed oldest first). `--since` takes an ISO 8601 time or a span such as
 `30m`, `24h` or `7d`. Lines older than `history.retentionDays` (default 35, five weekly windows)
-are dropped (section 13). With 0 no history line is kept and `history` answers with empty lists;
-the events record then keeps only each label's newest line.
+are dropped (section 13). Retention counts back from the earlier of the clock and the newest
+stored reading of a configured account that has a `five_hour` or `seven_day` reset time at most
+270 seconds before the reading's own time (section 13). Unless retention is 0 (below), nothing is
+pruned while no configured account has such a reading, so a clock moved forward prunes nothing by
+itself. A reading taken while the clock runs ahead is dated ahead too and moves the cutoff ahead
+by as much as the clock was ahead, at most 5 hours 5 minutes when its `five_hour` reset time is at
+most 270 seconds before its own time and at most 7 days 5 minutes otherwise (section 13). So a
+line younger than `history.retentionDays` minus 7 days 5 minutes always stays, whether this
+version or an earlier one saved the reading file: with the default 35 days, every line from the
+last 27 days 23 hours 55 minutes. The cost: while the newest reading of every configured account
+has no such reset time, no line ages out, and a reading whose such reset times are all more than
+270 seconds before its own time does not count, though the range of 6.2 allows one up to 300
+seconds before it. With 0 no history line is written, and the next prune drops every one without
+waiting for such a reading, because it counts back from no time; `history` then answers with
+empty lists, and the events record keeps only each label's newest line.
 
 ## 11. Menu bar
 
@@ -1814,6 +1927,14 @@ until `status.json` has been renamed into place, so rebuilds run one at a time f
 A rebuild that waits more than 30 seconds for the lock writes neither file and logs it. The
 history step runs last, after the command's own result is written and printed; a failure in it is
 logged and never changes that output or the exit code, so a damaged record cannot stop a `pick`.
+When the events step fails, the rebuild keeps the old `current.json`, so the next rebuild finds
+the same changes again (a change only a probe or a sign-in check saw, only when a later probe or
+sign-in check of that account sees it; 10.3); the history step still runs, and because an append
+that matches the file's last line writes nothing (10.4), the rerun writes no history line twice.
+If `current.json` cannot be written after the events were saved, the next rebuild writes those
+events again (with the same exception). If the state has gone back by the time a rebuild could
+find a change again, it writes nothing: the history, and the events record unless its own step
+failed, keep a change the state no longer shows until the label's next change (10.3).
 A last line that does not parse is cut off under the lock and logged. An events line in the middle
 that does not parse, or whose `seq` does not rise above the previous one, marks the file damaged:
 it is written aside under a new name, a new record with a new `recordId` starts, and `seq`
@@ -1822,15 +1943,54 @@ label pattern of 5.2, `\A[a-z0-9][a-z0-9-]{0,31}\z`; a type, code or window outs
 `seq` below 1 or at or above 10^12) counts as a line that does not parse, and an events
 header whose `recordId` is not `r-` and six lowercase hex digits counts as a missing header. A
 history line in the middle that does not parse, or whose state or source the tool never writes,
-is skipped. A `state/current.json` that does not parse, or holds a label, state, code, window,
-plan tier or date the tool never writes, is logged and started over. Lines older than
-`history.retentionDays` (default 35)
-are dropped by rewriting the file through the same no-follow writer, at most once a day; the
-newest events line of each label is always kept. The files hold labels, percentages, times, states
-and scrubbed texts only: no email, no organization id, no session name, no path. With five
-accounts and the 15 minute floor of 10.4 they stay under about 5 MB. The rebuild after
-`remove <label>` writes an `account_removed` event and leaves that label's history to age out.
-`uninstall` removes the files with the rest of `state/`.
+is skipped by readers. A rewrite of a history file (to cut its last line, or to prune it) drops
+every such line and logs how many it dropped, never their text: such a line has no time that
+retention could age out, and its content is unknown. A prune of the events record that drops a
+last line that does not parse logs it the same way. A `state/current.json` that does not parse,
+or holds a label, state, code, window, plan tier or date the tool never writes, is logged and
+started over. Lines older than `history.retentionDays` (default 35) are dropped by rewriting the
+file through the same no-follow writer, at most once a day; the newest events line of each label
+is always kept. Retention counts back from the earlier of the clock and the newest stored reading
+of a configured account that has a `five_hour` or `seven_day` reset time at most 270 seconds
+before the reading's own time, and every history file and the events record count back from that
+one time. It never counts back from the clock alone or from any other reading: with a retention
+above 0, while no configured account has a stored reading that loads and has such a reset time,
+nothing is pruned, and a prune that falls due waits for the first rebuild that has one. With
+`history.retentionDays` 0 a prune counts back from no time (every history line goes, and the
+events record keeps each label's newest line), so it does not wait. So the history of a removed or
+renamed label, or of an account whose probes keep failing, ages out once both the clock and the
+newest such reading of a configured account are more than `history.retentionDays` past its last
+line; while no configured account gets a newer one, the time retention counts back from never
+passes that reading. The cost: while the newest reading of every configured account has no such
+reset time, no line ages out, a removed label's included. A clock moved forward prunes nothing by
+itself. A reading taken while the clock runs ahead is dated ahead too and moves the cutoff ahead
+by as much as the clock was ahead, until the clock is set right. The reset times bound that. The
+service puts a window's reset time at most one window length after the real time, a reading
+keeps only reset times that probe replies gave, and a reading file stores each rounded to the
+nearest minute, so at most 30 seconds after the time the service gave; this version and every
+earlier one round the same way. A reading that counts is dated at most 270 seconds after such a
+stored time, so at most 300 seconds after the time the service gave: at most 5 hours 5 minutes
+ahead when its `five_hour` reset time is at most 270 seconds before its own time, and at most 7
+days 5 minutes ahead otherwise. So for every reading file this version or an earlier version
+saved, a line younger than `history.retentionDays` minus 7 days 5 minutes always stays: with the
+default 35 days, every line from the last 27 days 23 hours 55 minutes. An edited reading file is
+bounded only by what the edit wrote: the history and events files are information, never
+authority (section 14, T18). The 270 seconds are the 300 of the range of 6.2 less the 30 that
+rounding can add, because an earlier version checked only the minute it stored, so its file can
+hold a reading dated 300 seconds after that minute and 330 seconds after the time the service
+gave. The cost: a reading this version records keeps no `five_hour` or `seven_day` reset time
+more than 300 seconds before its own time (the range refuses an earlier one in a reply, and the
+merge, which judges a stored reset time at the new reading's own time, the clock read when its
+probe ended and never a later one, keeps a stored one over the reply's only while it is still
+ahead of that time or not earlier than the reply's), yet one whose such reset times are all more
+than 270 seconds before its own time does not count, so retention counts back from another
+reading that does or waits for one, which never prunes more. A clock moved back prunes only lines
+older than its own cutoff, and a prune time saved more than 60 seconds ahead of the
+clock counts as due, so pruning does not stop until the clock catches up. The files hold labels,
+percentages, times, states and scrubbed texts only: no email, no organization id, no session
+name, no path. With five accounts and the 15 minute floor of 10.4 they stay under about 5 MB.
+The rebuild after `remove <label>` writes an `account_removed` event and leaves that label's
+history to age out. `uninstall` removes the files with the rest of `state/`.
 
 ## 14. Threat model
 
@@ -1996,7 +2156,11 @@ public copy.
 8. **What changed:** `agent-balancer events --json --after <cursor>`. Keep the `cursor` from each
    call and pass it back, and call again while `more` is true. A `recordId` you have not seen
    means the record was started over: treat it as a gap. On `gap: true`, read `status --json`
-   once and carry on from the new `cursor`. `status --json` carries `stateSince` and `limited`
+   once and carry on from the new `cursor`. An event can come more than once, with a new `seq`
+   (10.3): read each event as the state it reports for its label, never as a count, so a repeat
+   changes nothing. After a failed save an event can also be missing, and a label's last event
+   and `status --json` can disagree; either can be behind until the label's next event, and
+   `pick` decides from live checks either way. `status --json` carries `stateSince` and `limited`
    (`since`, `until`, `window`), and `agent-balancer history --json --label <label>` gives the
    readings over time.
 9. **Information is not authority:** decide a launch from `pick`, never from `events`, `history`

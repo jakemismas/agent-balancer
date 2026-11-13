@@ -14,6 +14,19 @@ sign_in() {
   if [ -f "$dir/auth-after-sign-in.json" ]; then cp "$dir/auth-after-sign-in.json" "$dir/auth.json"; fi
 }
 
+# A probe's start and end, appended in the order they happen, so a test can tell which probes
+# ran at the same time. A token account probe is named by its token file, any other by its pid.
+if [ "$1" = "-p" ]; then
+  span="$$"
+  prev=""
+  for a in "$@"; do
+    if [ "$prev" = "--settings" ]; then span="$(basename "$a" .json)"; fi
+    prev="$a"
+  done
+  printf 'start %s\n' "$span" >> "$dir/spans.log"
+  trap 'printf "end %s\n" "$span" >> "$dir/spans.log"' EXIT
+fi
+
 if [ -f "$dir/delay" ]; then sleep "$(cat "$dir/delay")"; fi
 if [ -f "$dir/stderr.txt" ]; then cat "$dir/stderr.txt" >&2; fi
 
@@ -56,6 +69,8 @@ case "$1" in
     pwd >> "$dir/cwd.log"
     stat -f %Lp . >> "$dir/cwd-mode.log"
     printf '%s\n' "$model" >> "$dir/models.log"
+    # A probe with one model can take longer than the others.
+    if [ -f "$dir/delay-$model" ]; then sleep "$(cat "$dir/delay-$model")"; fi
     if [ -f "$dir/unknown-option" ]; then
       echo "error: unknown option '--safe-mode'" >&2
       exit 1

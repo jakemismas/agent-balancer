@@ -57,6 +57,15 @@ public struct HistoryLine: Codable, Equatable, Sendable {
     }
 }
 
+/// What one `ReadingHistory.append` did.
+public struct HistoryAppend: Equatable, Sendable {
+    /// False when the file's last line already held this reading for the same account: the same
+    /// numbers, reset times, state and source.
+    public var wrote: Bool
+    /// Lines that did not parse, dropped because the file had to be rewritten.
+    public var dropped: Int
+}
+
 /// The readings over time. The status rebuild is the only writer and holds the history lock.
 public struct ReadingHistory: Sendable {
     /// At least this long between two lines of one account unless its state changed.
@@ -76,43 +85,55 @@ public struct ReadingHistory: Sendable {
 
     static func fileName(_ label: String) -> String { label + ".jsonl" }
 
-    /// The lines that parse, oldest first, and whether the file needs its tail cut.
-    static func parse(_ data: Data?) -> (lines: [HistoryLine], cutTail: Bool) {
-        guard let data, !data.isEmpty else { return ([], false) }
+    /// The lines that parse, oldest first; whether the file needs a rewrite because its last line
+    /// does not parse or does not end in a newline; and how many lines do not parse.
+    static func parse(_ data: Data?) -> (lines: [HistoryLine], cutTail: Bool, unreadable: Int) {
+        guard let data, !data.isEmpty else { return ([], false, 0) }
         var parts = String(decoding: data, as: UTF8.self).components(separatedBy: "\n")
         let tail = parts.removeLast()
         var cut = !tail.isEmpty
+        if !tail.isEmpty { parts.append(tail) }
         var lines: [HistoryLine] = []
+        var unreadable = 0
         let decoder = EventLog.decoder()
         for (index, part) in parts.enumerated() where !part.isEmpty {
             if let line = try? decoder.decode(HistoryLine.self, from: Data(part.utf8)),
                 line.isSound
             {
                 lines.append(line)
-            } else if index == parts.count - 1 && tail.isEmpty {
-                cut = true
+            } else {
+                unreadable += 1
+                if index == parts.count - 1 { cut = true }
             }
         }
-        return (lines, cut)
+        return (lines, cut, unreadable)
     }
 
-    /// Appends one line to a label's file. A last line that does not parse is cut off first.
-    /// Returns true when it had to be cut.
+    /// Appends one line to a label's file, unless the file's last line already holds the same
+    /// reading for the same account, so a rebuild that runs again after a failed step never
+    /// writes a line twice. A last line that does not parse is cut off first: the file is
+    /// rewritten with the lines that parse, and the result counts the lines that did not.
     @discardableResult
-    public func append(_ line: HistoryLine, label: String) throws -> Bool {
-        guard ConfigValidator.isValidLabel(label) else { return false }
+    public func append(_ line: HistoryLine, label: String) throws -> HistoryAppend {
+        guard ConfigValidator.isValidLabel(label) else {
+            return HistoryAppend(wrote: false, dropped: 0)
+        }
         let name = Self.fileName(label)
-        let encoded = try EventLog.encoder().encode(line) + Data([0x0A])
         let data = try reader.read(folders: Self.folders, name: name, limit: Self.readLimit)
         let parsed = Self.parse(data)
+        let repeated =
+            parsed.lines.last.map {
+                $0.accountKey == line.accountKey && $0.signature == line.signature
+            } ?? false
+        let encoded = repeated ? Data() : try EventLog.encoder().encode(line) + Data([0x0A])
         if parsed.cutTail {
             var whole = Data()
             for kept in parsed.lines { whole += try EventLog.encoder().encode(kept) + Data([0x0A]) }
             try writer.put(whole + encoded, folders: Self.folders, name: name)
-            return true
+            return HistoryAppend(wrote: !repeated, dropped: parsed.unreadable)
         }
-        try writer.append(encoded, folders: Self.folders, name: name)
-        return false
+        if !repeated { try writer.append(encoded, folders: Self.folders, name: name) }
+        return HistoryAppend(wrote: !repeated, dropped: 0)
     }
 
     /// The saved lines of one label, oldest first. A missing file is an empty list.
@@ -133,8 +154,16 @@ public struct ReadingHistory: Sendable {
         }
     }
 
-    /// Drops lines older than `retentionDays` from every file. With 0 days every line goes.
-    public func prune(retentionDays: Int, now: Date) throws {
+    /// Drops lines older than `retentionDays` before `now` from every file, so every label,
+    /// a removed one included, ages out on one clock. The caller picks `now`: the rebuild passes
+    /// the earlier of its clock and its newest stored reading with a five-hour or weekly reset
+    /// time at most 270 seconds before that reading's own time, or its clock with 0 days, when
+    /// every line goes. A rewrite also drops the lines that do not parse, and `dropped` hears
+    /// how many, per label, as soon as that file is written.
+    public func prune(
+        retentionDays: Int, now: Date,
+        dropped: (_ label: String, _ count: Int) -> Void = { _, _ in }
+    ) throws {
         let cutoff = now.addingTimeInterval(-Double(retentionDays) * 86_400)
         for label in try labels() {
             let name = Self.fileName(label)
@@ -147,6 +176,7 @@ public struct ReadingHistory: Sendable {
             var whole = Data()
             for line in kept { whole += try EventLog.encoder().encode(line) + Data([0x0A]) }
             try writer.put(whole, folders: Self.folders, name: name)
+            if parsed.unreadable > 0 { dropped(label, parsed.unreadable) }
         }
     }
 }

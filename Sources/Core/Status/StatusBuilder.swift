@@ -403,8 +403,9 @@ public enum StatusBuilder {
         // appends the line again.
         for item in built.history {
             do {
-                if try history.append(item.line, label: item.label) {
-                    Self.log(context, "cut a last history line that did not parse")
+                let written = try history.append(item.line, label: item.label)
+                if written.dropped > 0 {
+                    Self.log(context, Self.droppedText(written.dropped, label: item.label))
                 }
             } catch {
                 current.accounts[item.label]?.historyAt = item.priorAt
@@ -416,10 +417,32 @@ public enum StatusBuilder {
             }
         }
         do {
-            let due = current.prunedAt.map { now.timeIntervalSince($0) >= 86_400 } ?? true
-            if due && eventsSaved {
-                try events.prune(retentionDays: config.history.retentionDays, now: now)
-                try history.prune(retentionDays: config.history.retentionDays, now: now)
+            // A prune time ahead of the clock means the clock moved back, which pruning survives.
+            let due =
+                current.prunedAt.map {
+                    now.timeIntervalSince($0) >= 86_400 || $0 > now.addingTimeInterval(60)
+                } ?? true
+            // Only a five-hour or weekly reset time at most 270 seconds before a reading's own time
+            // bounds how far ahead that reading can be dated, so never from the clock alone or
+            // another reading (docs/ARCHITECTURE.md section 13).
+            let bounded = readings.values.filter { reading in
+                // Earlier versions checked only the stored minute, up to 30 s after the time given.
+                let earliest = reading.readAt.addingTimeInterval(-(ResetBounds.slack - 30))
+                let resets: [Date] = [reading.fiveHour?.resetsAt, reading.sevenDay?.resetsAt]
+                    .compactMap { $0 }
+                return resets.contains { $0 >= earliest }
+            }
+            let days = config.history.retentionDays
+            // With 0 days a prune uses no cutoff, so it does not wait for such a reading.
+            let newest: Date? = days == 0 ? now : bounded.map(\.readAt).max()
+            if due && eventsSaved, let newest {
+                let from = min(now, newest)
+                try events.prune(retentionDays: days, now: from) { count in
+                    Self.log(context, Self.droppedText(count, label: nil))
+                }
+                try history.prune(retentionDays: days, now: from) { label, count in
+                    Self.log(context, Self.droppedText(count, label: label))
+                }
                 current.prunedAt = now
             }
         } catch {
@@ -447,6 +470,14 @@ public enum StatusBuilder {
             Self.log(
                 context, "status rebuild failed: \((error as? ToolError)?.message ?? "unknown")")
         }
+    }
+
+    /// The log line for lines a rewrite dropped because they did not parse: a count, never their
+    /// text. A nil label means the events record.
+    static func droppedText(_ count: Int, label: String?) -> String {
+        let lines = count == 1 ? "1 line" : "\(count) lines"
+        let file = label.map { "the history of \($0)" } ?? "the events record"
+        return "dropped \(lines) that did not parse from \(file)"
     }
 
     /// One scrubbed line in `logs/agent-balancer.log`.

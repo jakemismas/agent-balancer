@@ -24,6 +24,9 @@ public enum RefreshStatus: Equatable, Sendable {
     /// The account's lock stayed held until the deadline; the stored reading stands.
     case usedStored(Reading)
     case failed(Issue)
+    /// A pick's deadline passed before this account's probe began, so nothing was read and
+    /// nothing is observed; the stored reading, if any, stands.
+    case notStarted
 }
 
 public enum FableRefreshStatus: Equatable, Sendable {
@@ -93,6 +96,64 @@ private final class Results: @unchecked Sendable {
     }
 }
 
+/// Hands each account's index to one probe thread, starting at `first` and going on in list order
+/// from the top after the last, until every account is taken or it is closed.
+private final class AccountQueue: @unchecked Sendable {
+    private let lock = NSLock()
+    private let count: Int
+    private let first: Int
+    private var taken = 0
+    private var closed = false
+
+    init(count: Int, first: Int) {
+        self.count = count
+        self.first = first
+    }
+
+    func next() -> Int? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !closed, taken < count else { return nil }
+        taken += 1
+        return (first + taken - 1) % count
+    }
+
+    func close() {
+        lock.lock()
+        closed = true
+        lock.unlock()
+    }
+}
+
+/// The accounts a probe began for before the refresh closed at its deadline. Once it is closed,
+/// no probe begins, plain or Fable.
+private final class Begun: @unchecked Sendable {
+    private let lock = NSLock()
+    private var indexes: Set<Int> = []
+    private var closed = false
+
+    /// Notes that a probe of `index` begins, or returns false once the refresh is closed.
+    func begin(_ index: Int) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !closed else { return false }
+        indexes.insert(index)
+        return true
+    }
+
+    func close() {
+        lock.lock()
+        closed = true
+        lock.unlock()
+    }
+
+    func contains(_ index: Int) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return indexes.contains(index)
+    }
+}
+
 /// Runs the probes of `refresh`: one account lock per account, a fresh probe folder per probe,
 /// readings only from the probe.
 public struct Refresher: Sendable {
@@ -109,6 +170,14 @@ public struct Refresher: Sendable {
 
     static let fableInterval: TimeInterval = 86_400
 
+    /// The most probes one refresh runs at once (docs/ARCHITECTURE.md section 6.4). Each probe is
+    /// a `claude` process, so a long account list must not start them all together.
+    public static let maxProbesAtOnce = 8
+
+    /// The index a refresh starts at. A new one each time, so with more slow accounts than probe
+    /// threads the same accounts are not always the ones left waiting. Tests replace it.
+    var firstAccount: @Sendable (_ count: Int) -> Int = { Int.random(in: 0..<$0) }
+
     public init(context: ToolContext, config: Config, store: ReadingStore? = nil) {
         self.context = context
         self.config = config
@@ -118,38 +187,54 @@ public struct Refresher: Sendable {
         self.lockWaitSeconds = Double(config.probe.timeoutSeconds) + 5
     }
 
-    /// Refreshes the given accounts at the same time. Different accounts never wait for each
-    /// other; two probes of one account do. With a `deadline` (seconds) it returns when that has
-    /// passed: an account still running is reported `check_failed`, and its probe is left to end
-    /// on its own. `forced` names labels probed even when their reading is fresh.
+    /// Refreshes the given accounts at the same time, at most `maxProbesAtOnce` of them at once;
+    /// the rest wait for a free thread, in list order from `firstAccount`. Two probes of one
+    /// account wait for each other. With a `deadline` (seconds) it returns when that has passed,
+    /// and no probe, plain or Fable, begins after it: an account whose plain probe is running is
+    /// reported `check_failed`; one whose probe has not begun, still waiting for a thread or for
+    /// its lock, is `notStarted`; one whose Fable probe is running is reported by its plain step,
+    /// a fresh reading or a finished plain probe. A running probe is left to end on its own.
+    /// `forced` names labels probed even when their reading is fresh.
     public func refresh(
         accounts: [Account], force: Bool, forced: Set<String> = [], fable: FableMode = .daily,
         deadline: TimeInterval? = nil
     ) -> [AccountRefresh] {
         let results = Results()
+        let begun = Begun()
+        let queue = AccountQueue(
+            count: accounts.count, first: accounts.isEmpty ? 0 : firstAccount(accounts.count))
         let done = DispatchGroup()
-        // A thread per account: concurrentPerform may run blocking probes one at a time.
-        for (index, account) in accounts.enumerated() {
+        // Threads of their own: concurrentPerform may run blocking probes one at a time.
+        for _ in 0..<min(Self.maxProbesAtOnce, accounts.count) {
             done.enter()
             Thread {
-                results.set(
-                    index,
-                    refresh(
-                        account: account, force: force || forced.contains(account.label),
-                        fable: fable))
+                while let index = queue.next() {
+                    let account = accounts[index]
+                    results.set(
+                        index,
+                        refresh(
+                            account: account, force: force || forced.contains(account.label),
+                            fable: fable, begin: { begun.begin(index) },
+                            report: { results.set(index, $0) }))
+                }
                 done.leave()
             }.start()
         }
         if let deadline {
-            _ = done.wait(timeout: .now() + max(0, deadline))
+            if done.wait(timeout: .now() + max(0, deadline)) == .timedOut {
+                queue.close()
+                begun.close()
+            }
         } else {
             done.wait()
         }
         let missed = Issue(.checkFailed, .error, "Check failed: the refresh missed the deadline.")
         return results.slots(count: accounts.count).enumerated().map { index, value in
-            value
-                ?? AccountRefresh(
-                    label: accounts[index].label, status: .failed(missed), fable: .notRun)
+            if let value { return value }
+            // Only a probe that ran says anything about the account.
+            return AccountRefresh(
+                label: accounts[index].label,
+                status: begun.contains(index) ? .failed(missed) : .notStarted, fable: .notRun)
         }
     }
 
@@ -179,6 +264,15 @@ public struct Refresher: Sendable {
     public func refresh(account: Account, force: Bool, fable mode: FableMode = .daily)
         -> AccountRefresh
     {
+        refresh(account: account, force: force, fable: mode, begin: { true }, report: { _ in })
+    }
+
+    /// `begin` runs just before each probe, plain or Fable; when it returns false that probe does
+    /// not run. `report` hears the plain result before a Fable probe begins.
+    private func refresh(
+        account: Account, force: Bool, fable mode: FableMode, begin: () -> Bool,
+        report: (AccountRefresh) -> Void
+    ) -> AccountRefresh {
         let duplicate = DuplicateBox()
         let store = storeWithDuplicateCheck(into: duplicate)
         func failed(_ issue: Issue) -> AccountRefresh {
@@ -227,12 +321,17 @@ public struct Refresher: Sendable {
             if !force, let current = stored, current.isFresh(now: now, maxAgeMinutes: maxAge) {
                 status = .fresh(current)
             } else {
+                guard begin() else {
+                    return AccountRefresh(label: account.label, status: .notStarted, fable: .notRun)
+                }
                 switch runProbe(account: account, probe: probe, fable: false) {
                 case .failed(let issue): status = .failed(issue)
                 case .reading(let reading):
+                    // The clock read that dated the reading decides its merge: a later read, set
+                    // back, would keep a passed reset time under a reading dated after it.
                     let merged = try store.record(
                         reading, label: account.label, callsHook: probe.callsAfterProbeHook,
-                        fable: config.fable, now: clock())
+                        fable: config.fable, now: reading.readAt)
                     stored = merged
                     status = .probed(merged)
                 }
@@ -245,14 +344,27 @@ public struct Refresher: Sendable {
             if !plainFailed, let current = stored,
                 fableDue(current, now: now, mode: mode)
             {
+                let plain = AccountRefresh(
+                    label: account.label, status: status, fable: .notRun,
+                    duplicate: duplicate.value)
+                // A Fable probe still running at a deadline leaves the plain result to stand.
+                report(plain)
+                guard begin() else { return plain }
                 try store.noteFableAttempt(label: account.label, at: now)
                 switch runProbe(account: account, probe: probe, fable: true) {
                 case .failed(let issue): fableStatus = .failed(issue)
                 case .reading(let reading):
-                    try store.record(
-                        reading, label: account.label, callsHook: probe.callsAfterProbeHook,
-                        fable: config.fable, now: now)
-                    fableStatus = .probed
+                    // A Fable reply the store refuses fails only the Fable probe; the plain
+                    // reading saved above stands. As for the plain one, the reply's own time
+                    // decides the merge, so a reset time that passed during the probe is not held.
+                    do {
+                        try store.record(
+                            reading, label: account.label, callsHook: probe.callsAfterProbeHook,
+                            fable: config.fable, now: reading.readAt)
+                        fableStatus = .probed
+                    } catch let error as ToolError where error.code == .checkFailed {
+                        fableStatus = .failed(Issue(.checkFailed, .error, error.message))
+                    }
                 }
             }
             return AccountRefresh(

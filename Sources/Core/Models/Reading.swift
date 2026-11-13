@@ -12,6 +12,8 @@ public enum WindowName {
     public static let sevenDay = "seven_day"
     /// The Fable weekly meter (docs/ARCHITECTURE.md section 4A.6).
     public static let fable = "seven_day_overage_included"
+    /// The windows the picker reads from `Reading.windows`.
+    public static let picker: Set<String> = [fiveHour, sevenDay]
 }
 
 /// One usage window: percent used (0 to 100, one decimal), when it resets and when the stored

@@ -454,6 +454,123 @@ import Testing
         #expect(launchFiles(t).isEmpty)
     }
 
+    @Test func aReplyWithoutTheWeeklyUseNeverFreshensTheMainAccount() throws {
+        let (t, service) = try setUp([login(role: Role.main)])
+        // A stored reading past the age limit, well under the reserve line.
+        let now = Date()
+        let old = now.addingTimeInterval(-1_200)
+        try ReadingStore(context: t.context).save(
+            Reading(
+                readAt: old,
+                windows: [
+                    WindowName.sevenDay: WindowReading(
+                        usedPercent: 40, resetsAt: now.addingTimeInterval(3 * 86_400), readAt: old)
+                ]), label: "main")
+        // The reply carries the 5-hour use and a weekly entry with no value.
+        let seconds = Int(now.timeIntervalSince1970)
+        try t.fake(
+            "probe.jsonl",
+            "{\"type\":\"rate_limit_event\",\"rate_limit_info\":{\"unifiedWindows\":{"
+                + "\"five_hour\":{\"utilization\":0.1,\"resetsAt\":\(seconds + 3_600)},"
+                + "\"seven_day\":{\"resetsAt\":\(seconds + 3 * 86_400)}}}}\n")
+        let result = try service.pick(PickRequest())
+        #expect(result.label == nil)
+        #expect(result.candidates.map(\.reason) == ["stale reading, refresh failed"])
+        #expect(launchFiles(t).isEmpty)
+    }
+
+    @Test(arguments: ["null", "6 days out", "2 days out"])
+    func aHeldWeeklyWindowNeverKeepsLessUseThanTheReplyGives(weeklyReset: String) throws {
+        let (t, service) = try setUp([login(role: Role.main)])
+        // Stored 20 minutes ago: 40 percent of the week, resetting in 3 days, well under the
+        // reserve line, and 10 percent of the 5 hours.
+        let now = Date()
+        let seconds = Int(now.timeIntervalSince1970)
+        func minute(_ s: Int) -> Date {
+            Date(timeIntervalSince1970: (Double(s) / 60).rounded() * 60)
+        }
+        let old = now.addingTimeInterval(-1_200)
+        try ReadingStore(context: t.context).save(
+            Reading(
+                readAt: old,
+                windows: [
+                    WindowName.sevenDay: WindowReading(
+                        usedPercent: 40, resetsAt: minute(seconds + 3 * 86_400), readAt: old),
+                    WindowName.fiveHour: WindowReading(
+                        usedPercent: 10, resetsAt: minute(seconds + 3_600), readAt: old),
+                ]), label: "main")
+        // The reply says 95 percent of the week, with no reset time or another one.
+        let resets = [
+            "null": "null", "6 days out": "\(seconds + 6 * 86_400)",
+            "2 days out": "\(seconds + 2 * 86_400)",
+        ]
+        try t.fake(
+            "probe.jsonl",
+            "{\"type\":\"rate_limit_event\",\"rate_limit_info\":{\"unifiedWindows\":{"
+                + "\"five_hour\":{\"utilization\":0.1,\"resetsAt\":\(seconds + 3_600)},"
+                + "\"seven_day\":{\"utilization\":0.95,\"resetsAt\":\(resets[weeklyReset] ?? "")}}}}\n"
+        )
+        let result = try service.pick(PickRequest())
+        #expect(result.label == nil)
+        #expect(result.candidates.first?.reason.hasPrefix("Limited until") == true)
+        let stored = try ReadingStore(context: t.context).load(label: "main")
+        #expect(stored?.sevenDay?.usedPercent == 95)
+        #expect(stored?.sevenDay?.resetsAt == minute(seconds + 3 * 86_400))
+        #expect(launchFiles(t).isEmpty)
+    }
+
+    @Test func anAccountWhoseProbeNeverBeganAtTheDeadlineKeepsItsStatus() throws {
+        let accounts = (0..<10).map { token("pool-\($0)") }
+        let (t, service) = try setUp(accounts) { $0.picker.deadlineSeconds = 1 }
+        let store = ReadingStore(context: t.context)
+        let old = Date().addingTimeInterval(-7_200)
+        for account in accounts {
+            _ = try t.makeTokenFile(label: account.label, secret: Canaries.oauth())
+            try store.save(
+                Reading(
+                    readAt: old,
+                    windows: [
+                        WindowName.sevenDay: WindowReading(
+                            usedPercent: 10, resetsAt: Date().addingTimeInterval(86_400 * 3),
+                            readAt: old)
+                    ]), label: account.label)
+        }
+        // Every reading is stale and every probe outlasts the deadline, so 8 probes begin and
+        // the other 2 accounts wait for a thread until the deadline passes.
+        try t.fake("delay", "3")
+        let result = try service.pick(PickRequest())
+        #expect(result.label == nil)
+        #expect(result.candidates.allSatisfy { $0.reason == "stale reading, refresh failed" })
+        // Let the probes that began end before looking.
+        let until = Date().addingTimeInterval(20)
+        var starts: [String] = []
+        while Date() < until {
+            let records = t.fakeLines("spans.log")
+            starts = records.filter { $0.hasPrefix("start ") }.map { String($0.dropFirst(6)) }
+            if starts.count >= Refresher.maxProbesAtOnce && records.count == 2 * starts.count {
+                break
+            }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        let begun = Set(starts)
+        #expect(begun.count == Refresher.maxProbesAtOnce)
+        // Only a probe that ran is recorded: an error event and check_failed for those, nothing
+        // for the accounts whose probe never began.
+        let events = try EventLog(context: t.context).answer(EventsQuery()).events
+        let errors = Set(events.filter { $0.type == EventType.error }.map(\.label))
+        #expect(errors == begun)
+        let status = try JSONSerialization.jsonObject(
+            with: Data(
+                contentsOf: t.context.dataRoot.appendingPathComponent("state/status.json")))
+        let rows = (status as? [String: Any])?["accounts"] as? [[String: Any]] ?? []
+        #expect(rows.count == accounts.count)
+        for row in rows {
+            let label = row["label"] as? String ?? ""
+            let code = (row["error"] as? [String: Any])?["code"] as? String
+            #expect(code == (begun.contains(label) ? "check_failed" : nil), "\(label)")
+        }
+    }
+
     @Test func aProbeThatMissesTheDeadlineIsSkippedAsStale() throws {
         let (t, service) = try setUp([token("pool-a"), token("pool-b")]) {
             $0.picker.deadlineSeconds = 1

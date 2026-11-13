@@ -6,8 +6,9 @@ public enum ResetBounds {
     /// Clock skew between the service and this Mac.
     public static let slack: TimeInterval = 300
 
-    /// The length of the window: five hours for `five_hour`, seven days for the weekly windows
-    /// (`seven_day` and the Fable meter), and 31 days for a window name the tool does not know.
+    /// The length of the window: five hours for `five_hour`, seven days for every name that
+    /// starts with `seven_day` (the weekly window, the Fable meter and any other weekly one), and
+    /// 31 days for any other name.
     public static func horizon(for name: String) -> TimeInterval {
         if name == WindowName.fiveHour { return 5 * 3600 }
         if name.hasPrefix("seven_day") { return 7 * 86_400 }

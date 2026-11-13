@@ -83,6 +83,9 @@ struct LoginCommand: ParsableCommand {
         case .failed(let issue):
             print("First check failed. " + Shared.line(issue))
             failed = true
+        case .notStarted:
+            print("First check did not run.")
+            failed = true
         }
         if !failed, let warning = result.duplicate.issue {
             print(Shared.line(warning))

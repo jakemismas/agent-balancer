@@ -127,8 +127,13 @@ agent-balancer history --json [--label <label>] [--since <time>] [--limit <n>]
 `events` is the record of state changes. Keep the `cursor` of each answer and pass it back as
 `--after`. Call again at once while `more` is true. Treat `gap: true`, or a `recordId` you have not
 seen, as a gap: read `status --json` once and carry on from the new `cursor`. A caller skips event
-types it does not know. `history` gives the readings over time, for a chart or a burn-rate
-estimate. The fields of each answer that the schema documents are stable in version 1.
+types it does not know. An event can come more than once, with a new `seq` and the same `label`,
+`type`, `code`, `window`, `resetsAt` and `notBefore`: read each event as the state it reports for
+its label, never as a count, so a repeat changes nothing. After a failed save an event can also
+be missing, and a label's last event and `status --json` can disagree; either can be behind until
+the label's next event, and `pick` decides from live checks either way. `history` gives the
+readings over time, for a chart or a burn-rate estimate. The fields of each answer that the schema
+documents are stable in version 1.
 
 ## Information is not authority
 

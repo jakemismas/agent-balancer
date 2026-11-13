@@ -9,18 +9,24 @@ public enum ProbeReadResult: Equatable, Sendable {
 /// `rate_limit_event` lines and the error fields of the final `result` line. Every other line is
 /// dropped unread, so nothing personal in them can reach a reading.
 public enum ProbeReader {
-    static let maxWindows = 16
+    /// Window names a reply keeps besides `five_hour`, `seven_day` and the Fable window.
+    static let maxOtherWindows = 14
     static let authStatusCodes: Set<Int> = [401]
     static let authPhrases = [
         "invalid api key", "please run /login", "authentication", "unauthorized",
         "oauth token", "token has expired", "invalid bearer", "not logged in",
     ]
+    static let badUsage = "Check failed: the probe gave a usage value outside 0 to 1."
+    static let badReset = "Check failed: the probe gave a reset time outside the window."
+    static let noWeekly = "Check failed: the probe reply carried no weekly usage."
+    static let noFiveHour = "Check failed: the probe reply carried no 5-hour usage."
 
     public static func parse(_ output: String, readAt: Date) -> ProbeReadResult {
         var windows: [String: WindowReading] = [:]
         var fableWindow: WindowReading?
         var sawEvent = false
         var sawJSON = false
+        var namedFiveHour = false
         var resultError: (auth: Bool, subtype: String)?
 
         for line in output.split(separator: "\n", omittingEmptySubsequences: true) {
@@ -39,35 +45,29 @@ public enum ProbeReader {
                 } else {
                     found = []
                 }
+                // Every entry with a usage value is checked, whatever its name and whether the
+                // cap below keeps it: a value the tool cannot trust fails the whole reply.
                 for (name, raw) in found {
-                    guard isValidName(name), let entry = raw as? [String: Any],
-                        let utilization = entry["utilization"]
+                    guard isValidName(name) else { continue }
+                    if name == WindowName.fiveHour { namedFiveHour = true }
+                    guard let entry = raw as? [String: Any], let utilization = entry["utilization"]
                     else { continue }
                     guard let percent = percent(from: utilization) else {
-                        return .failed(
-                            Issue(
-                                .checkFailed, .error,
-                                "Check failed: the probe gave a usage value outside 0 to 1."))
+                        return .failed(Issue(.checkFailed, .error, badUsage))
                     }
                     let resetsAt: Date?
                     switch resetTime(entry["resetsAt"], window: name, readAt: readAt) {
                     case .absent: resetsAt = nil
                     case .valid(let date): resetsAt = date
-                    case .invalid:
-                        return .failed(
-                            Issue(
-                                .checkFailed, .error,
-                                "Check failed: the probe gave a reset time outside the window."))
+                    case .invalid: return .failed(Issue(.checkFailed, .error, badReset))
                     }
                     sawEvent = true
                     let window = WindowReading(
                         usedPercent: percent, resetsAt: resetsAt, readAt: readAt)
                     if name == WindowName.fable {
-                        fableWindow = ReadingMerge.window(
-                            stored: fableWindow, incoming: window, now: readAt, name: name)
-                    } else if windows[name] != nil || windows.count < maxWindows {
-                        windows[name] = ReadingMerge.window(
-                            stored: windows[name], incoming: window, now: readAt, name: name)
+                        fableWindow = merged(fableWindow, window, name: name)
+                    } else {
+                        windows[name] = merged(windows[name], window, name: name)
                     }
                 }
             case "result":
@@ -101,6 +101,17 @@ public enum ProbeReader {
             let why = sawJSON ? "carried no usage window" : "could not be read"
             return .failed(Issue(.checkFailed, .error, "Check failed: the probe reply \(why)."))
         }
+        // Without these the merge would keep the stored use under this reading's time, and a pick
+        // would judge the account on old use as if it were new.
+        guard windows[WindowName.sevenDay] != nil else {
+            return .failed(Issue(.checkFailed, .error, noWeekly))
+        }
+        if namedFiveHour && windows[WindowName.fiveHour] == nil {
+            return .failed(Issue(.checkFailed, .error, noFiveHour))
+        }
+        // Name order, so which names stay never depends on the order the reply listed them in.
+        let others = windows.keys.filter { !WindowName.picker.contains($0) }.sorted()
+        for name in others.dropFirst(maxOtherWindows) { windows[name] = nil }
 
         var reading = Reading(readAt: readAt, windows: windows)
         if let fableWindow {
@@ -110,6 +121,35 @@ public enum ProbeReader {
                 weeklyUsedPercentAtRead: windows[WindowName.sevenDay]?.usedPercent)
         }
         return .reading(reading)
+    }
+
+    /// Two entries of one reply for one window, merged by the rule of docs/ARCHITECTURE.md section
+    /// 6.3. Both were read at the same moment, so a window a pick reads keeps the higher use of
+    /// the two, in either order, with the reset time the merge chose; but when one entry's window
+    /// had ended by then and the other's reset time is later or unknown, that other entry stands
+    /// as it is, in either order.
+    static func merged(_ earlier: WindowReading?, _ entry: WindowReading, name: String)
+        -> WindowReading
+    {
+        var kept = ReadingMerge.window(
+            stored: earlier, incoming: entry, now: entry.readAt, name: name)
+        guard let earlier, ReadingMerge.readByPick.contains(name) else { return kept }
+        if let later = laterWindow(earlier, entry, now: entry.readAt) { return later }
+        kept.usedPercent = max(earlier.usedPercent, entry.usedPercent)
+        return kept
+    }
+
+    /// The entry of the window that followed the other's: when one entry's reset time had passed
+    /// at `now`, the other one, if its reset time is later or unknown. Nil otherwise.
+    static func laterWindow(_ a: WindowReading, _ b: WindowReading, now: Date) -> WindowReading? {
+        // An ended window's use says nothing about the window after it.
+        func ended(_ old: WindowReading, before new: WindowReading) -> Bool {
+            guard let end = old.resetsAt, end <= now else { return false }
+            return (new.resetsAt ?? .distantFuture) > end
+        }
+        if ended(a, before: b) { return b }
+        if ended(b, before: a) { return a }
+        return nil
     }
 
     /// Converts a probe utilization (0 to 1) to percent (0 to 100, one decimal). A value that is
@@ -134,7 +174,10 @@ public enum ProbeReader {
     /// caller fails the reading.
     static func resetTime(_ raw: Any?, window: String, readAt: Date) -> ResetParse {
         guard let raw, !(raw is NSNull) else { return .absent }
-        guard let date = minute(AuthStatusReader.date(raw)),
+        // Both the time given and the minute stored must be in range, so rounding never widens it.
+        guard let given = AuthStatusReader.date(raw),
+            ResetBounds.contains(given, window: window, readAt: readAt),
+            let date = minute(given),
             ResetBounds.contains(date, window: window, readAt: readAt)
         else { return .invalid }
         return .valid(date)

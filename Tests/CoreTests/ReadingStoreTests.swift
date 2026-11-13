@@ -79,6 +79,56 @@ import Testing
         #expect(merged.sevenDay?.usedPercent == 80)
     }
 
+    @Test func aHeldWindowAPickReadsTakesAHigherUseButKeepsItsResetTime() {
+        let later = t0.addingTimeInterval(1_200)
+        let resets = [
+            WindowName.fiveHour: t0.addingTimeInterval(3_600), WindowName.sevenDay: reset,
+            "monthly_extra": reset,
+        ]
+        // Every window, the Fable one too, at `used`, with its reset moved by `moved`, or none.
+        func held(_ used: Double, at: Date, moved: TimeInterval?) -> Reading {
+            var r = Reading(readAt: at)
+            for (name, resetsAt) in resets {
+                r.windows[name] = WindowReading(
+                    usedPercent: used, resetsAt: moved.map { resetsAt.addingTimeInterval($0) },
+                    readAt: at)
+            }
+            r.fable = FableReading(
+                source: ReadingSource.probe, usedPercent: used,
+                resetsAt: moved.map { reset.addingTimeInterval($0) }, readAt: at,
+                weeklyUsedPercentAtRead: used)
+            return r
+        }
+        let stored = held(40, at: t0, moved: 0)
+        // The stored resets have not passed; the reply names a later one, an earlier one or none.
+        for moved in [2 * 86_400, -1_800, nil] as [TimeInterval?] {
+            let note = "reply reset moved by \(moved.map { "\($0)" } ?? "none")"
+            let merged = ReadingMerge.merge(
+                stored: stored, incoming: held(95, at: later, moved: moved),
+                fableSettings: fable, now: later)
+            for name in [WindowName.fiveHour, WindowName.sevenDay] {
+                #expect(
+                    merged.windows[name]
+                        == WindowReading(usedPercent: 95, resetsAt: resets[name], readAt: later),
+                    "\(name), \(note)")
+            }
+            #expect(merged.fable?.usedPercent == 95, "\(note)")
+            #expect(merged.fable?.resetsAt == reset && merged.fable?.readAt == later, "\(note)")
+            #expect(merged.fable?.weeklyUsedPercentAtRead == 95, "\(note)")
+            // A window no pick reads keeps the stored use while it holds.
+            #expect(merged.windows["monthly_extra"] == stored.windows["monthly_extra"], "\(note)")
+            // A lower use from the reply never lowers a held window, and the same use leaves it
+            // as it was, its time included.
+            for used in [5.0, 40] {
+                let kept = ReadingMerge.merge(
+                    stored: stored, incoming: held(used, at: later, moved: moved),
+                    fableSettings: fable, now: later)
+                #expect(kept.windows == stored.windows, "\(note), use \(used)")
+                #expect(kept.fable == stored.fable, "\(note), use \(used)")
+            }
+        }
+    }
+
     @Test func theFableReadingMergesByTheSameRule() {
         let merged = ReadingMerge.merge(
             stored: reading(week: 50, at: t0, fableUsed: 70),
@@ -241,6 +291,178 @@ import Testing
             reading(week: 12, at: t0), label: "a", callsHook: false, fable: fable, now: t0)
         #expect(merged.sevenDay?.usedPercent == 12)
         #expect(try store.load(label: "a")?.sevenDay?.usedPercent == 12)
+
+        // A file whose only fault is one reset time that does not decode still loads, so the
+        // next reading merges into it: the stored weekly use holds, and the window whose reset
+        // did not decode takes the new value.
+        var damaged = reading(week: 80, at: t0)
+        damaged.windows[WindowName.fiveHour] = WindowReading(
+            usedPercent: 30, resetsAt: t0.addingTimeInterval(3600), readAt: t0)
+        try store.save(damaged, label: "a")
+        let url = t.context.dataRoot.appendingPathComponent("state/readings/a.json")
+        let text = try String(contentsOf: url, encoding: .utf8)
+        let fiveHourReset = "\"2027-01-15T09:00:00Z\""
+        #expect(text.components(separatedBy: fiveHourReset).count == 2)
+        try writeRaw(
+            t, text.replacingOccurrences(of: fiveHourReset, with: "\"-4712-01-01T00:00:00Z\""))
+        var next = reading(week: 12, at: t0 + 60)
+        next.windows[WindowName.fiveHour] = WindowReading(
+            usedPercent: 10, resetsAt: t0.addingTimeInterval(7200), readAt: t0 + 60)
+        let kept = try store.record(next, label: "a", callsHook: false, fable: fable, now: t0 + 60)
+        #expect(kept.sevenDay?.usedPercent == 80)
+        #expect(kept.fiveHour?.usedPercent == 10)
+    }
+
+    @Test func recordRefusesAReadingWithoutTheWeeklyUseOrAStoredFiveHour() throws {
+        let t = try TestHome()
+        let store = ReadingStore(context: t.context)
+        var both = reading(week: 40, at: t0)
+        both.windows[WindowName.fiveHour] = WindowReading(
+            usedPercent: 10, resetsAt: t0.addingTimeInterval(3600), readAt: t0)
+        try store.save(both, label: "a")
+        let url = t.context.dataRoot.appendingPathComponent("state/readings/a.json")
+        let before = try Data(contentsOf: url)
+        let later = t0.addingTimeInterval(7200)
+        #expect(throws: ToolError(ProbeReader.noFiveHour, code: .checkFailed)) {
+            try store.record(
+                reading(week: 45, at: later), label: "a", callsHook: false, fable: fable,
+                now: later)
+        }
+        let noWeekly = Reading(
+            readAt: later,
+            windows: [
+                WindowName.fiveHour: WindowReading(
+                    usedPercent: 12, resetsAt: t0.addingTimeInterval(3600), readAt: later)
+            ])
+        #expect(throws: ToolError(ProbeReader.noWeekly, code: .checkFailed)) {
+            try store.record(noWeekly, label: "a", callsHook: false, fable: fable, now: later)
+        }
+        #expect(try Data(contentsOf: url) == before)
+        // With no five_hour stored, the weekly use alone is recorded.
+        try store.save(reading(week: 40, at: t0), label: "b")
+        let recorded = try store.record(
+            reading(week: 45, at: later), label: "b", callsHook: false, fable: fable, now: later)
+        #expect(recorded.sevenDay?.usedPercent == 45)
+    }
+
+    // Eviction: a stored window that the new probe reading does not carry goes once its value is
+    // more than 32 days old or more than 60 seconds ahead; at most 14 other names stay.
+
+    func other(_ used: Double, at: Date) -> WindowReading {
+        WindowReading(usedPercent: used, resetsAt: nil, readAt: at)
+    }
+
+    @Test func aWindowNoReadingCarriedForMoreThan32DaysIsEvictedAtTheNextMerge() throws {
+        let day = 86_400.0
+        var stored = reading(week: 40, at: t0.addingTimeInterval(-40 * day))
+        stored.windows["gone_33d"] = other(5, at: t0.addingTimeInterval(-33 * day))
+        stored.windows["gone_32d1s"] = other(5, at: t0.addingTimeInterval(-32 * day - 1))
+        stored.windows["kept_32d"] = other(5, at: t0.addingTimeInterval(-32 * day))
+        stored.windows["kept_31d"] = other(5, at: t0.addingTimeInterval(-31 * day))
+        stored.windows["gone_ahead_2m"] = other(5, at: t0.addingTimeInterval(120))
+        stored.windows["kept_ahead_1m"] = other(5, at: t0.addingTimeInterval(60))
+        stored.windows["carried_40d"] = other(5, at: t0.addingTimeInterval(-40 * day))
+        var incoming = reading(week: 41, at: t0)
+        incoming.windows["carried_40d"] = other(6, at: t0)
+        let expected: Set<String> = [
+            WindowName.sevenDay, "kept_32d", "kept_31d", "kept_ahead_1m", "carried_40d",
+        ]
+        let merged = ReadingMerge.merge(
+            stored: stored, incoming: incoming, fableSettings: fable, now: t0)
+        #expect(Set(merged.windows.keys) == expected)
+        #expect(merged.windows["carried_40d"]?.usedPercent == 6)
+        // The saved file holds the same names.
+        let t = try TestHome()
+        let store = ReadingStore(context: t.context)
+        try store.save(stored, label: "a")
+        try store.record(incoming, label: "a", callsHook: false, fable: fable, now: t0)
+        #expect(Set(try #require(try store.load(label: "a")).windows.keys) == expected)
+    }
+
+    @Test func atMostFourteenOtherNamesStayWithTheNewReadingsNamesFirst() {
+        var stored = reading(week: 40, at: t0)
+        stored.windows[WindowName.fiveHour] = WindowReading(
+            usedPercent: 10, resetsAt: t0.addingTimeInterval(3600), readAt: t0)
+        for i in 0..<20 {
+            stored.windows[String(format: "o%02d", i)] = other(
+                1, at: t0.addingTimeInterval(-Double(i) * 3600))
+        }
+        // The oldest name is carried at a lower use, so it keeps its old time and stays only
+        // because the new reading carries it.
+        stored.windows["o19"]?.usedPercent = 9
+        var incoming = reading(week: 41, at: t0)
+        incoming.windows[WindowName.fiveHour] = stored.windows[WindowName.fiveHour]
+        for name in ["n0", "n1", "o19"] { incoming.windows[name] = other(2, at: t0) }
+        let merged = ReadingMerge.merge(
+            stored: stored, incoming: incoming, fableSettings: fable, now: t0)
+        // The carried names first, then the newest of the rest.
+        let newest = (0..<11).map { String(format: "o%02d", $0) }
+        #expect(
+            Set(merged.windows.keys).subtracting(WindowName.picker)
+                == Set(["n0", "n1", "o19"] + newest))
+        #expect(merged.windows["o19"]?.usedPercent == 9)
+        #expect(merged.fiveHour != nil && merged.sevenDay != nil)
+        // With equal times, name order decides.
+        var tied = reading(week: 40, at: t0)
+        let names = (0..<20).map { String(format: "a%02d", $0) }
+        for name in names.shuffled() { tied.windows[name] = other(1, at: t0) }
+        let merged2 = ReadingMerge.merge(
+            stored: tied, incoming: reading(week: 41, at: t0), fableSettings: fable, now: t0)
+        #expect(Set(merged2.windows.keys).subtracting(WindowName.picker) == Set(names.prefix(14)))
+    }
+
+    @Test func theMergeNeverEvictsFiveHourOrSevenDay() {
+        // Only a direct call can merge a reading that carries neither: the store refuses one.
+        for at in [t0.addingTimeInterval(-40 * 86_400), t0.addingTimeInterval(3600)] {
+            let stored = Reading(
+                readAt: at,
+                windows: [
+                    WindowName.fiveHour: other(10, at: at), WindowName.sevenDay: other(96, at: at),
+                ])
+            let incoming = Reading(readAt: t0, windows: ["monthly_extra": other(1, at: t0)])
+            let merged = ReadingMerge.merge(
+                stored: stored, incoming: incoming, fableSettings: fable, now: t0)
+            #expect(merged.fiveHour?.usedPercent == 10)
+            #expect(merged.sevenDay?.usedPercent == 96)
+        }
+    }
+
+    @Test func loadingAndSavingTheFableProbeTimeEvictNothing() throws {
+        let t = try TestHome()
+        let store = ReadingStore(context: t.context)
+        var stored = reading(week: 40, at: t0)
+        stored.windows["monthly_extra"] = other(5, at: t0.addingTimeInterval(-40 * 86_400))
+        try store.save(stored, label: "a")
+        #expect(try store.load(label: "a")?.windows["monthly_extra"] != nil)
+        try store.noteFableAttempt(label: "a", at: t0)
+        let after = try #require(try store.load(label: "a"))
+        #expect(after.windows["monthly_extra"] != nil)
+        #expect(after.fableProbedAt == t0)
+    }
+
+    @Test func eachStoredResetIsJudgedByItsOwnWindowLength() {
+        let extra = "monthly_extra"
+        let fiveHourCeiling = ResetBounds.storedCeiling(window: WindowName.fiveHour, now: t0)
+        // Past the five_hour ceiling but inside the seven_day one; inside 31 days but past 7.
+        let stored = Reading(
+            readAt: t0,
+            windows: [
+                WindowName.fiveHour: WindowReading(
+                    usedPercent: 80, resetsAt: fiveHourCeiling.addingTimeInterval(60), readAt: t0),
+                extra: WindowReading(
+                    usedPercent: 80, resetsAt: t0.addingTimeInterval(20 * 86_400), readAt: t0),
+            ])
+        let soon = t0.addingTimeInterval(3600)
+        let incoming = Reading(
+            readAt: t0,
+            windows: [
+                WindowName.fiveHour: WindowReading(usedPercent: 5, resetsAt: soon, readAt: t0),
+                extra: WindowReading(usedPercent: 5, resetsAt: soon, readAt: t0),
+            ])
+        let merged = ReadingMerge.merge(
+            stored: stored, incoming: incoming, fableSettings: fable, now: t0)
+        #expect(merged.fiveHour?.usedPercent == 5)
+        #expect(merged.windows[extra]?.usedPercent == 80)
     }
 
     @Test func theResetBoundsHoldPerWindowName() {

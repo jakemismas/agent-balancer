@@ -49,7 +49,9 @@ state and is slower. Never parse the menu bar app or the log files.
   `history`.
 - Run `agent-balancer events --json --after <cursor>` to learn what changed. Keep the `cursor`
   from each answer. If `gap` is true or `recordId` is new, read `status --json --cached` once and
-  carry on from the new cursor.
+  carry on from the new cursor. An event can come more than once: read each one as the state it
+  reports, never as a count. After a failed save an event can also be missing, and a label's last
+  event and `status --json --cached` can disagree; either can be behind, and only `pick` decides.
 - Never run `agent-balancer run`, `uninstall`, `remove`, `login` or `link`. They are for the user's
   own terminal. In a chat shell `run` only prints the line for the user to type.
 

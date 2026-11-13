@@ -175,11 +175,12 @@ public struct StatusObservations: Sendable {
     /// The probes of a refresh, by label.
     public mutating func add(_ results: [AccountRefresh]) {
         for result in results {
-            // Only a probe that ran says anything; a stored or fresh reading leaves it unobserved.
+            // Only a probe that ran says anything; a stored or fresh reading, or a probe that never
+            // began, leaves it unobserved.
             switch result.status {
             case .failed(let issue): probe[result.label] = ProbeObservation(error: issue)
             case .probed: probe[result.label] = ProbeObservation(error: nil)
-            case .fresh, .usedStored: break
+            case .fresh, .usedStored, .notStarted: break
             }
             if result.duplicate != .notRun { duplicates[result.label] = result.duplicate }
         }

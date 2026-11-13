@@ -42,6 +42,8 @@ struct RefreshCommand: ParsableCommand {
                 print("\(name): \(Self.summary(reading, prefix: "busy, kept stored"))")
             case .failed(let issue):
                 print("\(name): " + Shared.line(issue))
+            case .notStarted:
+                print("\(name): not checked, the refresh ran out of time")
             }
             switch result.fable {
             case .notRun: break

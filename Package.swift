@@ -10,6 +10,7 @@ let package = Package(
     products: [
         .library(name: "Core", targets: ["Core"]),
         .executable(name: "agent-balancer", targets: ["agent-balancer"]),
+        .executable(name: "AgentBalancerBar", targets: ["AgentBalancerBar"]),
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-argument-parser", exact: "1.8.2")
@@ -25,6 +26,11 @@ let package = Package(
                 "Core",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ],
+            swiftSettings: ownSettings
+        ),
+        .executableTarget(
+            name: "AgentBalancerBar",
+            dependencies: ["Core"],
             swiftSettings: ownSettings
         ),
         .testTarget(

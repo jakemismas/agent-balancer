@@ -111,3 +111,11 @@
   hook record. Repair refusals and the broken-link text name the item to fix, the save-time error
   for an unusable folder names the fix, the links record refusal lists every step, and `login`
   for a folder exits 1 on a different account or when the folder cannot be confirmed as its own.
+- Add the menu bar app `AgentBalancerBar` (window-style `MenuBarExtra`, no Dock icon): header with
+  the next launch and next Fable choice, one row per account with two meters and the reset time,
+  error and warning rows with Show steps and Copy, one banner for `settings_changed`, empty and
+  first-run states, Refresh now, Open usage page and Open at login. It reads `state/status.json`,
+  runs `agent-balancer refresh` at launch when the file is missing or old and then on a timer, runs
+  `status --cached` every 60 seconds, and writes no file. Add `scripts/build-app.sh` (bundle, icon
+  and ad hoc signature without Xcode) and `scripts/render-views.sh` (light and dark pictures of each
+  view in `build/renders/`).

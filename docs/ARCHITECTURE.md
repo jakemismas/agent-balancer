@@ -86,7 +86,11 @@ agent-balancer/
                    `claude setup-token` with the person's environment and hands the raw output
                    once to a callback of the `Tokens` module before it scrubs the remainder.
                    `ClaudeRunner.launchAttached` starts `claude` for `run` with the terminal's own
-                   input and output and the person's environment minus the protected group (6.2)
+                   input and output and the person's environment minus the protected group (6.2).
+                   `CLIRunner` starts the agent-balancer tool for the menu app: found only at
+                   `/opt/homebrew/bin` and `/usr/local/bin`, owner and mode test of 6.2, the probe
+                   environment, never `claude`. `ChildProcess` is the one capture-and-timeout loop
+                   both runners share
       Readers/     auth status reader, probe reader (stream-json parser), sessions reader
                    (`SessionsReader`: the default folder's `sessions/` and `jobs/` records, section 8)
       Readings/    reading cache (state/readings/<label>.json), the merge rule of 6.3, and the
@@ -111,12 +115,25 @@ agent-balancer/
                    (`EventLog`), the rule that turns a change of state into one event
                    (`Transitions`), and the `events` and `history` answers (`Queries`)
       Scrub/       token-like string redaction used by Runner and the logger
+      ViewModels/  what the menu app shows, with no UI code: `StatusSnapshot` (a lenient reader of
+                   `status.json` and `StatusReader`, which reads it and checks `config.json` through
+                   the no-follow reader), `MenuBuilder` (the row, header, banner and empty-state
+                   models, the tip texts, the time and percent formats) and `MenuController`
+                   (launch refresh, the refresh timer, the `status --cached` poll, Refresh now)
     agent-balancer/          CLI (swift-argument-parser)
       Commands/    one file per command: Init, Doctor, Config, Link, Refresh, Pick, Status, Events,
                    History, Add, Login, Remove, Run, Uninstall, and the `Shared` helper that ends a writing command with the status
                    rebuild
-    AgentBalancerBar/        SwiftUI MenuBarExtra app (window style, LSUIElement)
+    AgentBalancerBar/        SwiftUI MenuBarExtra app (window style, LSUIElement): the views, the
+                             palette of design/render.html, the template icon, `UsagePage.swift`
+                             (the one http literal), and the render flags of the same binary:
+                             `--render <dir>` (each view at 2x, light and dark, flat materials) and
+                             `--iconset <dir>` (the app icon sizes); both write through the
+                             no-follow writer and only under a `build/` folder
   skill/agent-balancer/SKILL.md   the skill file for a user's Claude (4A.7)
+  scripts/build-app.sh       build/AgentBalancerBar.app: release build, hand-made bundle, iconutil
+                             icon, ad hoc signature, no Xcode
+  scripts/render-views.sh    runs the render flag into build/renders/
   Tests/
     CoreTests/               picker tables, parsers, scrubber, config validation
     CLITests/                end to end with a fake `claude` under a temporary HOME; leak tests
@@ -1415,9 +1432,11 @@ the events record then keeps only each label's newest line.
     a date picker that takes today or later (`ends <date>`).
 - **Look:** system font, vibrancy material, macOS menu spacing, light and dark from the system,
   hover highlight on rows, full keyboard navigation, VoiceOver labels on meters.
-- **Data:** reads `~/.agent-balancer/state/status.json` and checks whether `config.json` exists; a
-  file watcher updates the view when the CLI writes. It writes no file and never runs `claude`
-  itself.
+- **Data:** reads `~/.agent-balancer/state/status.json` and checks whether `config.json` exists;
+  it looks at `status.json` every 5 seconds and again after every command it runs, which stands in
+  for a file watcher because the safety scan lets no source outside `Paths/` open a file. It writes
+  no file and never runs `claude` itself. Open usage page goes through the SwiftUI `openURL`
+  action, and Open at login through `SMAppService`; the app keeps no preference store.
 
 ## 12. Install, update, uninstall
 

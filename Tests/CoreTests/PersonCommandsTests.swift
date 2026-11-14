@@ -159,7 +159,7 @@ import Testing
         #expect(!names.contains(ProtectedEnv.tokenVariable))
     }
 
-    // MARK: uninstall and #25
+    // MARK: uninstall and the launch files a session names
 
     /// Two launch files of one token account, both old enough to be outside the lease window, with
     /// a session record that names the first.
@@ -185,7 +185,7 @@ import Testing
         let secret = Canaries.oauth()
         let (named, unnamed) = try twoFiles(t, secret: secret)
 
-        let plan = Uninstall.plan(context: t.context, leaseMinutes: 30)
+        let plan = try Uninstall.plan(context: t.context, leaseMinutes: 30)
         #expect(plan.launchFiles == 2 && plan.launchFilesNamed == 1 && plan.recordsReadable)
         #expect(plan.tokenFiles == 1)
 
@@ -270,7 +270,7 @@ import Testing
         try JSONSerialization.data(withJSONObject: manifest).write(
             to: t.context.dataRoot.appendingPathComponent("links.json"))
 
-        let plan = Uninstall.plan(context: t.context, leaseMinutes: 30)
+        let plan = try Uninstall.plan(context: t.context, leaseMinutes: 30)
         #expect(plan.links == 4 && plan.linksIntact == 1 && plan.hasLinksFile)
         let done = try Uninstall.run(context: t.context, leaseMinutes: 30)
         #expect(done.linksRemoved == 1 && done.linksKept == 3)

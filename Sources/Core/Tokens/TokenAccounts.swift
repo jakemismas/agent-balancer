@@ -41,7 +41,7 @@ public enum TokenAccounts {
 
     static let lockWaitSeconds: TimeInterval = 30
 
-    private static func takeLock(_ context: ToolContext) throws -> FileLock {
+    static func takeLock(_ context: ToolContext) throws -> FileLock {
         let writer = NoFollowWriter(root: context.dataRoot)
         guard
             let lock = try writer.acquireLock(
@@ -223,6 +223,14 @@ public enum TokenAccounts {
             + LaunchFiles.writerLeftoverCount(context: context)
     }
 
+    /// The temporary files `uninstall` counts as may hold a token: those `writerLeftovers` counts,
+    /// with each name of their shape in `tokens/` or a label's launch folder that `lstat` cannot
+    /// check, such as in a folder the user cannot search.
+    static func temporariesForUninstall(context: ToolContext) -> Int {
+        writerLeftovers(context: context) + TokenStore.uncheckedTemporaryCount(context: context)
+            + LaunchFiles.uncheckedTemporaryCount(context: context)
+    }
+
     /// Whether anything `removeFiles` deletes is still there for `label`: the token file, a launch
     /// file that may hold a token, a writer's leftover temporary file, a lease or a stored reading.
     /// A rerun of `remove` for a label that has no registry entry goes ahead only then.
@@ -253,11 +261,15 @@ public enum TokenAccounts {
     public struct Inventory: Equatable, Sendable {
         public var tokenFiles: Int
         public var launchFiles: Int
-        /// Launch files a session record still names.
+        /// Launch files a session record still names. With records that could not all be read,
+        /// at least this many.
         public var launchFilesNamed: Int
         /// False when the session records could not be read cleanly, so every launch file is kept
         /// as a tombstone.
         public var recordsReadable: Bool
+        /// False when the lease file is there but cannot be read or decoded, so every launch file
+        /// is kept as a tombstone.
+        public var leasesReadable: Bool
         /// Age in seconds of the oldest launch file, or nil with none.
         public var oldestLaunchAge: TimeInterval?
         public var openLeases: Int
@@ -269,10 +281,14 @@ public enum TokenAccounts {
     ) -> Inventory {
         let records = snapshot ?? SessionsReader.read(context: context)
         let launch = LaunchFiles.inventory(context: context, snapshot: records, now: now)
+        let leases = LeaseStore(context: context).currentIfReadable(
+            now: now, leaseMinutes: leaseMinutes)
+        // A launch file's name that cannot be checked may hold a token, so it is listed too.
+        let launchFiles = launch.files + LaunchFiles.uncheckedFileCount(context: context)
         return Inventory(
-            tokenFiles: TokenStore.fileCount(context: context), launchFiles: launch.files,
+            tokenFiles: TokenStore.fileCount(context: context), launchFiles: launchFiles,
             launchFilesNamed: launch.named, recordsReadable: records.clean,
-            oldestLaunchAge: launch.oldestAge,
+            leasesReadable: leases != nil, oldestLaunchAge: launch.oldestAge,
             openLeases: openLeaseCount(context: context, leaseMinutes: leaseMinutes, now: now))
     }
 
@@ -284,44 +300,124 @@ public enum TokenAccounts {
             .count
     }
 
-    /// What `removeEverything` did.
-    public struct Wiped: Equatable, Sendable {
-        public let tokenFiles: Int
-        public let launchFiles: Int
-        /// Launch files kept as tombstones: a session record names them, their lease is open, they
-        /// are younger than `leaseMinutes`, or the records could not be read cleanly. They hold
-        /// no token.
-        public let launchFilesKept: Int
-        /// Entries among the token and launch files that the tool did not make, left alone.
-        public let entriesSkipped: Int
-        public let temporariesLeft: Int
+    /// Throws before `uninstall` lists or removes anything when the token folder or the launch
+    /// folder is there but is not a real folder of the user's that passes the folder checks (a
+    /// link, which is never followed, a file or another user's folder), or a label's folder in
+    /// the launch folder is a real folder of the user's that fails them, since a token file or a
+    /// launch file in it could be neither counted nor deleted.
+    static func requireCheckableForUninstall(context: ToolContext) throws {
+        let writer = NoFollowWriter(root: context.dataRoot)
+        let entry = writer.placeEntry(parent: [], name: TokenPaths.folderName)
+        if let refusal = Messages.uninstallRefusal(
+            "The token folder", "~/.agent-balancer/tokens", entry)
+        {
+            throw ToolError(refusal)
+        }
+        try LaunchFiles.requireCheckableForUninstall(context: context)
     }
 
-    /// `uninstall`'s step for the token and launch folders, under the pick lock: every launch file
-    /// of every label is deleted, or overwritten with a token-free tombstone and kept when a
+    /// How many entries in the token folder and the launch folder have the name of a token file
+    /// or a label's launch folder only once their letter case is folded. Names only; nothing is
+    /// opened.
+    static func otherCaseEntryCount(context: ToolContext) -> Int {
+        TokenStore.otherCaseEntryCount(context: context)
+            + LaunchFiles.otherCaseEntryCount(context: context)
+    }
+
+    /// What `uninstall`'s launch file step did.
+    public struct LaunchCleared: Equatable, Sendable {
+        public let deleted: Int
+        /// Launch files kept as tombstones: a session record names them, their lease is open, they
+        /// are younger than `leaseMinutes`, or the records or the lease file could not be read
+        /// cleanly. They hold no token.
+        public let kept: Int
+        /// Entries the tool did not make, left alone.
+        public let left: Int
+        /// Entries named like a label's launch folder only in other letter case, never opened.
+        /// Each may hold a launch file with a token.
+        public let otherCase: Int
+        /// Entries where a label's launch folder belongs that are a link, a file or another
+        /// user's folder, never followed. A launch file with a token may be behind each.
+        public let notFollowed: Int
+    }
+
+    /// `uninstall`'s first step, under the pick lock the caller holds (`takeLock`): every launch
+    /// file of every label is deleted, or overwritten with a token-free tombstone and kept when a
     /// session record names it, an open lease holds it, it is younger than `leaseMinutes`, or the
-    /// records cannot be read cleanly; then a read-back that no launch file holds a token; then
-    /// every token file. A crash at any step leaves a state that a rerun finishes.
-    public static func removeEverything(
-        context: ToolContext, leaseMinutes: Int = PickerSettings().leaseMinutes,
-        snapshot: SessionsSnapshot? = nil, now: Date = Date()
-    ) throws -> Wiped {
-        let lock = try takeLock(context)
-        defer { lock.release() }
+    /// records cannot be read cleanly; every one is kept when the lease file is there and cannot
+    /// be read or decoded. Then a read-back that no launch file holds a token: when one does, it
+    /// throws, and no token file or anything after it goes, so a rerun can finish.
+    static func clearLaunchFilesForUninstall(
+        context: ToolContext, leaseMinutes: Int, snapshot: SessionsSnapshot, now: Date
+    ) throws -> LaunchCleared {
         let span = Double(max(1, leaseMinutes)) * 60
-        let open = try LeaseStore(context: context).current(now: now, leaseMinutes: leaseMinutes)
-        let launch = try LaunchFiles.removeEverything(
-            context: context, snapshot: snapshot ?? SessionsReader.read(context: context),
-            leased: Set(open.map(\.id)), keepModifiedAfter: now.addingTimeInterval(-span))
+        let open = LeaseStore(context: context).currentIfReadable(
+            now: now, leaseMinutes: leaseMinutes)
+        let launch = try LaunchFiles.clearForUninstall(
+            context: context, snapshot: snapshot, leased: Set((open ?? []).map(\.id)),
+            keepModifiedAfter: now.addingTimeInterval(-span), keepAll: open == nil)
         guard try LaunchFiles.tokenHolderCount(context: context) == 0 else {
             throw ToolError(
                 "A launch file could not be cleared, so the token files were kept. Run `agent-balancer uninstall` again."
             )
         }
-        let tokens = try TokenStore.deleteAll(context: context)
-        return Wiped(
-            tokenFiles: tokens.deleted, launchFiles: launch.deleted,
-            launchFilesKept: launch.tombstoned, entriesSkipped: tokens.skipped + launch.skipped,
-            temporariesLeft: launch.temporariesLeft)
+        return LaunchCleared(
+            deleted: launch.deleted, kept: launch.tombstoned, left: launch.skipped,
+            otherCase: launch.otherCase, notFollowed: launch.notFollowed)
+    }
+
+    /// What `uninstall`'s token file step did.
+    struct TokenFilesCleared: Equatable {
+        var deleted = 0
+        /// Token files that could not be deleted, a token file's name that `lstat` cannot check
+        /// included. Each may still hold its token.
+        var undeleted = 0
+        /// Entries the tool did not make, left alone.
+        var left = 0
+        /// Entries named like a token file only in other letter case, never opened. Each may
+        /// hold a token.
+        var otherCase = 0
+    }
+
+    /// `uninstall`'s token file step (`TokenStore.deleteFilesForUninstall`), under the pick lock
+    /// the caller holds.
+    static func deleteTokenFilesForUninstall(context: ToolContext) throws -> TokenFilesCleared {
+        try TokenStore.deleteFilesForUninstall(context: context)
+    }
+
+    /// What `uninstall`'s writer leftovers step left in the token and launch folders.
+    struct LeftoversLeft: Equatable {
+        /// The writer's temporary files still there. Each may hold a token.
+        var temporaries = 0
+        /// Other names of that shape, such as a link, which the tool did not make.
+        var others = 0
+    }
+
+    /// `uninstall`'s writer leftovers step, under the pick lock the caller holds: the writer's
+    /// leftover temporary files in the token folder and in each launch folder go, then the
+    /// folders left empty. It never throws.
+    static func deleteWriterLeftoversForUninstall(context: ToolContext) -> LeftoversLeft {
+        let shaped =
+            TokenStore.tidyForUninstall(context: context)
+            + LaunchFiles.tidyForUninstall(context: context)
+        let temporaries = temporariesForUninstall(context: context)
+        return LeftoversLeft(temporaries: temporaries, others: max(0, shaped - temporaries))
+    }
+
+    /// What `uninstall` says when token files could not be deleted.
+    public static func undeletedTokenFilesText(_ count: Int) -> String {
+        "\(count) token files could not be deleted and still hold a token. Make `~/.agent-balancer/tokens/` writable and run `agent-balancer uninstall` again."
+    }
+
+    /// What `uninstall` says when the writer's temporary files in the token or launch folders
+    /// could not be deleted.
+    public static func undeletedTemporariesText(_ count: Int) -> String {
+        "\(count) temporary files could not be deleted and may hold a token. Make `~/.agent-balancer/tokens/` and the launch folders writable and run `agent-balancer uninstall` again."
+    }
+
+    /// What `uninstall` says about entries named like a token file or a label's launch folder
+    /// only in other letter case.
+    public static func otherCaseEntriesText(_ count: Int) -> String {
+        "\(count) entries in `~/.agent-balancer/tokens/` or the launch folder have the name of a token file or a launch folder in other letter case, such as `Pool-a.json`, so each may hold a token, and `uninstall` did not open them. Rename each to the tool's spelling, such as `pool-a.json`, or move it out of `~/.agent-balancer`, then run `agent-balancer uninstall` again."
     }
 }

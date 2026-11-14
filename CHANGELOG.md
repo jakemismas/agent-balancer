@@ -101,8 +101,9 @@
   source that appeared after `link`, and `link --repair` adds it. Changes to `links.json` take a
   lock and refuse, writing nothing, when part of the file cannot be decoded, including a hook
   record with a malformed hash; `link --accept-source-change` replaces that record and keeps the
-  links. A `[redacted]` marker in the label segment of a reported folder matches only a label of
-  7 or more characters. `uninstall` clears
+  links. A `[redacted]` marker in the label segment of a reported folder matches only when the
+  scrubber turns the account's own label into exactly that segment: a label of 32 or more
+  characters that the entropy rule redacts, or one that holds the token prefix. `uninstall` clears
   the links listed in `links.json`.
 - Require an interactive terminal to apply `link`, `link --repair`, `link --accept-source-change`
   and `unlink`: standard input that is a pipe is refused before the prompt, nothing changes, and
@@ -110,7 +111,8 @@
   links changed after the list was shown, and `link --accept-source-change` does the same for the
   hook record. Repair refusals and the broken-link text name the item to fix, the save-time error
   for an unusable folder names the fix, the links record refusal lists every step, and `login`
-  for a folder exits 1 on a different account or when the folder cannot be confirmed as its own.
+  for a folder exits 1 on a different account, when the folder cannot be confirmed as its own, or
+  when the sign-in reports no email for an account with an expected one.
 - Add the menu bar app `AgentBalancerBar` (window-style `MenuBarExtra`, no Dock icon): header with
   the next launch and next Fable choice, one row per account with two meters and the reset time,
   error and warning rows with Show steps and Copy, one banner for `settings_changed`, empty and
@@ -155,7 +157,8 @@
   no Sign in. A folder signed in where the check could not place it, or a linked one placed and
   doubted since while its row does not show `login_rejected`, reads "Sign-in not confirmed" with no
   Sign in, which `login --browser` would refuse. The panel of the first says the last sign-in check
-  could not confirm the sign-in in this folder, whatever code the row shows. A new folder after
+  could not confirm the sign-in in this folder, whatever code the row shows, or gives the row's own
+  error when that says the sign-in reported no email. A new folder after
   `add --kind folder` or `link`, or one last seen logged out, shows "Not signed in" (or "Signed
   out") and offers Sign in once it is linked and its expected email passes the plain-email rule
   `login --browser` applies (one rule for both; otherwise the panel says why), and the Add sheet's
@@ -224,3 +227,8 @@
   scan now also reads the Markdown files at the top of the repository for addresses, org ids and
   attribution phrases. The other render scenes now use the five labels too, and the Manage window
   scenes date the link check by the status file's time, as the window does.
+- Refuse every save to `links.json`, writing nothing, when its `schemaVersion` is not 1, such as a
+  file a newer version wrote: the message says to move `links.json` aside, record the hooks again
+  with `agent-balancer link --accept-source-change` and run `agent-balancer link <label>` again for
+  each folder account. `uninstall` still deletes such a file, and removes none of the links it
+  lists, since it cannot read them.

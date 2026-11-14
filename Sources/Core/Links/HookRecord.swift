@@ -249,16 +249,35 @@ public struct HookRecord: Sendable {
     public struct SeenSettings: Equatable, Sendable {
         public var issue: String?
         public var carriesKey: Bool
+        /// The stamp the verdict holds, set only when the verdict passes.
+        public var stamp: SettingsStamp? = nil
     }
 
     /// The verdict a reader saved, valid only while the file's stamp is unchanged. A missing,
     /// unreadable, malformed or older verdict, a stamp that cannot be taken, and a settings path
     /// that is not a regular file all refuse. The hook record is compared live, so a record that
-    /// changed after the verdict is caught too.
+    /// changed after the verdict is caught too. A settings path that is a link that goes nowhere,
+    /// or is not a file, refuses with a text that names that fix, since running `doctor` alone
+    /// cannot clear it.
     public func seenVerdict() -> SeenSettings {
         let stale = SeenSettings(issue: Messages.settingsNotChecked, carriesKey: false)
         let url = context.defaultClaudeFolder.appendingPathComponent("settings.json")
-        guard let stamp = try? SettingsStamp.take(url), stamp.isRegularOrAbsent,
+        guard let stamp = try? SettingsStamp.take(url) else {
+            // Only a link makes the path present while what it names cannot be checked.
+            if let path = try? FileStamp.take(url.path, followLinks: false), path.present,
+                !path.isRegular
+            {
+                return SeenSettings(issue: Messages.settingsLinkGoesNowhere, carriesKey: false)
+            }
+            return stale
+        }
+        guard stamp.isRegularOrAbsent else {
+            let dangling = stamp.link.present && !stamp.link.isRegular && !stamp.target.present
+            return SeenSettings(
+                issue: dangling ? Messages.settingsLinkGoesNowhere : Messages.settingsNotAFile,
+                carriesKey: false)
+        }
+        guard
             let data = try? reader.read(
                 folders: Layout.stateFolders, name: Layout.settingsSeenName),
             let file = try? JSONDecoder().decode(VerdictFile.self, from: data),
@@ -276,7 +295,7 @@ public struct HookRecord: Sendable {
         case .changed:
             return SeenSettings(issue: Messages.settingsChanged, carriesKey: file.carriesKey)
         case .matches:
-            return SeenSettings(issue: nil, carriesKey: file.carriesKey)
+            return SeenSettings(issue: nil, carriesKey: file.carriesKey, stamp: stamp)
         }
     }
 
@@ -555,13 +574,18 @@ public struct HookRecord: Sendable {
     public func listedLinks() -> [LinkEntry] { loadFile()?.links ?? [] }
 
     /// Where a listed link sits as folders under the data folder, or nil when it is not directly
-    /// inside `accounts/<label>/.claude/`. Nothing outside the data folder is ever named.
+    /// inside `accounts/<label>/.claude/`. Nothing outside the data folder is ever named. A path
+    /// with an empty, `.` or `..` segment is not resolved: it names no location.
     func location(of entry: LinkEntry) -> (folders: [String], name: String)? {
+        let written = entry.path.split(separator: "/", omittingEmptySubsequences: false)
+        guard entry.path.hasPrefix("/"),
+            !written.dropFirst().contains(where: { $0.isEmpty || $0 == "." || $0 == ".." })
+        else { return nil }
         let root = context.dataRoot.standardizedFileURL.pathComponents
         let parts = URL(fileURLWithPath: entry.path).standardizedFileURL.pathComponents
-        guard !entry.path.contains("/../"), parts.count == root.count + 4,
-            Array(parts.prefix(root.count)) == root
-        else { return nil }
+        guard parts.count == root.count + 4, Array(parts.prefix(root.count)) == root else {
+            return nil
+        }
         let rest = Array(parts.suffix(4))
         guard rest[0] == "accounts", ConfigValidator.isValidLabel(rest[1]), rest[2] == ".claude"
         else { return nil }

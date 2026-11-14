@@ -36,10 +36,10 @@ These rules hold in every slice. Breaking one is a critical defect.
    modules read it. Other modules reach `tokens/` and `launch/` through calls those two offer. The
    token is never printed, logged, passed as an argument or put in an environment the tool builds.
 2. No Keychain or Security framework API. No read of `.credentials.json` or `.claude.json`.
-3. The settings file of the default folder is read only by `init`, `doctor`, `pick`, `verify`,
-   `link <label>` and `link --accept-source-change`, through the hook record, and only for hook entries, the
+3. The settings file of the default folder is read only by `init`, `doctor`, `pick`, `verify` and
+   `link --accept-source-change`, through the hook record, and only for hook entries, the
    `disableAllHooks` flag, whether `apiKeyHelper` is present, and the names (never values) of `env`
-   keys.
+   keys. `run` and `link <label>` never open it: they use the verdict those readers save (4A.5).
 4. No network code: no `URLSession`, no Network framework, no socket API. No child process other
    than `claude` and the tool itself. The only `http` literal in `Sources/` is the usage-page URL
    constant.
@@ -106,8 +106,8 @@ agent-balancer/
       Doctor/      `DoctorChecks`: the launch file count and oldest age, and the synced-folder test,
                    both used by the `doctor` command (the other checks stay in the command)
       Uninstall/   `Uninstall`: the plan `uninstall` lists and the removal after the typed word,
-                   built on `TokenAccounts.removeEverything` and the listed-link removal of
-                   `HookRecord`
+                   built on the uninstall steps of `TokenAccounts`, the listed-link removal of
+                   `HookRecord` and the name rules of section 12 (`Uninstall.OwnNames`)
       Tokens/      the token file: `TokenStore` (read, save, delete), `TokenCapture` (the capture and
                    the shape check), `TokenAccounts` (install, replace and remove under the pick
                    lock, with the launch files rewritten or deleted through `Launch`)
@@ -230,10 +230,11 @@ The rebuild step is the only writer of the history. Under one lock, taken before
 reading, lease or config file and held until `status.json` is renamed into place (section 13), it
 appends a line to an account's readings history when its numbers changed, and a numbered line to
 the events record when an account's state changed. `pick` and `verify` never read the history.
-`status` and `refresh` never read the default folder's settings file (rule 3). The commands that
-may read it (`init`, `pick`, `link --accept-source-change`) pass what they saw, the hook record
-status and whether keys are present, to the rebuild, which keeps it in `state/current.json` and
-carries it over for every rebuild that did not read the file. In the same way a sign-in check
+`status` and `refresh` never read the default folder's settings file (rule 3). Of the commands
+that read it (`init`, `doctor`, `pick`, `verify` and `link --accept-source-change`), all but
+`doctor` pass what they saw, the hook record status and whether keys are present, to the rebuild,
+and `link <label>` passes what the saved verdict says; the rebuild keeps it in
+`state/current.json` and carries it over for every rebuild that did not read the file. In the same way a sign-in check
 (`status` runs `auth status` for the `login` account) and a probe (`refresh`, `pick`) each pass
 their result, and a rebuild that observed nothing carries the last error over unchanged, so
 `status --cached` never invents a recovery. A successful probe clears a carried `login_rejected`.
@@ -358,7 +359,10 @@ stored login in a foreground launch and does not reach a background worker. A to
       all skip.
    With no candidate left, `pick` exits 2. `run --print-command` uses the same predicate, and
    `doctor` prints one line for the session folder (`default`, `folder <label>` or
-   `not confirmed`), by label only. A launcher caller and a shell that is not a chat with neither
+   `not confirmed`), by label only. It names a folder account only for a `CLAUDE_CONFIG_DIR` that
+   is exactly the account's folder, or a `CLAUDE_JOB_DIR` that is exactly
+   `<account folder>/jobs/<one segment>`, checked as text like rule b (absolute, no empty, `.` or
+   `..` segment, no link resolved). A launcher caller and a shell that is not a chat with neither
    variable set are unchanged. The tool never sets `CLAUDE_CONFIG_DIR` to the default path.
 2. `pick --caller typed` with a token or key variable in its own environment (the Claude Code
    token variable, `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`) answers with
@@ -378,15 +382,14 @@ stored login in a foreground launch and does not reach a background worker. A to
 | Both inherited | Only `folder` accounts; `backgroundOnly` true | Skips nothing; `unsetEnv` removes both |
 | `key_in_settings`: the default folder's `settings.json` carries `apiKeyHelper` or an `env` name among the API key and token names | `token` accounts skipped with `settings carry an API key or key helper` | Same |
 
-Recorded manual checks behind this rule (2026-11-10, spike runs S12 and S17, results in
-`.claude/sprint/DECISIONS.md` "Spike results"):
+Recorded manual checks behind this rule (2026-11-10):
 
 - An inherited `CLAUDE_CONFIG_DIR` picks the folder, so a `login` or `token` recipe applied under
   it lands in the wrong folder. This is why typed callers keep only `folder` accounts (rule 1).
 - A token in `--settings` reaches the worker's own requests: a bad token gave "API Error: 401
   Invalid bearer token". A foreground session passes a settings env variable to its Bash child. A
   `--bg` worker does not.
-- `claude setup-token` was run through a pipe (S14); the token shape and capture rule are in 4A.4.
+- `claude setup-token` was run through a pipe; the token shape and capture rule are in 4A.4.
 - Not measured: which account a `--bg` worker bills when a valid token is in `--settings`, and how
   an inherited API key changes billing beyond the 401 behavior above. The rule therefore assumes
   the worst case: an inherited key or token marks every answer `backgroundOnly` (rule 2), and a
@@ -414,7 +417,7 @@ and nothing is written: an account keeps one end marker (7.1).
    holds an unscrubbed buffer. `TokenCapture` returns a length and shape check to its caller,
    never text. The fallback form, `login <label> --paste`, has the person run
    `claude setup-token` themselves and paste the token at a prompt that does not echo. The pipe form
-   (spike S14) is the default and `--paste` is the fallback. A pasted or captured token must have
+   is the default and `--paste` is the fallback. A pasted or captured token must have
    the shape `sk-ant-oat`, two digits, a dash and letters, digits, dashes or underscores; an API
    key or any other text is refused and nothing is saved. The token
    is never a command argument and never an environment variable of the tool.
@@ -532,11 +535,16 @@ default folder's `settings.json`. It takes the settings checks from the verdict 
 (`state/settings-seen.json`): the hook entries, `disableAllHooks`, whether the settings carry a key,
 and the stamp of the file (device, inode, size, modification time and change time, for the path and
 for what it resolves to). `init`, `doctor`, `pick`, `verify` and `link --accept-source-change`
-save it, only when the stamp is the same before and after their read. `run` stats the file, never
-opens it, and compares the stamp and the live hook record. It refuses with `settings_changed` and
-the text "Settings changed since the last check. Run `agent-balancer doctor` in Terminal." when the
-verdict is missing, unreadable, malformed or older than the file's stamp, when the stamp cannot be
-taken, or when the settings path is a folder, a special file or a link that goes nowhere. A hook
+save it, only when the stamp is the same before and after their read; they are the only readers of
+the file (rule 3). `run` stats the file, never opens it, and compares the stamp and the live hook
+record. It refuses with `settings_changed` and the text "Settings changed since the last check.
+Run `agent-balancer doctor` in Terminal." when the verdict is missing, unreadable, malformed or
+older than the file's stamp, or when the stamp cannot be taken. A settings path that no reader can
+make usable gets a text that names the fix, since running `doctor` alone cannot clear it: a link
+that goes nowhere (a link to nothing, or a loop) refuses with "The default folder's settings file
+is a link that goes nowhere. Repair the link or remove it, then run `agent-balancer doctor` in
+Terminal.", and a folder or special file there with "The default folder's settings file is not a
+file. Replace it with a file or remove it, then run `agent-balancer doctor` in Terminal." A hook
 record that is missing or changed gives the texts above. A token account is refused with
 `key_in_settings` when the verdict says the settings carry a key. A change time cannot be put back
 by an ordinary call, so a same-size edit with the modification time restored still refuses. Every
@@ -681,11 +689,14 @@ checks for a terminal itself when it must ask for a label, and `uninstall` keeps
 without this check.
 
 While the person reads the list, nothing is locked. After the typed answer, `link`, `link
---repair` and `unlink` take `locks/links.lock`, read the account's entries again and write only
-if they equal the entries the list was built from; otherwise they refuse, writing nothing, and
-say to run the command again (the approval was for that list). `link --accept-source-change` does
-the same with the default folder's hook record. `remove` and `uninstall` only clear entries and
-check nothing.
+--repair` and `unlink` take `locks/links.lock`, read the account's entries and its linked mark
+again and write only if they equal what the list was built from; otherwise they refuse, writing
+nothing, and say to run the command again (the approval was for that list). `link` and `link
+--repair` also check the default folder's settings verdict again under that lock (5.7).
+`link --accept-source-change` does the same with the default folder's hook record, and reads the
+settings again to check they are still the ones it showed. `remove` and `uninstall` only clear
+entries and check nothing against the list; `uninstall` reads the session records, the lease
+window and every file again once it holds the pick lock (section 12).
 
 The chat-shell test is `CLAUDE_CODE_CHILD_SESSION` present with any value, empty included. Claude
 Code sets it in the subprocesses of its shell tools, hook commands and status line commands, and
@@ -769,17 +780,36 @@ never on disk) and before `run`. Each check is a refusal that removes the accoun
 
 `verify <label>` prints each failure with its code and exits 1 when any check fails (a login or
 token label is refused: it verifies folder accounts only). Check 4 compares the folder that
-`auth status` reports with the account's own folder after links and `.` segments are resolved; the
-runner redacts long random-looking runs in what it captures, so a `[redacted]` marker stands only
-for text inside one path segment and never matches a `/`. Every segment without a marker must
-match literally. The reported value must be an absolute path with as many segments as the
-folder, a last segment with no marker, and at least one other segment with no marker. A marker
-in the label segment (the one before the last) matches only a label of 7 or more characters, the
-shortest text the redaction can replace (`sk-ant-`); a shorter label can never be redacted. A
+`auth status` reports with the account's own folder after links are resolved; a reported value
+with a `.` or `..` segment never matches. The runner redacts long random-looking runs in what it
+captures, so a `[redacted]` marker stands only for text inside one path segment and never matches
+a `/`. Every segment without a marker must match literally. The reported value must be an
+absolute path with as many segments as the folder, a last segment with no marker, and at least
+one other segment with no marker. In any other segment a marker stands for at least one
+character, two markers side by side for at least one each, and the text between markers must
+appear in that order, so a marker never matches an empty run. The label segment (the one before
+the last) tells two account folders apart, so a marker there matches only when the scrubber turns
+the account's own label into exactly that segment: a label of 32 or more characters that the
+entropy rule redacts, or one that holds the token prefix (`sk-ant-`, the shortest run the
+redaction replaces). A label the scrubber leaves as it is never matches a marker. A
 `configDirectory` that is missing, empty, not a string, not absolute, only markers or short of
 segments counts as a failed check 4 for a folder account ("Check failed: the folder of this
 sign-in could not be confirmed." or "...the sign-in is not in this account's own folder."), so
-`pick`, `run`, `login` and `verify` all refuse. Check 2 also fails a shared source (`settings.json`,
+`pick`, `run`, `login` and `verify` all refuse.
+
+The expected login of check 4, and of the `login` kind's check in 4A.5, is the account's expected
+email. The installed client's `claude auth status --json` (read as text in version 2.1.325, never
+run) always prints `loggedIn`, `authMethod`, `apiProvider`, `analyticsDisabled`,
+`projectsDirectory`, `configDirectory` and `loginExpiresAt`; for a stored claude.ai sign-in
+(`authMethod` `claude.ai`, which a `login` or `folder` account has) it adds `email`, `orgId`,
+`orgName`, `subscriptionType`, `storedClaudeAiLogin` and `planTier`, with `email` null when the
+client holds no account record. The email names the account, so an account with an expected
+email fails the check when the report carries a different email (`wrong_account`) or none at
+all (`check_failed`, "Check failed: the sign-in reported no email, so it could not be confirmed
+as this account."). The tool reads no other identity field: `orgId` is an organization id, which
+never leaves `auth status` (binding rule 6), and `loginExpiresAt` is the stored sign-in's end, not
+the account. For an account with no expected email, only the plan tier (`plan_changed`) can mark
+a wrong account. Check 2 also fails a shared source (`settings.json`,
 `CLAUDE.md`, `skills/`, `agents/`, `commands/`) that exists in the default folder, by `lstat` with
 no read, while the manifest lists no link for it; the failure is the broken-link text, and
 `link --repair <label>` (or `link <label>`) adds the link after the same typed approval. Repair
@@ -796,17 +826,26 @@ set, `settings_changed` with the `--all` text of section 9.
 `run` and `login` use `verify --no-reading` (checks 1 to 4), so a new account can be started
 before its first reading. For the default folder, `run` takes check 3 from the saved verdict of
 4A.5 and does not read `settings.json`; that verdict is a file, and is not the cache above. Missing, stale or unreadable counts as failed. `link --repair` re-links
-only after the same typed approval. A changed hook set is re-accepted only with
-`link --accept-source-change`, which prints the hook entries added and removed (event, matcher and
-command hash, never the command text, which can hold secrets) and whether `disableAllHooks` is
-present before asking for the typed word `accept`. With no label it re-accepts the default
+only after the same typed approval. `link <label>` and `link --repair <label>` take the settings
+verdict when they build the plan and refuse to ask while it fails; after the typed label, under
+the links lock and before any link changes, they check it again and refuse, changing nothing,
+when it now fails or is no longer the verdict the plan was built with (another stamp included),
+as they refuse when the account's links or its linked mark changed. A changed hook set is
+re-accepted only with `link --accept-source-change`, which prints the hook entries added and
+removed (event, matcher and command hash, never the command text, which can hold secrets) and
+whether `disableAllHooks` is present before asking for the typed word `accept`. After the typed
+word it reads the settings again and records nothing when they differ from what it showed, or
+when the hook record changed meanwhile. `unlink` removes nothing when the links it listed, or the
+linked mark, changed before the typed label. `unlink` checks no settings verdict: it only removes
+links, so no settings reach a folder through it, and the folder then counts as not linked. With
+no label it re-accepts the default
 folder's record; `--all` adds every linked folder. `status` and the menu show one banner,
 "Settings changed" (section 9), instead of one error row per account, and the events record still
 holds one `settings_changed` event per affected account. `verify` reads `settings.json` only to
 parse the hook entries and that flag; it never logs or stores the file's content.
 
 The default folder is never linked (5.1) and never counts as `not linked`. It still has hooks to
-lose, and every `login` and `token` session runs in it. So `init`, `link` on apply and
+lose, and every `login` and `token` session runs in it. So `init` and
 `link --accept-source-change` record the hook fingerprint of the default folder's `settings.json`
 in `links.json`, and check 3 runs on it as on every linked folder. `init` always writes the
 record, an empty one when the user has no hooks. After `init`, a missing or unreadable record
@@ -833,8 +872,9 @@ Exact form, run by the tool as its own child process (argument array, no shell):
 ```
 cwd: a fresh mkdtemp folder under ~/.agent-balancer/probe/, mode 0700, removed after the probe
      (so no project CLAUDE.md, .mcp.json or hooks load; several probes may run at once, so the
-     probe refuses to run only if probe/ holds something that is not a probe folder, and it first
-     removes a probe folder older than the probe timeout)
+     probe refuses to run only if probe/ holds something that is not a probe folder, `p-` and 16
+     of the ASCII characters 0-9a-f, and it first removes a probe folder older than the probe
+     timeout)
 env: CLAUDE_CONFIG_DIR=<account folder>  (left unset for the default folder)
 claude -p "Reply with the single word OK." --model haiku --tools "" --disallowedTools "mcp__*"
        --strict-mcp-config --max-turns 1 --no-session-persistence --max-budget-usd 0.05
@@ -1252,10 +1292,10 @@ short scrubbed text the menu shows as is.
 | `login_rejected` | `auth status` says logged out, or the probe returns an auth error | error | "Login rejected. Run `agent-balancer login pool-b` in Terminal." |
 | `wrong_account` | `auth status` email differs from config | error | "Folder is logged in as another account." |
 | `duplicate_login` | two configured accounts report one email | error | "Logged in as the same account as pool-a. Log one folder into its own account." |
-| `settings_changed` | a link of a folder account is broken, or a hook entry recorded at link time is gone or changed (5.7); or, after `init`, the hook record is missing or unreadable (4A.5); or, for `run`, the saved verdict is missing or older than the file | error on every affected account, shown as one banner | "Settings changed. Run `agent-balancer link --accept-source-change` in Terminal." For `run`, with no verdict that matches the file's stamp: "Settings changed since the last check. Run `agent-balancer doctor` in Terminal." |
+| `settings_changed` | a link of a folder account is broken, or a hook entry recorded at link time is gone or changed (5.7); or, after `init`, the hook record is missing or unreadable (4A.5); or, for `run`, the saved verdict is missing or older than the file, or the settings path is a link that goes nowhere or is not a file | error on every affected account, shown as one banner | "Settings changed. Run `agent-balancer link --accept-source-change` in Terminal." For `run`, with no verdict that matches the file's stamp: "Settings changed since the last check. Run `agent-balancer doctor` in Terminal." For a settings path that no reader can fix, the texts of 4A.5 that name the repair |
 | `plan_changed` | `planTier` differs from `expectedPlanTier` | error | "Plan is max_5x, expected max_20x." |
 | `account_ended` | `endsAt` passed; or, for an account marked `endingSoon`, the first reading where `planTier` differs from `expectedPlanTier` or is missing. Once ended that way it stays ended until the flag is cleared (`config set <label> ending-soon false`, `ends <date>` or `ends none`) | ended | "Account ended." |
-| `check_failed` | probe timeout, no `rate_limit_event`, unparsable output, `claude` missing, a reply with no weekly use (or no 5-hour use when one is named or stored), a bad value in any window with a valid name | error | "Check failed: probe timed out after 60 s." |
+| `check_failed` | a sign-in that reports no email for an account with an expected email (5.7), probe timeout, no `rate_limit_event`, unparsable output, `claude` missing, a reply with no weekly use (or no 5-hour use when one is named or stored), a bad value in any window with a valid name | error | "Check failed: probe timed out after 60 s." |
 | `limited` | probe status not `allowed`, or weekly or 5-hour use at or above `limitedAtPercent`; a full Fable sub-cap alone is the warning below | limited | "Limited until Wed 4:00 PM." |
 | `fable_limited` (warning) | Fable use is readable and at or above `limitedAtPercent` of the Fable cap; only Fable picks skip the account | ok | "Fable limited until Thu 9:00 AM." |
 | `login_expiring` (warning) | `loginExpiresAt` within 7 days; for a token account within 14 days of its estimated end (4A.4) | ok | "Login expires Dec 7." |
@@ -1371,7 +1411,8 @@ Field rules:
   the last sign-in check of the folder that read an answer from `auth status`. `signed_in` is the
   expected account (any account when none is expected) signed in in the account's own folder;
   `signed_out` is no account signed in; `other_account` is another account signed in in that
-  folder; `not_confirmed` is an account signed in that the check could not place in that folder.
+  folder; `not_confirmed` is an account signed in that the check could not place in that folder,
+  or could not confirm as the expected account because the sign-in reported no email.
   It is null before the first such check. A check that could not run or whose answer could not
   be read leaves it as it was. A status written before this field has no key; its writer kept
   the plan tier through a doubt, so the window reads such a folder row by its tier only while
@@ -1718,7 +1759,8 @@ empty lists, and the events record keeps only each label's newest line.
     "Sign-in not confirmed" and "Account ended" panel, the row's own error, through the
     display-safe pass, is the problem that says why, with no steps, except a folder whose
     `signInCheck` is `not_confirmed`: its problem is "Check failed" with "The last sign-in check
-    could not confirm the sign-in in this folder.", whatever code the row shows. An ended folder
+    could not confirm the sign-in in this folder.", whatever code the row shows, or the row's own
+    error when that is the one for a sign-in that reported no email. An ended folder
     that reads as signed in or not signed in shows its own `account_ended` error as the problem;
     one that reads as another account's, or as not confirmed, keeps that problem, and its list
     row still says it has ended. The `wrong_account` problem
@@ -1786,7 +1828,12 @@ empty lists, and the events record keeps only each label's newest line.
 - **One account per folder, for good.** A folder is signed into one account and stays on it,
   because saved thinking from a model works only in the account that produced it, and a chat that
   meets a second sign-in loses it. `login <label>` runs only while the folder is logged out and
-  checks the email afterwards. It exits 1 when the folder holds a different account (a wrong email or plan) or when the folder cannot be confirmed as its own, and says so. `add`, `login` and the README print "Never sign a different account
+  checks the email afterwards. It exits 1, and says so, when `auth status` cannot be read, when
+  the folder is not signed in, when the check fails at error level (`check_failed`, such as when the
+  folder cannot be confirmed as its own or the sign-in reports no email for an account with an
+  expected one), or when the folder holds a different account (`wrong_account`, a wrong email). A
+  plan other than the expected one is reported as `plan_changed` and leaves the exit status at 0.
+  `add`, `login` and the README print "Never sign a different account
   into a folder that already has chats. Add a new folder for the new account instead." A folder
   found on another account shows `wrong_account`, drops out of `pick`, and its fix text says to
   sign the expected account back in, not to relabel the folder.
@@ -1814,37 +1861,164 @@ empty lists, and the events record keeps only each label's newest line.
   quoted), on standard output and the refusal on standard error, writes nothing (no launch file, no
   lease, no token read), never starts `claude` and exits 1 (5.1). `run` never picks an account, and
   an orchestrator never uses it.
-- **Uninstall, in this order:** `agent-balancer uninstall`, then delete the app from Applications,
-  then `brew uninstall agent-balancer`. `agent-balancer uninstall` lists what the tool created
-  as counts, never names or paths: the links and `links.json`, the token files, the launch files
-  and how many of them a session record still names, state (`state/events.jsonl` and
-  `state/history/` included), logs, backups and the config (and the LaunchAgent with its
-  `launchctl bootout` line once one exists). It then removes its own files only after the typed
-  word `uninstall` in the user's own terminal (refused in a chat shell, 5.1). Account folders and
-  their logins belong to the user and are never deleted, and `uninstall` says the tokens
-  themselves may keep working until their year ends, because no way to cancel one is documented.
-  The steps:
-  1. Each link listed in `links.json` goes only while `lstat` shows a symlink directly inside
-     `accounts/<label>/.claude/` with the recorded target. A path that is now a regular file, a
-     folder or a link to somewhere else stays.
-  2. Under the pick lock, every launch file of every label is deleted, except a file that a
+- **Uninstall, in this order:** quit the menu bar app, then run `agent-balancer uninstall`, then
+  delete the app from Applications, then `brew uninstall agent-balancer`. The app runs `refresh`
+  and `status` on timers, and a refresh that saves during or after `uninstall` can make the data
+  folder again. `agent-balancer uninstall` lists what the tool created as
+  counts, never names or paths: the launch files and how many of them a session record still names
+  ("N or more" when the session records cannot all be read), the token files, the writer's temporary
+  files that may hold a token, state (`state/events.jsonl` and `state/history/` included), logs,
+  backups, probe files, the links and `links.json`, the config, the writer's temporary files of the
+  config and `links.json`, and the lock files (and the LaunchAgent with its `launchctl bootout` line
+  once one exists). The state, log, backup, probe and lock counts are of the files the removal
+  deletes, by the name rules of step 4; the removal also deletes the pick lock it takes and the
+  links lock that clearing `links.json` or deleting a temporary file of it takes, each of which it
+  makes when it is missing, so it can delete one or two more files than it listed, and a temporary
+  file in `state/` that turned a minute old while the list was on screen (step 4). It says so when
+  the session records or the lease file cannot be read, since every launch file is then kept. It
+  says how many temporary files in `state/` a save may still be using (step 4), so a data folder
+  that holds only such a file is not reported as having nothing to remove. It also says how many
+  entries in `tokens/` or `launch/` have the name of a token file or of a label's folder only in
+  other letter case, such as `Pool-a.json`: on a volume that ignores case a save writes into such
+  an entry and keeps its spelling, so each may hold a token. A name that differs only by
+  characters Unicode marks as default ignorable, such as a zero-width joiner, counts too, since a
+  Mac OS Extended volume ignores some of them in a name. `uninstall` never opens or deletes one;
+  the closing text gives the count again and says to rename each to the tool's spelling or move it
+  out of the data folder, then run `agent-balancer uninstall` again.
+  It also says how many entries in `launch/` sit where a label's folder belongs but are a link, a
+  file or another user's folder: a launch file with a token may be behind one, such as a label's
+  folder moved elsewhere and linked back. `uninstall` skips and counts each and never follows it;
+  the closing text gives the count again and says to move the folder each link points to back in
+  place of the link, delete a link that points nowhere and move any other entry out of the data
+  folder, then run `agent-balancer uninstall` again.
+  Before it lists anything, and again before the removal starts, it refuses, removes nothing,
+  follows nothing and exits 1 when the data folder, `tokens/` or `launch/` is there but is not a
+  real folder of the user's that passes the folder checks (a link, a file, another user's folder,
+  or a folder wider than 0700 or one the user cannot open or search, such as one at 0600 or one
+  whose access list denies search), or when a label's folder in `launch/` is a folder of the
+  user's that is wider than 0700 or cannot be opened or searched, since a token file in it could
+  be neither counted nor deleted. The message names the folder, the problem and what to do, such
+  as moving the folder a link points to back in place of the link, or `chmod 700` on that folder. A
+  missing data folder has nothing to remove. It then removes its own files only after the typed word
+  `uninstall` in the user's own terminal (refused in a chat shell, 5.1). Once it holds the pick
+  lock, the removal reads the session records and the config's `picker.leaseMinutes` again, so a
+  session that started while the list was on screen keeps its launch file; the list may still show
+  the earlier count, and the lease window is never shorter than the one the list named. Account
+  folders and their logins belong to the user and are never deleted. `uninstall` says the tokens
+  themselves may keep working until their year ends, because no way to cancel one is documented, and
+  that kept launch files hold no token and go on a rerun once nothing names them and the lease
+  window a rerun starts from has passed since that run. A rerun reads `picker.leaseMinutes` from the
+  config as the first run does; a run that finishes has deleted the config, so a rerun starts from
+  the default of 10 minutes, and the closing text names the minutes a rerun will use (each run
+  overwrites a kept file again, so a rerun inside the window keeps it). `uninstall` exits 0 once the
+  removal is done or when there is nothing to remove, and 1 when it refuses (in a chat shell, or a
+  folder it cannot check), when the typed word is not `uninstall`, when it stops before the token
+  files (such as at the read-back of step 1, or on a pick lock it cannot take), or when a token file
+  or a temporary file that may hold a token could not be checked or deleted, or it left an entry
+  that may hold one unopened (one named like a token file or a label's folder in other letter case,
+  or a link, a file or another user's folder where a label's folder belongs in `launch/`), after
+  the closing text says so. Entries it did not make, kept tombstones, temporary files in `state/` it
+  keeps (step 4) and other files it could not delete do not change the exit status; a `state/`
+  link does not either, since no token is ever written there. The steps, in this order:
+  1. Under the pick lock, every launch file of every label is deleted, except a file that a
      session record still names, that an open lease holds, or that is younger than
      `picker.leaseMinutes`, and except every file when the session records cannot be read
-     cleanly. Each such file is overwritten with a token-free tombstone and kept, with its
-     folders, exactly as `remove` keeps one (4A.4). A read-back then proves that no launch file
-     holds a token before any token file goes.
-  3. Every token file goes, and the writer's leftover temporary files with them.
-  4. State, logs, backups, locks, `links.json` and `config.json` go. Before that, the links and
-     linked labels in `links.json` are cleared, so a file that stays lists none. Entries the tool did not
-     make stay, and are counted.
+     cleanly or the lease file is there and cannot be read or decoded. Each such file is
+     overwritten with a token-free tombstone and kept, with its folders, exactly as `remove`
+     keeps one (4A.4). A read-back then proves that no launch file holds a token; when one does,
+     `uninstall` stops with exit 1 and deletes no token file and nothing after it, so a rerun can
+     finish. A launch file's name that `lstat` cannot check, such as in a label's folder that
+     stopped being searchable after the check, counts as one that does. A link, a file or
+     another user's folder where a label's folder belongs, and a folder named like a label only
+     in other letter case, are never followed or opened: each is counted on its own, the run
+     goes on, and it exits 1 at the end.
+  2. Every token file goes: a regular file owned by the user named `<label>.json` directly in
+     `tokens/`. A token file that cannot be deleted, such as in a `tokens/` folder that is not
+     writable, still holds its token, and a token file's name that `lstat` cannot check may hold
+     one: each is counted on its own, the closing text says to make `tokens/` writable and run
+     `agent-balancer uninstall` again, the run exits 1, and the rerun lists it. An entry named
+     like one only in other letter case, and a folder in `launch/` named like a label only in
+     other letter case (step 1), stay unopened and are counted on their own.
+  3. The writer's leftover temporary files (`.tmp-<16 hex>`) in `tokens/`, in the launch folders
+     and directly in the data folder go, then each token or launch folder that is left empty. One
+     in `tokens/` or a launch folder may hold a token: when it cannot be deleted, or `lstat`
+     cannot check it, it is counted on its own, the closing text says what to do, the run exits
+     1, and a rerun lists it. One directly in the data folder comes from a save of `config.json`,
+     which holds the pick lock, or of `links.json`, which holds the links lock, so those go only
+     while the links lock is held too; when it cannot be had within 30 seconds they stay and are
+     counted.
+  4. State, logs, backups and probe leftovers go, by these name rules, each taken from the code
+     that writes the file:
+     - `state/`: `status.json` and `current.json` (the status rebuild), `events.jsonl` and the
+       damaged records it sets aside, `events-damaged-<seconds>-<4 hex>.jsonl`, `leases.json`,
+       `picks.log`, `settings-seen.json`, `readings/<label>.json` and `history/<label>.jsonl`, and
+       the writer's temporary files in `state/`, `readings/` and `history/` once they are a minute
+       old. Their writers (the status rebuild, a reading save, the settings verdict save) hold
+       another lock than the pick lock, or none, so a younger one, or one dated ahead of the
+       clock, may belong to a save that is still running. It stays, the listing and the closing
+       text count it on their own, and a run once it is a minute old deletes it: for one dated
+       ahead of the clock, a run a minute or more after that date. While such files are all that
+       is left, `uninstall` lists them and does not say there is nothing to remove; the closing
+       text says to quit the menu bar app and run `agent-balancer uninstall` again in a minute.
+     - `logs/`: `agent-balancer.log`.
+     - `backups/`: `config-<yyyy-MM-dd>.json` and `config-<yyyy-MM-dd>-<n>.json`, and the writer's
+       temporary files.
+     - `probe/`: each `p-<16 hex>` folder a probe made, with every regular file in it and in its
+       folders.
+     - `locks/`, in step 7: `pick.lock`, `links.lock`, `history.lock` and `probe-<label>.lock`.
 
-  Why a named file is kept as a tombstone and not deleted (#25): a session record that names a
+     `<label>` is a label the tool accepts (5.2), and `<16 hex>` and `<4 hex>` are 16 and 4 of the
+     ASCII characters `0-9a-f`. `<yyyy-MM-dd>` is a real date of the Gregorian calendar with a
+     four-digit year, `<n>` a number from 2 up and `<seconds>` a whole number, each written the
+     way its writer writes it, with no leading zero, no `+` and no `-0`. Those two rules take a
+     name apart and build it again with the writer's own code, and only the same name passes, so
+     `config-2026-11-13-1.json`, `config-2026-11-13-02.json`, `config-2026-02-31.json` and
+     `events-damaged-007-abcd.jsonl` are not the tool's. Every name is matched against the ASCII
+     characters its writer uses, so a name spelled with a look-alike character, such as a
+     fullwidth digit, or in other letter case, is not the tool's. In these
+     folders only a regular file owned by the user with one of these names goes, and only a folder
+     named here is opened. Every other entry, a file you put there included, stays where it is and
+     is counted.
+  5. Each link listed in `links.json` goes only while `lstat` shows a symlink directly inside
+     `accounts/<label>/.claude/` with the recorded target. A path that is now a regular file, a
+     folder or a link to somewhere else stays. The links and linked labels in `links.json` are
+     then cleared, so a file that stays lists none; a `links.json` that cannot be saved, such as
+     one of another schema version, is not cleared and does not stop the run.
+  6. `links.json` goes, then `config.json`, the last file deleted under the pick lock.
+  7. The pick lock is let go, and the lock files go.
+  8. The data folder goes when nothing is left in it, through one `rmdir` that never follows a
+     link and never removes a folder that holds anything. `accounts/`, a kept tombstone or any
+     entry the tool did not make keeps it, and each entry directly in it whose name the tool
+     never writes there is counted. One the volume takes for one of the tool's names, such as a
+     file `Logs` where `logs/` belongs on a volume that ignores case, is counted once, by the
+     step for that name.
+
+  Only the steps before the token files can stop `uninstall`; once it deletes them it never
+  stops. Nothing is followed: a link, a file or another user's folder where `tokens/` or
+  `launch/` belongs is refused before the listing, as above; one where a label's folder in
+  `launch/`, `state/`, `logs/`, `backups/` or `probe/` belongs, and any entry inside the tool's
+  folders that the tool did not make, stays where it is and is counted. One where a label's
+  folder belongs also makes the run exit 1 once every step is done, since a launch file with a
+  token may be behind it. A folder of the tool's that is not private (wider than 0700) is never
+  opened either:
+  `tokens/`, `launch/` or a label's folder in it that is one, or that cannot be opened or searched,
+  is refused before the listing and again before the removal starts, as above, since it may hold a
+  token that cannot be checked; any other stays and is counted, unless it is empty, when it goes
+  like the tool's other empty folders and is not counted. A folder nested more than eight levels
+  deep is counted and not opened. A `locks/` folder that is a link stops `uninstall` before
+  anything goes, because the pick lock cannot be taken.
+
+  Why a named file is kept as a tombstone and not deleted: a session record that names a
   launch file may belong to a session that still reads the file, so the record keeps naming a path
   that must stay in place, as for `remove` (4A.4). A tombstone holds the token variable set to
   `invalid` and the account label, so a session that reads it fails to sign in instead of falling
   back to the stored login of the default folder, which is another account. After `uninstall` no
-  launch file holds a token, whether or not a session record names it. Only `agent-balancer
-  uninstall` and `remove` delete token files in bulk, after the typed word.
+  launch file it can reach holds a token, whether or not a session record names it. It never
+  follows a link, opens a file or enters another user's folder where a label's folder belongs in
+  `launch/`, and never opens a folder there named like a label only in other letter case; a
+  launch file with a token may be behind any of them, so it counts each, says what to do and
+  exits 1. Only `agent-balancer uninstall` and `remove` delete token files in bulk, after the
+  typed word.
 
 ## 13. Data folder layout and permissions
 
@@ -1908,11 +2082,14 @@ whose parent is a configured account folder under the data root and whose target
 recorded target; they never remove a regular file or anything outside the data root. Nothing is
 written under `~/.claude` or any account folder except what the user approves in section 5.
 
-Token and launch files are the one exception to "never remove a regular file": the tool made them,
+Token and launch files are an exception to "never remove a regular file": the tool made them,
 so `remove`, a token replace, the upkeep rule and `uninstall` delete them, and only them: a path
-directly under `tokens/` or `launch/<label>/`, opened through the same folder handles, that
-`lstat` shows as a regular file owned by the user, the writer's own leftover temporary files there
-included. `remove` also deletes the label's stored reading and its empty launch folder through the
+directly under `tokens/` named `<label>.json` or directly under `launch/<label>/` named
+`l-<8 hex>.json`, opened through the same folder handles, that `lstat` shows as a regular file
+owned by the user, the writer's own leftover temporary files there included. The other exception
+is `uninstall`, which also deletes the tool's own files in `state/`, `logs/`, `backups/`, `probe/`
+and `locks/`, by the name rules of section 12, `links.json`, `config.json` and the writer's
+temporary files of those two, and nothing else. `remove` also deletes the label's stored reading and its empty launch folder through the
 same writer. A token file is written whole to a random temporary name in `tokens/` and renamed into
 place, so a reader never sees half a token, and after a crash the token file is the old one or the
 new one. A crash between the write and the rename can also leave the temporary file, which may hold
@@ -2032,7 +2209,7 @@ file deletion outside the no-follow writer.
 | T20 | A stored token is read by another process that runs as the user, by a backup or by a sync tool, and stays usable for up to a year | 0600 files in 0700 folders; `tokens/` and `launch/` are marked as excluded from backups; `doctor` warns when the data folder sits inside a synced folder. Against code that runs as the user this is advisory, and it is the same exposure as Claude Code's own fallback credential file |
 | T21 | A token reaches output: `pick`'s JSON, an error text, a log line, the history, the app, a crash report | Only the `Tokens` and `Launch` modules read a token, and they return paths, never values. `pick` prints the launch file's path only. The scrubber runs on every captured buffer; `TokenCapture` reads the `claude setup-token` child's raw output first |
 | T22 | A caller's settings JSON carries a key that switches hooks off, changes permissions or chooses another account, into a launch file not visible in the typed line | `pick` accepts only allowlisted top-level keys (`env` by default) and only `env` names listed in `launch.envNames` (empty by default), never the protected names such as `CLAUDE_CONFIG_DIR`, `PATH`, `NODE_OPTIONS`, proxy and certificate variables, and refuses without writing anything (4A.2) |
-| T23 | Launch files pile up, each with a token, or one outlives its account | The upkeep rule in 4A.6; `remove` deletes every file of the label; a token replace rewrites them; `uninstall` removes both folders; `doctor` prints the count and the oldest age, never a file's content |
+| T23 | Launch files pile up, each with a token, or one outlives its account | The upkeep rule in 4A.6; `remove` deletes every file of the label; a token replace rewrites them; `uninstall` removes both folders, or says what it left that may hold a token and exits 1; `doctor` prints the count and the oldest age, never a file's content |
 | T24 | Something in the caller's environment beats the recipe: a worker bills another account, or lands in a folder with no hooks | The ambient rule (4A.3): folder-only picks under an inherited `CLAUDE_CONFIG_DIR`, `backgroundOnly` under an inherited token, `unsetEnv` for launchers. The post-launch check in section 16 item 4 catches a launch that landed in the wrong folder |
 | T25 | A folder account with a missing link runs sessions with no hooks | `pick` runs `verify` on a folder account before every recipe and refuses on any broken or missing link, and a never-linked folder is always refused; `run` refuses the same way |
 | T26 | Any chat that can run `pick` learns the path of a file that holds a token, and can read it; a token session can print its own token | Not prevented by the tool, and said so. Same-user limit as T16 and T20: the user's own policy is the boundary. The README Limits section gives a deny-rule snippet for `~/.agent-balancer/tokens/` and `~/.agent-balancer/launch/` |
@@ -2054,8 +2231,8 @@ Threat numbers are not reused or renumbered.
   list, and one test asserts the runner resolved the fake. No automated test calls a live `claude`.
 - **Leak test:** `Tests/CLITests/LeakTests.swift` plants a canary of each shape (an OAuth-shaped
   and an API-key-shaped token, a non-example.com email, a UUID organization id, an organization
-  name, a `/Users/<name>` path, and a second OAuth-shaped token in the shape spike S14 recorded
-  for a real one: 108 characters with dashes) in every input a later slice adds (fake `claude`
+  name, a `/Users/<name>` path, and a second OAuth-shaped token in the shape recorded for a real
+  one: 108 characters with dashes) in every input a later slice adds (fake `claude`
   stdout and stderr, an extra `auth status` field, the probe `result` error text, a `settings.json` `env`
   value, the parent environment, a token file's value, fake `setup-token` output, a pasted token,
   a caller's settings JSON). It runs every command against every scenario, collects stdout,
@@ -2074,7 +2251,7 @@ Threat numbers are not reused or renumbered.
 - **Fixtures:** probe and auth fixtures are recorded from real runs, then scrubbed and relabeled
   to `example.com`; unit normalization (0 to 1 versus 0 to 100) has its own tests.
 - **Golden JSON:** `status --json`, `pick --json`, `events --json` and `history --json` outputs for
-  fixed scenarios, so schema changes show up in review.
+  fixed scenarios, so schema changes show up in the diff.
 - **History and events:** transition tables (ok to limited and back, each error code appearing and
   clearing, `login_expiring` once per expiry date, an account added and removed), the `notBefore`
   rule, `cursor`, `oldestSeq` and `gap` after pruning, retention, the 15 minute floor, and two

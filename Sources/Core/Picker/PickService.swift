@@ -47,7 +47,7 @@ public struct PickService: Sendable {
         let started = clock()
         let inherited = AmbientState(context.ambient)
         // Only a typed line is prefix-less for a login or token account, so only it needs proof
-        // that the caller's own folder is the default one (DECISIONS D-83).
+        // that the caller's own folder is the default one.
         let prefixlessReason =
             request.caller == .typed ? SessionFolder.prefixlessReason(context: context) : nil
         let ambientKey = inherited.key

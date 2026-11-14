@@ -110,7 +110,8 @@ documents are stable in version 1.
 A `folder` account's row also carries `signInCheck`: what the last sign-in check of that folder that
 got an answer saw. `signed_in` is the expected account (any account when no email is set) signed in
 in its own folder, `signed_out` is no account, `other_account` is another account in that folder,
-and `not_confirmed` is an account signed in that the check could not place in that folder. It is
+and `not_confirmed` is an account signed in that the check could not place in that folder, or
+could not confirm as the expected account because the sign-in reported no email. It is
 null before the first such check and stays as it was after a check that got no answer; `login` and
 `token` rows have no such key. The row shows one `error` code, and a higher one can hide
 `wrong_account`, so read `signInCheck` for the folder's sign-in. `planTier` is null after any check
@@ -151,7 +152,11 @@ window or pick again.
 refuse to start a session or change anything inside a Claude Code chat shell. A caller applies the
 recipe from `pick` and does not use them. In a chat shell `run`
 writes nothing, starts nothing and prints the line to type in your own terminal,
-`agent-balancer run <label> -- <arguments>`, then exits 1.
+`agent-balancer run <label> -- <arguments>`, then exits 1. `uninstall` exits 0 once the removal
+is done or when there is nothing to remove, and 1 when it refuses, stops, is not confirmed, could
+not check or delete a token file or a temporary file that may hold a token, or leaves unopened an
+entry that may hold one: one named like a token file or a launch folder in other letter case, or a
+link, a file or another user's folder where a label's launch folder belongs.
 
 Applying a link change (`link`, `link --repair`, `link --accept-source-change`, `unlink`) also needs a
 person at an interactive terminal who types the label (or `accept`) back. Input from a pipe is

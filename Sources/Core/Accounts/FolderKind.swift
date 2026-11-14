@@ -2,9 +2,14 @@ import Foundation
 
 /// Where a folder account's config folder sits and the checks its path must pass.
 public enum FolderPaths {
+    /// The folder under the data folder that holds every account folder.
+    static let accountsFolderName = "accounts"
+
     /// Folders under the data folder: `accounts/<label>/.claude`. The inner name is deliberate, so
     /// path rules written for Claude settings apply to the settings file inside.
-    public static func folders(label: String) -> [String] { ["accounts", label, ".claude"] }
+    public static func folders(label: String) -> [String] {
+        [accountsFolderName, label, ".claude"]
+    }
 
     /// The pattern of docs/ARCHITECTURE.md section 5.2, plus no `.` or `..` segment.
     public static func isValidPath(_ path: String) -> Bool {
@@ -70,25 +75,27 @@ public enum FolderPaths {
             && path.unicodeScalars.allSatisfy { $0.value >= 0x20 && $0.value != 0x7F }
     }
 
-    /// True when the reported folder is this one, once links and `.` segments are resolved. The
-    /// runner redacts long random-looking runs in what it captures, so a `[redacted]` marker
-    /// stands for text inside one path segment and never matches a `/`. Every segment without a
-    /// marker must match literally. A reported value needs as many segments as the folder, a last
-    /// segment with no marker, and at least one other segment with no marker. A marker in the
-    /// label segment (the one before the last) needs a label long enough for the redaction to
-    /// have produced it.
+    /// True when the reported folder is this one, once links are resolved. A reported value with
+    /// a `.` or `..` segment never matches. The runner redacts long random-looking runs in what it
+    /// captures, so a `[redacted]` marker stands for text inside one path segment and never
+    /// matches a `/`. Every segment without a marker must match literally. A reported value needs
+    /// as many segments as the folder, a last segment with no marker, and at least one other
+    /// segment with no marker. A marker in the label segment (the one before the last) matches
+    /// only when the scrubber turns this label into that same text, which needs a label of 32 or
+    /// more characters or one that holds the token prefix.
     static func sameFolder(_ reported: String, _ folder: URL) -> Bool {
         func plain(_ path: String) -> String {
             URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
         }
         let wanted = [folder.standardizedFileURL.path, plain(folder.path)]
         guard reported.hasPrefix("/") else { return false }
+        let given = reported.components(separatedBy: "/").dropFirst()
+        guard !given.contains("."), !given.contains("..") else { return false }
         let marker = Scrubber.redacted
         guard reported.contains(marker) else {
             return wanted.contains(plain(reported)) || wanted.contains(reported)
         }
-        let given = reported.components(separatedBy: "/").dropFirst()
-        guard !given.isEmpty, !given.contains(""), !given.contains("."), !given.contains(".."),
+        guard !given.isEmpty, !given.contains(""),
             let last = given.last, !last.contains(marker),
             given.filter({ !$0.contains(marker) }).count >= 2
         else { return false }
@@ -97,10 +104,9 @@ public enum FolderPaths {
             guard have.count == given.count else { return false }
             let labelAt = have.count - 2
             return zip(given, have).enumerated().allSatisfy { index, pair in
-                if index == labelAt, pair.0.contains(marker),
-                    pair.1.count < Scrubber.shortestRedactedRun
-                {
-                    return false
+                // The label is what tells two account folders apart.
+                if index == labelAt, pair.0.contains(marker) {
+                    return Scrubber.tokenPass(pair.1) == pair.0
                 }
                 return segmentMatches(pair.0, pair.1)
             }
@@ -109,7 +115,7 @@ public enum FolderPaths {
 
     /// One reported segment against one real segment. Text between markers must appear in order,
     /// the first piece at the start and the last at the end, with at least one character for
-    /// each marker.
+    /// each marker, two markers side by side included.
     private static func segmentMatches(_ reported: String, _ actual: String) -> Bool {
         let marker = Scrubber.redacted
         guard reported.contains(marker) else { return reported == actual }
@@ -121,6 +127,7 @@ public enum FolderPaths {
         var rest = Substring(actual).dropFirst(first.count).dropLast(last.count)
         for middle in pieces.dropFirst().dropLast() {
             rest = rest.dropFirst()
+            if middle.isEmpty { continue }
             guard let found = rest.range(of: middle) else { return false }
             rest = rest[found.upperBound...]
         }

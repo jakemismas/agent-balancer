@@ -33,12 +33,32 @@ enum Support {
         let input = Pipe()
         task.standardInput = input
         try task.run()
-        if let stdin { input.fileHandleForWriting.write(stdin) }
+        if let stdin { _ = feed(stdin, to: input.fileHandleForWriting.fileDescriptor) }
         try input.fileHandleForWriting.close()
         let outData = out.fileHandleForReading.readDataToEndOfFile()
         let errData = err.fileHandleForReading.readDataToEndOfFile()
         task.waitUntilExit()
         return Output(status: task.terminationStatus, stdout: outData, stderr: errData)
+    }
+
+    /// Writes `data` to a command's standard input. A command that exits, or closes its input,
+    /// before it reads everything makes the write fail; without `F_SETNOSIGPIPE` that failure
+    /// would be a SIGPIPE that ends the whole test process. Returns false when the command did
+    /// not read all of its input.
+    static func feed(_ data: Data, to fd: Int32) -> Bool {
+        let on: Int32 = 1
+        _ = fcntl(fd, F_SETNOSIGPIPE, on)
+        return data.withUnsafeBytes { (buffer: UnsafeRawBufferPointer) -> Bool in
+            guard let base = buffer.baseAddress else { return true }
+            var offset = 0
+            while offset < buffer.count {
+                let written: Int = Darwin.write(fd, base + offset, buffer.count - offset)
+                if written < 0 && errno == EINTR { continue }
+                if written <= 0 { return false }
+                offset += written
+            }
+            return true
+        }
     }
 
     /// Runs with a pseudo-terminal as standard input, so the command sees a terminal. `input` is
@@ -71,6 +91,73 @@ enum Support {
         let errData = err.fileHandleForReading.readDataToEndOfFile()
         task.waitUntilExit()
         return Output(status: task.terminationStatus, stdout: outData, stderr: errData)
+    }
+
+    /// The command printed something else and kept waiting, so `prompt` never came.
+    struct PromptNotShown: Error, CustomStringConvertible {
+        var shown: String
+        var description: String { "The prompt never appeared. The command printed: \(shown)" }
+    }
+
+    /// Like `runOnTerminal`, but `between` runs once the command has printed `prompt` and is
+    /// waiting for its answer, and only then is `input` typed. A test changes a record there, the
+    /// way another command could while a person reads the plan. A command that exits before the
+    /// prompt skips `between`. A command still waiting without the prompt after `deadline`
+    /// seconds is stopped, and the call throws `PromptNotShown` with what it printed.
+    static func runOnTerminal(
+        _ exe: URL, _ args: [String], env: [String: String], prompt: String,
+        between: () throws -> Void, input: String, deadline: TimeInterval = 30
+    ) throws -> Output {
+        var master: Int32 = -1
+        var slave: Int32 = -1
+        guard openpty(&master, &slave, nil, nil, nil) == 0 else {
+            throw MissingBinary()
+        }
+        defer {
+            close(master)
+            close(slave)
+        }
+        let task = Process()
+        task.executableURL = exe
+        task.arguments = args
+        task.environment = env
+        let out = Pipe()
+        let err = Pipe()
+        task.standardOutput = out
+        task.standardError = err
+        task.standardInput = FileHandle(fileDescriptor: slave, closeOnDealloc: false)
+        try task.run()
+        var shown = Data()
+        let wanted = Data(prompt.utf8)
+        let reader: Int32 = out.fileHandleForReading.fileDescriptor
+        let end = Date().addingTimeInterval(deadline)
+        while shown.range(of: wanted) == nil {
+            let left = end.timeIntervalSinceNow
+            if left <= 0 {
+                task.terminate()
+                task.waitUntilExit()
+                throw PromptNotShown(shown: String(decoding: shown, as: UTF8.self))
+            }
+            var watch = pollfd(fd: reader, events: Int16(POLLIN), revents: 0)
+            let count: nfds_t = 1
+            let wait: Int32 = Int32(min(left, 1) * 1000) + 1
+            let ready: Int32 = poll(&watch, count, wait)
+            if ready <= 0 { continue }
+            let chunk = out.fileHandleForReading.availableData
+            if chunk.isEmpty { break }
+            shown.append(chunk)
+        }
+        var failure: Error?
+        if shown.range(of: wanted) != nil {
+            do { try between() } catch { failure = error }
+        }
+        let typed = Array((input + "\u{4}").utf8)
+        _ = Darwin.write(master, typed, typed.count)
+        shown.append(out.fileHandleForReading.readDataToEndOfFile())
+        let errData = err.fileHandleForReading.readDataToEndOfFile()
+        task.waitUntilExit()
+        if let failure { throw failure }
+        return Output(status: task.terminationStatus, stdout: shown, stderr: errData)
     }
 
     static func makeTempDir() throws -> URL {
@@ -170,6 +257,18 @@ struct CLIHome {
         var env = ["HOME": home.path, "PATH": "/usr/bin:/bin"]
         for (k, v) in extra { env[k] = v }
         return try Support.runOnTerminal(exe, args, env: env, input: typing)
+    }
+
+    /// Like `runOnTerminal`, with `between` run at the typed-answer prompt before `typing`.
+    func runOnTerminal(
+        _ args: [String], prompt: String, between: () throws -> Void, typing: String,
+        env extra: [String: String] = [:], deadline: TimeInterval = 30
+    ) throws -> Support.Output {
+        var env = ["HOME": home.path, "PATH": "/usr/bin:/bin"]
+        for (k, v) in extra { env[k] = v }
+        return try Support.runOnTerminal(
+            exe, args, env: env, prompt: prompt, between: between, input: typing,
+            deadline: deadline)
     }
 
     func read(_ relative: String) -> String {

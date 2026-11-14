@@ -235,10 +235,17 @@ extension NoFollowWriter {
         NoFollowWriter.removeTree(in: dir, name: name, depth: 0)
     }
 
+    /// Whether `name` is `prefix` and then 16 of the characters `Paths.randomHex` writes, compared
+    /// byte for byte: only ASCII `0-9` and `a-f`, never a look-alike digit or letter in another
+    /// script.
     static func isScratchName(_ name: String, prefix: String) -> Bool {
-        guard name.hasPrefix(prefix) else { return false }
-        let rest = name.dropFirst(prefix.count)
-        return rest.count == 16 && rest.allSatisfy { $0.isHexDigit && !$0.isUppercase }
+        let bytes = Array(name.utf8)
+        let head = Array(prefix.utf8)
+        guard bytes.count == head.count + 16, bytes.starts(with: head) else { return false }
+        return bytes.dropFirst(head.count).allSatisfy { byte in
+            (UInt8(ascii: "0")...UInt8(ascii: "9")).contains(byte)
+                || (UInt8(ascii: "a")...UInt8(ascii: "f")).contains(byte)
+        }
     }
 
     private static func entries(of dir: Int32) throws -> [String] {
@@ -329,18 +336,52 @@ extension NoFollowWriter {
         return try NoFollowWriter.entries(of: dir).sorted()
     }
 
-    /// `lstat` of `<root>/<folders...>/<name>`, or nil when it is missing.
+    /// `lstat` of `<root>/<folders...>/<name>`, or nil when it is missing. An entry `lstat` cannot
+    /// check reads as missing here too; `checkedInfo` tells the two apart.
     public func info(folders: [String], name: String) throws -> OwnFileInfo? {
+        do {
+            return try checkedInfo(folders: folders, name: name)
+        } catch is UncheckedEntry {
+            return nil
+        }
+    }
+
+    /// An entry that `lstat` cannot check for a reason other than a missing name, such as one in
+    /// a folder the user cannot search. It may be anything, a file with a token included.
+    struct UncheckedEntry: Error {}
+
+    /// `lstat` of `<root>/<folders...>/<name>`, or nil when it is missing. It throws
+    /// `UncheckedEntry` when `lstat` fails for another reason, so a caller that looks for a token
+    /// never reads such an entry as missing.
+    func checkedInfo(folders: [String], name: String) throws -> OwnFileInfo? {
         try Paths.checkName(name)
         let dir = try NoFollowWriter.openFolder(root: root, folders: folders, create: false)
         if dir < 0 { return nil }
         defer { close(dir) }
         var st = stat()
-        guard fstatat(dir, name, &st, AT_SYMLINK_NOFOLLOW) == 0 else { return nil }
+        guard fstatat(dir, name, &st, AT_SYMLINK_NOFOLLOW) == 0 else {
+            if errno == ENOENT { return nil }
+            throw UncheckedEntry()
+        }
         return OwnFileInfo(
             isRegularFile: (st.st_mode & S_IFMT) == S_IFREG, ownedByUser: st.st_uid == getuid(),
             mode: Int(st.st_mode & 0o777),
             modified: Date(timeIntervalSince1970: Double(st.st_mtimespec.tv_sec)))
+    }
+
+    /// How many names directly in `<root>/<folders...>` that `shape` takes cannot be checked with
+    /// `lstat`, such as in a folder the user cannot search. Nothing is opened.
+    func uncheckedCount(folders: [String], of shape: (String) -> Bool) -> Int {
+        let names = (try? listNames(folders: folders)) ?? []
+        return names.filter { name in
+            guard shape(name) else { return false }
+            do {
+                _ = try checkedInfo(folders: folders, name: name)
+                return false
+            } catch {
+                return true
+            }
+        }.count
     }
 
     /// Deletes `<root>/<folders...>/<name>` only when `lstat` shows a regular file owned by the
@@ -431,6 +472,25 @@ extension NoFollowWriter {
         else { return false }
         return unlinkat(dir, name, AT_REMOVEDIR) == 0
     }
+
+    /// Whether the data folder is there, passes the folder checks, and holds nothing.
+    public func rootIsEmpty() -> Bool {
+        guard let dir = try? NoFollowWriter.openFolder(root: root, folders: [], create: false),
+            dir >= 0
+        else { return false }
+        defer { close(dir) }
+        return (try? NoFollowWriter.entries(of: dir))?.isEmpty ?? false
+    }
+
+    /// Removes the data folder itself only while it is empty and a real folder made by the user.
+    /// `rmdir` never follows a link and never removes a folder with anything in it. Returns
+    /// whether it was removed.
+    public func removeRootIfEmpty() -> Bool {
+        var st = stat()
+        guard lstat(root.path, &st) == 0, (st.st_mode & S_IFMT) == S_IFDIR, st.st_uid == getuid()
+        else { return false }
+        return rmdir(root.path) == 0
+    }
 }
 
 extension NoFollowWriter {
@@ -471,6 +531,116 @@ extension NoFollowWriter {
         guard length > 0 else { return false }
         return String(decoding: buffer[0..<length].map { UInt8(bitPattern: $0) }, as: UTF8.self)
             == target
+    }
+
+    /// What `lstat` shows at a name where a folder of the tool belongs.
+    public enum FolderEntry: Equatable, Sendable {
+        case missing
+        /// A real folder owned by the user. Opening it can still refuse it for its mode.
+        case folder
+        /// A link, a file, another user's folder or anything else. It is never opened or followed.
+        case other
+    }
+
+    /// What `lstat` shows at `<root>/<parent...>/<name>`. Nothing there is opened.
+    public func folderEntry(parent: [String], name: String) throws -> FolderEntry {
+        try Paths.checkName(name)
+        let dir = try NoFollowWriter.openFolder(root: root, folders: parent, create: false)
+        if dir < 0 { return .missing }
+        defer { close(dir) }
+        var st = stat()
+        guard fstatat(dir, name, &st, AT_SYMLINK_NOFOLLOW) == 0 else {
+            if errno == ENOENT { return .missing }
+            throw ToolError("Could not check \(name).")
+        }
+        return (st.st_mode & S_IFMT) == S_IFDIR && st.st_uid == getuid() ? .folder : .other
+    }
+
+    /// What keeps a real folder of the user's from passing the folder checks.
+    public enum FolderProblem: Equatable, Sendable {
+        /// Its group or others have some access.
+        case widerThanPrivate
+        /// It does not open for the user, such as one with no read or search access.
+        case cannotOpen
+    }
+
+    /// What keeps the real folder of the user's at `<root>/<parent...>/<name>` from passing the
+    /// folder checks, the same checks as `placeEntry`, or nil when it passes, is missing, or is not
+    /// a real folder of the user's (a link, a file or another user's folder, which callers count
+    /// and never open). An entry `lstat` cannot check there is `cannotOpen`.
+    public func folderProblem(parent: [String], name: String) -> FolderProblem? {
+        if case .problem(let problem) = placeEntry(parent: parent, name: name) { return problem }
+        return nil
+    }
+
+    /// What `lstat` shows where a folder of the tool belongs: the data folder, or a folder in it.
+    public enum PlaceEntry: Equatable, Sendable {
+        case missing
+        /// A real folder of the user's that passes the folder checks.
+        case folder
+        case link
+        /// A file or anything else that is neither a folder nor a link.
+        case notFolder
+        /// A folder another user owns.
+        case notYours
+        case problem(FolderProblem)
+    }
+
+    /// What is at the data folder's own path. A link there is never followed, and only a folder of
+    /// the user's is opened, to check it.
+    public func rootEntry() -> PlaceEntry {
+        var st = stat()
+        guard lstat(root.path, &st) == 0 else {
+            return errno == ENOENT ? .missing : .problem(.cannotOpen)
+        }
+        return place(st, folders: [])
+    }
+
+    /// What is at `<root>/<parent...>/<name>`, told apart as `rootEntry` tells the data folder.
+    /// A link there is never followed, and only a folder of the user's is opened, to check it.
+    public func placeEntry(parent: [String], name: String) -> PlaceEntry {
+        guard let dir = try? NoFollowWriter.openFolder(root: root, folders: parent, create: false)
+        else { return .problem(.cannotOpen) }
+        if dir < 0 { return .missing }
+        defer { close(dir) }
+        var st = stat()
+        guard fstatat(dir, name, &st, AT_SYMLINK_NOFOLLOW) == 0 else {
+            return errno == ENOENT ? .missing : .problem(.cannotOpen)
+        }
+        return place(st, folders: parent + [name])
+    }
+
+    private func place(_ st: stat, folders: [String]) -> PlaceEntry {
+        let kind = st.st_mode & S_IFMT
+        if kind == S_IFLNK { return .link }
+        if kind != S_IFDIR { return .notFolder }
+        if st.st_uid != getuid() { return .notYours }
+        if st.st_mode & 0o077 != 0 { return .problem(.widerThanPrivate) }
+        guard let dir = try? NoFollowWriter.openFolder(root: root, folders: folders, create: false)
+        else { return .problem(.cannotOpen) }
+        guard dir >= 0 else { return .missing }
+        defer { close(dir) }
+        // A folder opens with read access alone, and only search access lets a name in it be
+        // checked.
+        guard faccessat(dir, ".", R_OK | X_OK, AT_EACCESS) == 0 else {
+            return .problem(.cannotOpen)
+        }
+        return .folder
+    }
+
+    /// Whether the names `a` and `b` in `<root>/<parent...>` lead to one entry, as `STATE` and
+    /// `state` do on a volume that ignores case. `lstat` only; nothing is opened or followed.
+    public func isSameEntry(parent: [String], _ a: String, _ b: String) -> Bool {
+        guard let dir = try? NoFollowWriter.openFolder(root: root, folders: parent, create: false),
+            dir >= 0
+        else { return false }
+        defer { close(dir) }
+        var first = stat()
+        var second = stat()
+        guard fstatat(dir, a, &first, AT_SYMLINK_NOFOLLOW) == 0,
+            fstatat(dir, b, &second, AT_SYMLINK_NOFOLLOW) == 0
+        else { return false }
+        return first.st_dev == second.st_dev && first.st_ino == second.st_ino
     }
 
     /// Lists the names directly under `<root>/<folders...>` that `lstat` shows as folders owned by

@@ -34,6 +34,9 @@ public struct LinkPlan: Sendable {
     public var items: [Item]
     /// The record of this account the plan was built from. `apply` writes only while it still holds.
     public var state: HookRecord.LinkState
+    /// The default folder's settings verdict when the plan was built. `apply` goes ahead only
+    /// while the verdict passes and is still this one.
+    public var verdict: HookRecord.SeenSettings
 
     public var conflicts: [String] {
         items.compactMap { item in
@@ -77,6 +80,7 @@ public enum Linker {
         let writer = NoFollowWriter(root: context.dataRoot)
         let hooks = HookRecord(context: context)
         let state = hooks.linkState(for: label)
+        let verdict = hooks.seenVerdict()
         let recorded = state.entries
         let folders = FolderPaths.folders(label: label)
         let again = "agent-balancer link\(repair ? " --repair" : "") \(label)"
@@ -154,7 +158,8 @@ public enum Linker {
             }
             items.append(item)
         }
-        return LinkPlan(label: label, folder: folder, items: items, state: state)
+        return LinkPlan(
+            label: label, folder: folder, items: items, state: state, verdict: verdict)
     }
 
     /// The final target of a source that may itself be a link. It must be a regular file or a
@@ -190,9 +195,10 @@ public enum Linker {
 
     /// Makes the planned changes and writes the folder's manifest entries. A plan with a conflict
     /// is refused before anything changes, and so is a plan whose record of this account changed
-    /// since it was built (the typed approval was for that plan). The links lock is held from that
-    /// check to the save. If a link fails part way, the ones made so far are recorded and the
-    /// folder is not marked linked.
+    /// since it was built (the typed approval was for that plan), or whose settings verdict
+    /// fails now or differs from the one the plan was built with. The links lock is held from
+    /// those checks to the save. If a link fails part way, the ones made so far are recorded and
+    /// the folder is not marked linked.
     public static func apply(context: ToolContext, plan: LinkPlan) throws -> Applied {
         guard plan.conflicts.isEmpty else {
             throw ToolError("Refused: " + plan.conflicts.joined(separator: " "))
@@ -202,6 +208,12 @@ public enum Linker {
         let folders = FolderPaths.folders(label: plan.label)
         let before = plan.state.entries
         return try hooks.changeLinks(label: plan.label, expecting: plan.state) { save in
+            let verdict = hooks.seenVerdict()
+            guard verdict.issue == nil, verdict == plan.verdict else {
+                throw ToolError(
+                    Messages.settingsMovedAfterApproval + " "
+                        + (verdict.issue ?? "Run the command again."))
+            }
             var result = Applied()
             var entries: [LinkEntry] = []
 

@@ -50,7 +50,8 @@ public enum SignInSeen: String, CaseIterable, Sendable {
     case signedOut = "signed_out"
     /// Another account, signed in in the account's own folder (`wrong_account`).
     case otherAccount = "other_account"
-    /// An account signed in, but the check could not confirm it is in the account's own folder.
+    /// An account signed in, but the check could not confirm it is in the account's own folder,
+    /// or could not confirm it as the expected account because the sign-in reported no email.
     case notConfirmed = "not_confirmed"
 }
 

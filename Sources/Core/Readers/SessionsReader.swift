@@ -239,24 +239,28 @@ public enum SessionsReader {
 }
 
 /// Where the caller's own session runs, judged from variables and file names only, never from a
-/// file's content (DECISIONS D-83). A typed `pick` or `run --print-command` writes a line with no
+/// file's content. A typed `pick` or `run --print-command` writes a line with no
 /// folder prefix for a `login` or `token` account, and that line is only right in the default
 /// folder.
 public enum SessionFolder {
-    /// True when `path` is exactly `<default folder>/jobs/<one segment>`, judged by the text of the
-    /// path alone: no link is resolved and no file is read.
-    static func isDefaultJobFolder(_ path: String, context: ToolContext) -> Bool {
+    /// True when `path` is exactly `<folder>/jobs/<one segment>`, judged by the text of the path
+    /// alone: absolute, with no empty, `.` or `..` segment. No link is resolved and no file is
+    /// read.
+    static func isJobFolder(_ path: String, of folder: URL) -> Bool {
         guard path.hasPrefix("/") else { return false }
         let parts = path.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
-        let base = context.defaultClaudeFolder.path.split(separator: "/").map(String.init)
-        guard parts.first == "", parts.count == base.count + 3 else { return false }
-        let rest = Array(parts.dropFirst())
-        guard Array(rest.prefix(base.count)) == base, rest[base.count] == "jobs" else {
+        guard !parts.dropFirst().contains(where: { $0.isEmpty || $0 == "." || $0 == ".." }) else {
             return false
         }
-        let segment = rest[base.count + 1]
-        return !segment.isEmpty && segment != "." && segment != ".."
-            && !(parts.last?.isEmpty ?? true)
+        let base = folder.path.split(separator: "/").map(String.init)
+        guard parts.first == "", parts.count == base.count + 3 else { return false }
+        let rest = Array(parts.dropFirst())
+        return Array(rest.prefix(base.count)) == base && rest[base.count] == "jobs"
+    }
+
+    /// True when `path` is exactly `<default folder>/jobs/<one segment>` (`isJobFolder`).
+    static func isDefaultJobFolder(_ path: String, context: ToolContext) -> Bool {
+        isJobFolder(path, of: context.defaultClaudeFolder)
     }
 
     private static func sessionNames(_ folder: URL) -> [String]? {
@@ -291,7 +295,8 @@ public enum SessionFolder {
         return nil
     }
 
-    /// For `doctor`: `default`, `folder <label>` or `not confirmed`. Labels only, no path.
+    /// For `doctor`: `default`, `folder <label>` or `not confirmed`. Labels only, no path. A job
+    /// folder names a folder account only when it is exactly `<its folder>/jobs/<one segment>`.
     public static func describe(context: ToolContext, config: Config) -> String {
         if let dir = context.ambient[ProtectedEnv.configDirVariable] {
             for account in config.accounts where account.kind == Kind.folder {
@@ -307,7 +312,7 @@ public enum SessionFolder {
             if isDefaultJobFolder(jobDir, context: context) { return "default" }
             for account in config.accounts where account.kind == Kind.folder {
                 if let own = try? FolderPaths.configDir(context: context, label: account.label),
-                    jobDir.hasPrefix(own.path + "/jobs/")
+                    isJobFolder(jobDir, of: own)
                 {
                     return "folder \(account.label)"
                 }

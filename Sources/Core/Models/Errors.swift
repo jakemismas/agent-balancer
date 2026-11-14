@@ -77,6 +77,15 @@ public enum Messages {
     /// `run` found no verdict that matches the settings file as it is now.
     public static let settingsNotChecked =
         "Settings changed since the last check. Run `agent-balancer doctor` in Terminal."
+    /// The default folder's settings path is a link to nothing, which no reader can clear.
+    public static let settingsLinkGoesNowhere =
+        "The default folder's settings file is a link that goes nowhere. Repair the link or remove it, then run `agent-balancer doctor` in Terminal."
+    /// The default folder's settings path is a folder or another entry that is not a file.
+    public static let settingsNotAFile =
+        "The default folder's settings file is not a file. Replace it with a file or remove it, then run `agent-balancer doctor` in Terminal."
+    /// A link change whose settings verdict failed or changed after the typed approval.
+    public static let settingsMovedAfterApproval =
+        "The default folder's settings changed after you approved, so nothing was changed."
     public static let keyInSettings =
         "Settings carry an API key or key helper. Token accounts are skipped."
     public static let notSetUp = "Setup has not run. Run `agent-balancer init`."
@@ -99,8 +108,64 @@ public enum Messages {
 
     /// The `wrong_account` text, and the one step that fixes it.
     public static let wrongAccount = "Folder is logged in as another account."
+    /// A sign-in that reports no email cannot be matched to the account's expected email.
+    public static let signInEmailMissing =
+        "Check failed: the sign-in reported no email, so it could not be confirmed as this account."
     public static let signExpectedBackIn =
         "Sign the expected account back in to this folder. Do not relabel the folder."
+
+    /// `uninstall` with a data folder that is a link, which it never follows.
+    public static let uninstallDataFolderIsALink = uninstallFolderIsALink(
+        "The data folder", "~/.agent-balancer")
+    /// `uninstall` with something other than a folder where the data folder belongs.
+    public static let uninstallDataFolderIsNotAFolder = uninstallFolderIsNotAFolder(
+        "~/.agent-balancer")
+    /// `uninstall` with a data folder that another user owns.
+    public static let uninstallDataFolderIsNotYours =
+        "The data folder `~/.agent-balancer` belongs to another user, so `uninstall` cannot check what the tool made there. Nothing was removed. Run `agent-balancer uninstall` as that user."
+
+    /// `uninstall` with a link where a folder of the tool belongs, which it never follows.
+    /// `place` is the folder's path as the person types it.
+    public static func uninstallFolderIsALink(_ subject: String, _ place: String) -> String {
+        "\(subject) `\(place)` is a link, and `uninstall` never follows one, so it cannot check what the tool made. Nothing was removed. Move the folder it points to back in place of the link, or delete the link if that folder is gone, then run `agent-balancer uninstall` again."
+    }
+
+    /// `uninstall` with something other than a folder or a link where a folder of the tool
+    /// belongs.
+    public static func uninstallFolderIsNotAFolder(_ place: String) -> String {
+        "`\(place)` is not a folder, and the tool only ever makes a folder there, so `uninstall` cannot check it. Nothing was removed. Check what it is and move it away, then run `agent-balancer uninstall` again."
+    }
+
+    /// Why `uninstall` refuses `entry` where the folder `place` in the data folder belongs, or nil
+    /// when it is missing or a real folder of the user's that passes the folder checks.
+    public static func uninstallRefusal(
+        _ subject: String, _ place: String, _ entry: NoFollowWriter.PlaceEntry
+    ) -> String? {
+        switch entry {
+        case .missing, .folder:
+            return nil
+        case .link:
+            return uninstallFolderIsALink(subject, place)
+        case .notFolder:
+            return uninstallFolderIsNotAFolder(place)
+        case .notYours:
+            return
+                "\(subject) `\(place)` belongs to another user, so `uninstall` cannot check what the tool made in it. Nothing was removed. Move it out of `~/.agent-balancer`, then run `agent-balancer uninstall` again."
+        case .problem(let problem):
+            return uninstallFolderRefused(subject, place, problem)
+        }
+    }
+
+    /// `uninstall` with a folder of the user's that fails the folder checks. `place` is the
+    /// folder's path as the person types it.
+    public static func uninstallFolderRefused(
+        _ subject: String, _ place: String, _ problem: NoFollowWriter.FolderProblem
+    ) -> String {
+        let what =
+            problem == .widerThanPrivate ? "is wider than 0700" : "cannot be opened or searched"
+        return
+            "\(subject) `\(place)` \(what), so `uninstall` cannot check what the tool made in it. Nothing was removed. Run `chmod 700 \(place)`, then run `agent-balancer uninstall` again."
+    }
 
     public static let trustStep =
         "Open `claude` once in each project folder on that account, so the folder is trusted there."

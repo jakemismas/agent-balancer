@@ -143,6 +143,8 @@ import Testing
         try Self.hookSettings.write(
             to: t.home.appendingPathComponent(".claude/settings.json"), atomically: true,
             encoding: .utf8)
+        // A reader sees the new file first, as `link` asks before it applies.
+        _ = try HookRecord(context: context).readSettings()
         let applied = try link(context)
         #expect(applied.created == 1 && applied.present == 1)
         #expect(try destination(context, "settings.json") != nil)
@@ -547,7 +549,7 @@ import Testing
         }
     }
 
-    // MARK: The caller's own folder (DECISIONS D-83)
+    // MARK: The caller's own folder
 
     func login(_ label: String = "main") -> Account {
         Account(

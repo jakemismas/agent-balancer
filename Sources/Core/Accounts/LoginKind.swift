@@ -29,11 +29,16 @@ public struct LoginKind: AccountKindHandler {
         }
         var check = AccountCheck(
             planTier: status.planTier, loginExpiresAt: status.loginExpiresAt, signedIn: true)
-        if let expected = account.email, let actual = status.email,
-            expected.lowercased() != actual.lowercased()
-        {
-            check.issues.append(
-                Issue(.wrongAccount, .error, Messages.wrongAccount))
+        // A stored claude.ai sign-in reports its email, so an expected email is always compared:
+        // a missing one fails like a different one.
+        if let expected = account.email {
+            if let actual = status.email {
+                if expected.lowercased() != actual.lowercased() {
+                    check.issues.append(Issue(.wrongAccount, .error, Messages.wrongAccount))
+                }
+            } else {
+                check.issues.append(Issue(.checkFailed, .error, Messages.signInEmailMissing))
+            }
         }
         if let expected = account.expectedPlanTier, status.planTier != expected {
             let actual = status.planTier ?? "unknown"

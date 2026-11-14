@@ -174,6 +174,29 @@ public struct EventLog: Sendable {
         return data
     }
 
+    static let setAsideTagBytes = 2
+
+    /// The name a damaged record is set aside under: the second it was found, then random bytes.
+    static func setAsideName(stamp: Int, tag: [UInt8]) -> String {
+        "events-damaged-\(stamp)-\(Paths.hex(tag)).jsonl"
+    }
+
+    /// Whether `setAsideName` gives `name`. The name is taken apart into the second and the bytes
+    /// and built again by the same code, and only the same bytes pass, so a second with a
+    /// leading zero, a `+` or `-0`, and hex in upper case or of another length are not one.
+    static func isSetAsideName(_ name: String) -> Bool {
+        let head = "events-damaged-"
+        let tail = ".jsonl"
+        guard name.hasPrefix(head), name.hasSuffix(tail), name.count > head.count + tail.count
+        else { return false }
+        let middle = name.dropFirst(head.count).dropLast(tail.count)
+        guard let dash = middle.lastIndex(of: "-"), let stamp = Int(middle[..<dash]),
+            let tag = Paths.bytes(fromHex: String(middle[middle.index(after: dash)...])),
+            tag.count == setAsideTagBytes
+        else { return false }
+        return Array(setAsideName(stamp: stamp, tag: tag).utf8) == Array(name.utf8)
+    }
+
     /// Writes the header when the file does not exist yet. Cheap: one `lstat`.
     public func ensureExists(now: Date) throws {
         if try writer.info(folders: Layout.stateFolders, name: Self.fileName) != nil { return }
@@ -195,10 +218,10 @@ public struct EventLog: Sendable {
         var parsed = Self.parse(data)
         var rewrite = false
         if data != nil && (parsed.damaged || parsed.recordId == nil) {
-            let stamp = String(Int(now.timeIntervalSince1970))
-            try writer.put(
-                data ?? Data(), folders: Layout.stateFolders,
-                name: "events-damaged-\(stamp)-\(Paths.randomHex(2)).jsonl")
+            let name = Self.setAsideName(
+                stamp: Int(now.timeIntervalSince1970),
+                tag: Paths.randomBytes(Self.setAsideTagBytes))
+            try writer.put(data ?? Data(), folders: Layout.stateFolders, name: name)
             parsed = Parsed(recordId: newRecordId(), createdAt: now)
             rewrite = true
             notes.append("events record was damaged and set aside")

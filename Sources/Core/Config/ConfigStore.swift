@@ -49,7 +49,7 @@ public struct ConfigStore: Sendable {
     public func save(_ config: Config, backup: Bool = false) throws {
         try ConfigValidator.validate(config, context: context)
         if backup, let old = try reader.read(folders: [], name: Self.fileName) {
-            try writer.put(old, folders: ["backups"], name: try backupName())
+            try writer.put(old, folders: Layout.backupsFolders, name: try backupName())
         }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -141,16 +141,62 @@ public struct ConfigStore: Sendable {
     }
 
     private func backupName() throws -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyy-MM-dd"
-        let day = formatter.string(from: Date())
-        var name = "config-\(day).json"
+        let formatter = Self.backupDayFormatter()
+        let now = Date()
         var n = 1
-        while try reader.read(folders: ["backups"], name: name) != nil {
+        var name = Self.backupName(now, number: n, formatter: formatter)
+        while try reader.read(folders: Layout.backupsFolders, name: name) != nil {
             n += 1
-            name = "config-\(day)-\(n).json"
+            name = Self.backupName(now, number: n, formatter: formatter)
         }
         return name
+    }
+
+    /// The day in a backup's name, `yyyy-MM-dd` in the Gregorian calendar whatever the person's
+    /// calendar is. The writer uses the local time zone.
+    static func backupDayFormatter() -> DateFormatter {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter
+    }
+
+    /// The name of the `number`th backup on the day of `date`: the first has no number, and the
+    /// next ones count up from 2.
+    static func backupName(_ date: Date, number: Int, formatter: DateFormatter) -> String {
+        let day = formatter.string(from: date)
+        return number <= 1 ? "config-\(day).json" : "config-\(day)-\(number).json"
+    }
+
+    /// Whether `backupName` gives `name` on a day of a four-digit year. The name is taken apart
+    /// into a day and a number and built again by the same code, and only the same bytes pass, so
+    /// a day that is not a real date and a number of `-0`, `-1` or with a leading zero are not a
+    /// backup's. The day is read in UTC, where every day of the calendar exists.
+    static func isBackupName(_ name: String) -> Bool {
+        let head = "config-"
+        let tail = ".json"
+        let dayLength = 10
+        guard name.hasPrefix(head), name.hasSuffix(tail),
+            name.count >= head.count + dayLength + tail.count
+        else { return false }
+        let middle = name.dropFirst(head.count).dropLast(tail.count)
+        let rest = middle.dropFirst(dayLength)
+        let number: Int?
+        if rest.isEmpty {
+            number = 1
+        } else if rest.first == "-" {
+            number = Int(rest.dropFirst())
+        } else {
+            number = nil
+        }
+        guard let number else { return false }
+        let formatter = backupDayFormatter()
+        if let utc = TimeZone(identifier: "UTC") { formatter.timeZone = utc }
+        guard let date = formatter.date(from: String(middle.prefix(dayLength))) else {
+            return false
+        }
+        return Array(backupName(date, number: number, formatter: formatter).utf8)
+            == Array(name.utf8)
     }
 }

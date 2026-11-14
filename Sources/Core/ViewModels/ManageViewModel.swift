@@ -714,7 +714,8 @@ public enum ManageBuilder {
         case ended
         /// A token or login account whose row has a code that could hide a check that saw it
         /// signed out or could not confirm it, `check_failed` included. A folder whose last check
-        /// saw a sign-in that it could not place, or saw it placed with a doubt since.
+        /// saw a sign-in that it could not place, or could not confirm as the expected account
+        /// because it reported no email, or saw it placed with a doubt since.
         case notConfirmed
     }
 
@@ -794,9 +795,13 @@ public enum ManageBuilder {
     static let notPlacedText =
         "The last sign-in check could not confirm the sign-in in this folder."
 
+    /// The text for a folder whose last sign-in check saw a sign-in that reported no email.
+    static let noEmailText = MenuBuilder.plain(Messages.signInEmailMissing)
+
     /// The panel's problem block. Another account reads as `wrong_account` with its steps even
     /// when the row shows another code over it. A folder whose last check could not place its
-    /// sign-in says so, whatever code the row shows. Otherwise "Sign-in not confirmed" and
+    /// sign-in says so, whatever code the row shows, and names the missing email when the row's
+    /// own error is that one. Otherwise "Sign-in not confirmed" and
     /// "Account ended" give the row's own error as the reason, and an ended folder, which keeps
     /// its sign-in line, gives its own `account_ended` error.
     static func problem(_ a: AccountSnapshot, state: SignIn) -> ErrorModel? {
@@ -811,9 +816,11 @@ public enum ManageBuilder {
                 steps: windowSteps(code: code, label: a.label))
         case .notConfirmed, .ended:
             if folder, a.signInCheck == SignInSeen.notConfirmed.rawValue {
+                let noEmail = a.error?.text == Messages.signInEmailMissing
                 return ErrorModel(
                     title: MenuBuilder.title(for: StateCode.checkFailed.rawValue),
-                    text: notPlacedText, steps: StepsModel(steps: [], command: nil))
+                    text: noEmail ? noEmailText : notPlacedText,
+                    steps: StepsModel(steps: [], command: nil))
             }
             guard let e = a.error else { return nil }
             return ErrorModel(

@@ -5,10 +5,6 @@ import Foundation
 public enum Scrubber {
     public static let redacted = "[redacted]"
 
-    /// The shortest text the token pass can replace with a marker: the prefix `sk-ant-` alone.
-    /// The entropy rule needs 32 characters.
-    static let shortestRedactedRun = "sk-ant-".count
-
     private static let tokenPrefix = try! NSRegularExpression(pattern: "sk-ant-[A-Za-z0-9_-]*")
     private static let email = try! NSRegularExpression(
         pattern: "[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\\.[A-Za-z0-9-]+)+")

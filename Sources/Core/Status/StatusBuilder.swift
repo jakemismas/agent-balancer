@@ -485,6 +485,6 @@ public enum StatusBuilder {
         let stamp = ISO8601DateFormatter().string(from: Date())
         let line = stamp + " " + Display.safe(Scrubber.scrubText(message), limit: 300) + "\n"
         try? NoFollowWriter(root: context.dataRoot).append(
-            Data(line.utf8), folders: ["logs"], name: "agent-balancer.log")
+            Data(line.utf8), folders: Layout.logsFolders, name: Layout.logName)
     }
 }

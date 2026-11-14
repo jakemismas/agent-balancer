@@ -23,12 +23,13 @@ import Testing
         let marker = Scrubber.redacted
         let ok = [
             "/h/.agent-balancer/accounts/spare-account/.claude",
-            "/h/.agent-balancer/accounts/\(marker)/.claude",
-            "/h/.agent-balancer/accounts/sp\(marker)/.claude",
             "/\(marker)/.agent-balancer/accounts/spare-account/.claude",
         ]
         for text in ok { #expect(FolderPaths.sameFolder(text, folder), "\(text)") }
         let refused = [
+            // The scrubber leaves this label as it is, so a marker never stands for it.
+            "/h/.agent-balancer/accounts/\(marker)/.claude",
+            "/h/.agent-balancer/accounts/sp\(marker)/.claude",
             "",
             "relative/accounts/spare-account/.claude",
             "\(marker)",
@@ -53,21 +54,6 @@ import Testing
         for text in refused { #expect(!FolderPaths.sameFolder(text, folder), "\(text)") }
         let short = URL(fileURLWithPath: "/accounts/spare-account/.claude")
         #expect(!FolderPaths.sameFolder("x\(marker)/accounts/spare/.claude", short))
-    }
-
-    @Test func aMarkerInTheLabelSegmentNeedsALabelThatLongRedactionCouldHaveProducedIt() throws {
-        let marker = Scrubber.redacted
-        let shortest = Scrubber.shortestRedactedRun
-        func folder(_ label: String) -> URL {
-            URL(fileURLWithPath: "/h/.agent-balancer/accounts/\(label)/.claude")
-        }
-        let tooShort = String(repeating: "a", count: shortest - 1)
-        let atLimit = String(repeating: "a", count: shortest)
-        let path = "/h/.agent-balancer/accounts/\(marker)/.claude"
-        #expect(!FolderPaths.sameFolder(path, folder(tooShort)))
-        #expect(!FolderPaths.sameFolder(path, folder("work")))
-        #expect(FolderPaths.sameFolder(path, folder(atLimit)))
-        #expect(FolderPaths.sameFolder(path, folder("sk-ant-x")))
     }
 
     @Test func aHashInvalidDefaultRecordStopsEverySaveButTheAcceptReplacesIt() throws {
@@ -138,8 +124,9 @@ import Testing
     }
 
     @Test func aFolderSignInReadingTheRedactedLabelStillPasses() throws {
-        // Only a label of 7 or more characters can come back redacted.
-        let label = "spare-account"
+        // Only a label the scrubber redacts can come back as a marker.
+        let label = RedactionMarkerTests.varied(32)
+        #expect(Scrubber.tokenPass(label) == Scrubber.redacted)
         let (t, context) = try base.setUp(folders: [label])
         defer { withExtendedLifetime(t) {} }
         _ = try base.link(context, label)

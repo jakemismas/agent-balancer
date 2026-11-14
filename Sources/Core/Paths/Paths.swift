@@ -7,12 +7,44 @@ public enum Paths {
         if bad { throw ToolError("Refused an unsafe file name.") }
     }
 
-    static func randomHex(_ bytes: Int) -> String {
+    static func randomHex(_ bytes: Int) -> String { hex(randomBytes(bytes)) }
+
+    static func randomBytes(_ count: Int) -> [UInt8] {
         var generator = SystemRandomNumberGenerator()
-        return (0..<bytes).map { _ in
-            String(format: "%02x", UInt8.random(in: 0...255, using: &generator))
+        return (0..<count).map { _ in UInt8.random(in: 0...255, using: &generator) }
+    }
+
+    /// How a random part of a name is spelled: two lowercase hex digits per byte.
+    static func hex(_ bytes: [UInt8]) -> String {
+        bytes.map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// The bytes read two digits at a time from `text`, or nil when it is not pairs of hex
+    /// digits. `hex` may spell them another way (`AB`, `+a`), so a name rule compares the two.
+    static func bytes(fromHex text: String) -> [UInt8]? {
+        let digits = Array(text.utf8)
+        guard digits.count % 2 == 0 else { return nil }
+        var bytes: [UInt8] = []
+        var start = 0
+        while start < digits.count {
+            let pair = String(decoding: digits[start..<start + 2], as: UTF8.self)
+            guard let byte = UInt8(pair, radix: 16) else { return nil }
+            bytes.append(byte)
+            start += 2
         }
-        .joined()
+        return bytes
+    }
+
+    /// `name` with its letter case folded the way a volume that ignores case compares names, so
+    /// `Pool-a.json`, a long s, a sharp s or a ligature give the spelling such a volume takes.
+    /// Characters Unicode marks as default ignorable go first, since a Mac OS Extended volume
+    /// ignores some of them in a name, such as a zero-width joiner.
+    static func caseFolded(_ name: String) -> String {
+        let kept: [Unicode.Scalar] = name.unicodeScalars.filter {
+            !$0.properties.isDefaultIgnorableCodePoint
+        }
+        let plain = String(String.UnicodeScalarView(kept))
+        return plain.folding(options: .caseInsensitive, locale: nil)
     }
 }
 
@@ -23,11 +55,14 @@ public enum Layout {
     public static let probeFolders = ["probe"]
     public static let probeFolderPrefix = "p-"
     public static let stateFolders = ["state"]
+    public static let logsFolders = ["logs"]
+    public static let backupsFolders = ["backups"]
     public static let pickLockName = "pick.lock"
     public static let linksLockName = "links.lock"
     public static let leasesName = "leases.json"
     public static let picksLogName = "picks.log"
     public static let settingsSeenName = "settings-seen.json"
+    public static let logName = "agent-balancer.log"
 
     public static func readingName(_ label: String) -> String { label + ".json" }
     public static func lockName(_ label: String) -> String { "probe-" + label + ".lock" }

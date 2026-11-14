@@ -70,8 +70,7 @@ struct LinkCommand: ParsableCommand {
 
         // The verdict a reader saved is used, so this command never opens the default folder's
         // settings. A missing or stale verdict sends the person to a command that reads them.
-        let hooks = HookRecord(context: context)
-        let seen = hooks.seenVerdict()
+        let seen = plan.verdict
         if let issue = seen.issue {
             switch issue {
             case Messages.settingsChanged:
@@ -161,6 +160,12 @@ struct LinkCommand: ParsableCommand {
         try Shared.requireTerminal()
         guard Shared.ask("Type accept to record these hooks: ") == "accept" else {
             throw ToolError("Not accepted. The record is unchanged.")
+        }
+        // What is recorded must still be what the person was shown.
+        guard try hooks.readSettings() == facts else {
+            throw ToolError(
+                "The default folder's settings changed after you were shown them, so nothing was recorded. Run `agent-balancer link --accept-source-change` again."
+            )
         }
         try hooks.record(facts, ifRecordIs: seenRecord)
         print("Recorded \(facts.hooks.count) hook entries.")

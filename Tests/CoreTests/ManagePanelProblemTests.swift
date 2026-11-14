@@ -78,6 +78,31 @@ extension ManageViewModelTests {
         }
     }
 
+    @Test @MainActor func aFolderSignInThatReportedNoEmailSaysSoInsteadOfTheFolderText() throws {
+        // The status writes the check's text as it is, so the panel can tell this cause apart.
+        #expect(Transitions.clean(Messages.signInEmailMissing) == Messages.signInEmailMissing)
+        let json = """
+            { "schemaVersion": 1, "generatedAt": "2026-11-09T21:10:00Z", "banner": null,
+              "accounts": [
+                { "label": "fol-mail", "role": "pool", "kind": "folder", "fullLogin": true,
+                  "linked": true, "state": "error", "signInCheck": "not_confirmed",
+                  "error": { "code": "check_failed", "text": "\(Messages.signInEmailMissing)" } },
+                { "label": "fol-over", "role": "pool", "kind": "folder", "fullLogin": true,
+                  "linked": true, "state": "error", "signInCheck": "not_confirmed",
+                  "error": { "code": "settings_changed", "text": "Settings changed." } }
+              ] }
+            """
+        let vm = Self.model(try Fake(statusJson: json))
+        vm.selection = "fol-mail"
+        let mail = try #require(vm.panel?.problem)
+        #expect(mail.title == "Check failed")
+        #expect(mail.text == ManageBuilder.noEmailText)
+        #expect(mail.text.contains("reported no email"))
+        // Another code over the doubt hides its cause, so the folder text stays.
+        vm.selection = "fol-over"
+        #expect(try #require(vm.panel?.problem).text == ManageBuilder.notPlacedText)
+    }
+
     // MARK: The wrong_account steps
 
     @Test @MainActor func theWrongAccountStepsAreTheToolsOwnAndTheWindowShowsNoMenuAction() throws {

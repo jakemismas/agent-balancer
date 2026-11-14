@@ -29,6 +29,11 @@ public enum LaunchFiles {
         id.range(of: #"\Al-[0-9a-f]{8}\z"#, options: .regularExpression) != nil
     }
 
+    /// Whether `name` is the name `fileName` gives a lease id, `l-<8 hex>.json`.
+    static func isFileName(_ name: String) -> Bool {
+        name.hasSuffix(".json") && isValidLeaseId(String(name.dropLast(5)))
+    }
+
     static func makeLeaseId() -> String { "l-" + Paths.randomHex(4) }
 
     /// The folder that holds every launch folder. No file is opened.
@@ -120,8 +125,7 @@ extension LaunchFiles {
         let writer = NoFollowWriter(root: context.dataRoot)
         let dir = folders(label: label)
         return try writer.listNames(folders: dir).filter { name in
-            guard name.hasSuffix(".json"), isValidLeaseId(String(name.dropLast(5))),
-                let info = try? writer.info(folders: dir, name: name)
+            guard isFileName(name), let info = try? writer.info(folders: dir, name: name)
             else { return false }
             return info.isRegularFile && info.ownedByUser
         }
@@ -254,6 +258,23 @@ extension LaunchFiles {
         keepModifiedAfter: Date? = nil
     ) throws -> RemovalCount {
         let writer = NoFollowWriter(root: context.dataRoot)
+        var count = try clearFiles(
+            context: context, label: label, snapshot: snapshot, leased: leased,
+            keepModifiedAfter: keepModifiedAfter, keepAll: false)
+        count.temporariesLeft = try deleteWriterLeftovers(context: context, label: label)
+        count.skipped = try strayCount(context: context, label: label)
+        try writer.removeEmptyFolder(parent: [folder], name: label)
+        return count
+    }
+
+    /// The pass of `removeAll` over the launch files themselves: each is deleted or kept as a
+    /// tombstone, and with `keepAll` every one is kept. The folder is listed again after each
+    /// pass, so a file written meanwhile is handled too.
+    private static func clearFiles(
+        context: ToolContext, label: String, snapshot: SessionsSnapshot, leased: Set<String>,
+        keepModifiedAfter: Date?, keepAll: Bool
+    ) throws -> RemovalCount {
+        let writer = NoFollowWriter(root: context.dataRoot)
         var count = RemovalCount()
         var handled = Set<String>()
         let dir = folders(label: label)
@@ -269,7 +290,7 @@ extension LaunchFiles {
                         ((try? writer.info(folders: dir, name: name))?.modified ?? .distantFuture)
                             > limit
                     } ?? false
-                if isNamed(name, label: label, snapshot: snapshot)
+                if keepAll || isNamed(name, label: label, snapshot: snapshot)
                     || leased.contains(String(name.dropLast(5))) || young
                 {
                     try writeTombstone(context: context, label: label, name: name)
@@ -281,13 +302,15 @@ extension LaunchFiles {
                 }
             }
         }
-        count.temporariesLeft = try deleteWriterLeftovers(context: context, label: label)
-        let own = Set(try ownFileNames(context: context, label: label))
-        count.skipped = try writer.listNames(folders: dir).filter {
-            !own.contains($0) && !NoFollowWriter.isTemporaryName($0)
-        }.count
-        try writer.removeEmptyFolder(parent: [folder], name: label)
         return count
+    }
+
+    /// Entries in the label's folder that the tool did not make: neither a launch file of its own
+    /// nor a name of the writer's temporary shape.
+    private static func strayCount(context: ToolContext, label: String) throws -> Int {
+        let own = Set(try ownFileNames(context: context, label: label))
+        return try NoFollowWriter(root: context.dataRoot).listNames(folders: folders(label: label))
+            .filter { !own.contains($0) && !NoFollowWriter.isTemporaryName($0) }.count
     }
 
     /// How many launch files of `label` may still carry a token: every one that is not a
@@ -323,10 +346,10 @@ extension LaunchFiles {
         public var oldestAge: TimeInterval?
     }
 
-    /// The labels that have a launch folder.
+    /// The labels that have a launch folder: real folders the user owns, never a link.
     static func labels(context: ToolContext) -> [String] {
         let writer = NoFollowWriter(root: context.dataRoot)
-        return ((try? writer.listNames(folders: [folder])) ?? []).filter(
+        return ((try? writer.listFolders(folders: [folder])) ?? []).filter(
             ConfigValidator.isValidLabel)
     }
 
@@ -352,40 +375,158 @@ extension LaunchFiles {
         return result
     }
 
-    /// What `removeEverything` did, summed over every label.
+    /// Throws, so `uninstall` refuses before it removes anything, when the launch folder is there
+    /// but is not a real folder of the user's that passes the folder checks (a link, a file or
+    /// another user's folder), or a label's folder in it is a real folder of the user's that
+    /// fails them. A link, a file or another user's folder where a label's folder belongs is not
+    /// refused: `clearForUninstall` counts it.
+    static func requireCheckableForUninstall(context: ToolContext) throws {
+        let writer = NoFollowWriter(root: context.dataRoot)
+        let place = "~/.agent-balancer/" + folder
+        let entry = writer.placeEntry(parent: [], name: folder)
+        if let refusal = Messages.uninstallRefusal("The launch folder", place, entry) {
+            throw ToolError(refusal)
+        }
+        for label in labels(context: context) {
+            if let problem = writer.folderProblem(parent: [folder], name: label) {
+                throw ToolError(
+                    Messages.uninstallFolderRefused(
+                        "The launch folder", place + "/" + label, problem))
+            }
+        }
+    }
+
+    /// What `clearForUninstall` did, summed over every label.
     struct WipeCount: Equatable {
         var deleted = 0
         var tombstoned = 0
+        /// Entries the tool did not make, left alone: a name in the launch folder that is not a
+        /// label, and anything among a label's launch files.
         var skipped = 0
-        var temporariesLeft = 0
+        /// Entries named like a label only in other letter case, never opened.
+        var otherCase = 0
+        /// Entries where a label's folder belongs that are not a real folder of the user's (a
+        /// link, a file or another user's folder), never followed or opened.
+        var notFollowed = 0
     }
 
-    /// Clears the launch files of every label as `removeAll` does for one: a file a session record
-    /// names, an open lease holds, that is modified after `keepModifiedAfter`, or any file when
-    /// the records cannot be read cleanly, becomes a tombstone and stays with its folders; every
-    /// other file goes. The launch folder goes when it is empty. Callers hold the pick lock.
-    static func removeEverything(
+    /// How many entries in the launch folder have a label's name but are not a real folder of the
+    /// user's: a link, which may lead to the label's launch files, a file or another user's
+    /// folder. `lstat` only; nothing is followed or opened.
+    static func notFollowedEntryCount(context: ToolContext) -> Int {
+        let writer = NoFollowWriter(root: context.dataRoot)
+        guard let names = try? writer.listNames(folders: [folder]),
+            let real = try? writer.listFolders(folders: [folder])
+        else { return 0 }
+        let folders = Set(real)
+        return names.filter { ConfigValidator.isValidLabel($0) && !folders.contains($0) }.count
+    }
+
+    /// What `uninstall` says about entries where a label's folder belongs that it did not follow.
+    public static func notFollowedEntriesText(_ count: Int) -> String {
+        "\(count) entries in `~/.agent-balancer/launch/` where a label's folder belongs are a link, a file or another user's folder, so a launch file with a token may be behind them, and `uninstall` did not follow them. Move the folder each link points to back in place of the link, delete a link that points nowhere, and move any other entry out of `~/.agent-balancer`, then run `agent-balancer uninstall` again."
+    }
+
+    /// Whether `name` in the launch folder is a label only once its letter case is folded, such
+    /// as `Pool-a`. On a volume that ignores case, a launch file for that label is written into
+    /// such a folder, so it may hold a token.
+    static func isOtherCaseLabel(_ name: String) -> Bool {
+        !ConfigValidator.isValidLabel(name) && ConfigValidator.isValidLabel(Paths.caseFolded(name))
+    }
+
+    /// How many entries in the launch folder are named like a label only in other letter case.
+    /// Names only; nothing is opened.
+    static func otherCaseEntryCount(context: ToolContext) -> Int {
+        let names = (try? NoFollowWriter(root: context.dataRoot).listNames(folders: [folder])) ?? []
+        return names.filter(isOtherCaseLabel).count
+    }
+
+    /// `uninstall`'s pass over the launch files of every label, as `removeAll` does for one: a
+    /// file a session record names, an open lease holds, that is modified after
+    /// `keepModifiedAfter`, any file when the records cannot be read cleanly, and every file
+    /// with `keepAll`, becomes a tombstone and stays; every other file goes. An entry where the
+    /// launch folder belongs that is not a real folder of the user's is counted and never
+    /// followed. An entry where a label's folder belongs that is not one, and one named like a
+    /// label only in other letter case, may lead to launch files that hold a token: each is
+    /// counted on its own and never followed or opened. A folder of the user's that is not
+    /// private stops the pass, before any token file goes. The writer's leftovers and the
+    /// folders stay for a later step. Callers hold the pick lock.
+    static func clearForUninstall(
         context: ToolContext, snapshot: SessionsSnapshot, leased: Set<String>,
-        keepModifiedAfter: Date
+        keepModifiedAfter: Date, keepAll: Bool
     ) throws -> WipeCount {
+        let writer = NoFollowWriter(root: context.dataRoot)
         var total = WipeCount()
-        for label in labels(context: context) {
-            let one = try removeAll(
-                context: context, label: label, snapshot: snapshot, leased: leased,
-                keepModifiedAfter: keepModifiedAfter)
+        switch try writer.folderEntry(parent: [], name: folder) {
+        case .missing: return total
+        case .other:
+            total.skipped += 1
+            return total
+        case .folder: break
+        }
+        let real = Set(try writer.listFolders(folders: [folder]))
+        for name in try writer.listNames(folders: [folder]) {
+            if isOtherCaseLabel(name) {
+                total.otherCase += 1
+                continue
+            }
+            guard ConfigValidator.isValidLabel(name) else {
+                total.skipped += 1
+                continue
+            }
+            guard real.contains(name) else {
+                total.notFollowed += 1
+                continue
+            }
+            let one = try clearFiles(
+                context: context, label: name, snapshot: snapshot, leased: leased,
+                keepModifiedAfter: keepModifiedAfter, keepAll: keepAll)
             total.deleted += one.deleted
             total.tombstoned += one.tombstoned
-            total.skipped += one.skipped
-            total.temporariesLeft += one.temporariesLeft
+            total.skipped += try strayCount(context: context, label: name)
         }
-        try NoFollowWriter(root: context.dataRoot).removeEmptyFolder(parent: [], name: folder)
         return total
     }
 
-    /// How many launch files across every label may still carry a token.
+    /// `uninstall`'s writer leftovers step for the launch folders: the writer's leftover
+    /// temporary files in each label's folder go, then each folder left empty, then the launch
+    /// folder when it is empty. It never throws. Returns how many names of the temporary shape
+    /// are still there.
+    static func tidyForUninstall(context: ToolContext) -> Int {
+        let writer = NoFollowWriter(root: context.dataRoot)
+        var left = 0
+        for label in labels(context: context) {
+            left += (try? deleteWriterLeftovers(context: context, label: label)) ?? 0
+            _ = try? writer.removeEmptyFolder(parent: [folder], name: label)
+        }
+        _ = try? writer.removeEmptyFolder(parent: [], name: folder)
+        return left
+    }
+
+    /// How many launch files across every label may still carry a token, with each launch file's
+    /// name that `lstat` cannot check, such as in a label's folder the user cannot search.
     static func tokenHolderCount(context: ToolContext) throws -> Int {
-        try labels(context: context).reduce(0) {
+        try labels(context: context).reduce(uncheckedFileCount(context: context)) {
             $0 + (try filesHoldingAToken(context: context, label: $1))
+        }
+    }
+
+    /// How many names of a launch file's shape in the labels' folders `lstat` cannot check. Each
+    /// may hold a token. Nothing is opened.
+    static func uncheckedFileCount(context: ToolContext) -> Int {
+        let writer = NoFollowWriter(root: context.dataRoot)
+        return labels(context: context).reduce(0) {
+            $0 + writer.uncheckedCount(folders: folders(label: $1), of: isFileName)
+        }
+    }
+
+    /// How many names of the writer's temporary shape in the labels' folders `lstat` cannot
+    /// check. Each may hold a whole launch file, token included. Nothing is opened.
+    static func uncheckedTemporaryCount(context: ToolContext) -> Int {
+        let writer = NoFollowWriter(root: context.dataRoot)
+        let shape = NoFollowWriter.isTemporaryName
+        return labels(context: context).reduce(0) {
+            $0 + writer.uncheckedCount(folders: folders(label: $1), of: shape)
         }
     }
 }

@@ -719,6 +719,35 @@ extension RemoveAndReplaceRuleTests {
         #expect(!exists(try TokenPaths.fileURL(context: t.context, label: "pool-rl")))
     }
 
+    @Test func removeChecksTheConfigAsItIsUnderThePickLockAndDeletesNothingWhenRefused() throws {
+        let t = try TestHome()
+        let store = ConfigStore(context: t.context)
+        try store.save(Config(accounts: [tokenAccount("pool-rm")]))
+        let token = Canaries.oauth()
+        _ = try TokenAccounts.install(context: t.context, label: "pool-rm", token: token)
+        // `remove pool-rm` loads the config while the account is a pool account.
+        let loadedByRemove = try store.loadRequired()
+        // `config set-main pool-rm` saves under the pick lock before that remove takes it.
+        try TokenAccounts.updateConfig(context: t.context, backup: true) {
+            $0.accounts[0].role = Role.main
+            $0.accounts[0].reserve = .standard
+        }
+        var seen: String?
+        #expect(throws: ToolError.self) {
+            try TokenAccounts.removeAccount(
+                context: t.context, label: "pool-rm", config: loadedByRemove
+            ) { fresh in
+                seen = fresh?.account("pool-rm")?.role
+                if seen != Role.pool { throw ToolError("Needs a terminal.") }
+            }
+        }
+        #expect(seen == Role.main)
+        #expect(try store.loadRequired().account("pool-rm")?.role == Role.main)
+        let kept = fileText(try TokenPaths.fileURL(context: t.context, label: "pool-rm"))
+            .contains(token)
+        #expect(kept)
+    }
+
     @Test func removeKeepsAnAccountAddedAndSignedInAfterItsCallerLoadedTheConfig() throws {
         let t = try TestHome()
         let store = ConfigStore(context: t.context)

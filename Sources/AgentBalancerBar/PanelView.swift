@@ -6,6 +6,8 @@ struct PanelActions {
     var toggleLogin: () -> Void = {}
     var quit: () -> Void = {}
     var copy: (String) -> Void = { _ in }
+    /// Called before the Manage accounts window opens, with the account to show or nil.
+    var manage: (String?) -> Void = { _ in }
 }
 
 private struct ContentHeight: PreferenceKey {
@@ -28,6 +30,7 @@ struct PanelView: View {
     @Environment(\.colorScheme) private var scheme
     @Environment(\.flatMaterials) private var flat
     @Environment(\.openURL) private var openURL
+    @Environment(\.openWindow) private var openWindow
     @State private var contentHeight: CGFloat = 0
 
     private var palette: Palette { Palette.of(scheme) }
@@ -88,7 +91,12 @@ struct PanelView: View {
                     ForEach(a.rows) { row in
                         RowView(
                             model: row, palette: palette, copy: actions.copy,
-                            stepsOpen: stepsOpen.contains(row.label))
+                            stepsOpen: stepsOpen.contains(row.label),
+                            manage: { label in
+                                actions.manage(label)
+                                ManageWindowGate.requested = true
+                                openWindow(id: ManageWindowID.value)
+                            })
                     }
                 }
             case .card(let card):
@@ -133,6 +141,14 @@ struct PanelView: View {
             ActionRow(
                 title: "Refresh now", shortcut: "\u{2318}R", palette: palette, key: "r",
                 action: actions.refresh)
+            ActionRow(
+                title: "Manage accounts\u{2026}", shortcut: "\u{2318},", palette: palette,
+                key: ",",
+                action: {
+                    actions.manage(nil)
+                    ManageWindowGate.requested = true
+                    openWindow(id: ManageWindowID.value)
+                })
             ActionRow(
                 title: "Open usage page", shortcut: "\u{2197}", palette: palette,
                 action: { openURL(UsagePage.url) })

@@ -76,7 +76,7 @@ private func oauth() -> String { Canary.realShapeToken() }
         let cli = try setUp()
         defer { cli.cleanup() }
         let out = try cli.run([
-            "add", "lab", "--email", "lab@example.com", "--ends", "2099-12-31", "--ending-soon",
+            "add", "lab", "--email", "lab@example.com", "--ends", "2099-12-31",
         ])
         #expect(out.status == 0, "\(text(out.stderr))")
         let entry = try #require(try config(cli).first { $0["label"] as? String == "lab" })
@@ -84,7 +84,7 @@ private func oauth() -> String { Canary.realShapeToken() }
         #expect(entry["role"] as? String == "pool")
         #expect(entry["email"] as? String == "lab@example.com")
         #expect(entry["endsAt"] as? String == "2099-12-31")
-        #expect(entry["endingSoon"] as? Bool == true)
+        #expect(entry["endingSoon"] == nil)
         #expect((entry["accountKey"] as? String)?.count == 32)
         #expect(entry["tokenCreatedAt"] == nil)
         #expect(!FileManager.default.fileExists(atPath: try tokenFile(cli, "lab").path))
@@ -1076,16 +1076,26 @@ private func oauth() -> String { Canary.realShapeToken() }
             try #require(try config(cli).first { $0["label"] as? String == "lab" })
         }
         #expect(try cli.run(["config", "set", "lab", "ends", "2099-12-31"]).status == 0)
-        #expect(try cli.run(["config", "set", "lab", "ending-soon", "true"]).status == 0)
         #expect(try lab()["kind"] as? String == "token")
         #expect(try lab()["endsAt"] as? String == "2099-12-31")
-        #expect(try lab()["endingSoon"] as? Bool == true)
-        let shown = try row(cli, "lab")
+        #expect(try lab()["endingSoon"] == nil)
+        var shown = try row(cli, "lab")
         #expect(shown["endsAt"] as? String == "2099-12-31")
-        #expect(shown["endingSoon"] as? Bool == true)
-        let show = text(try cli.run(["config", "show"]).stdout)
+        #expect(shown["endingSoon"] as? Bool == false)
+        var show = text(try cli.run(["config", "show"]).stdout)
         #expect(show.contains("account lab\n  kind: token\n  role: pool\n  ends: 2099-12-31\n"))
+        // One end marker: the soon flag takes the date's place.
+        let soon = try cli.run(["config", "set", "lab", "ending-soon", "true"])
+        #expect(soon.status == 0)
+        #expect(text(soon.stdout).contains("Also cleared ends: an account keeps one end marker."))
+        #expect(try lab()["endsAt"] == nil)
+        #expect(try lab()["endingSoon"] as? Bool == true)
+        shown = try row(cli, "lab")
+        #expect(shown["endsAt"] is NSNull)
+        #expect(shown["endingSoon"] as? Bool == true)
+        show = text(try cli.run(["config", "show"]).stdout)
         #expect(show.contains("  ending-soon: true"))
+        #expect(!show.contains("  ends: "))
 
         let today = Self.localDay(Date())
         #expect(try cli.run(["config", "set", "lab", "ends", today]).status == 0)
@@ -1395,5 +1405,26 @@ extension CLIHome {
             combined += (try? String(contentsOf: url, encoding: .utf8)) ?? ""
         }
         return combined
+    }
+}
+
+extension TokenAccountsCLITests {
+    @Test func configSetEndsSaysWhenItAlsoClearedTheEndingSoonFlag() throws {
+        let cli = try setUp()
+        defer { cli.cleanup() }
+        try addLab(cli)
+        let line = "Also cleared ending-soon: an account keeps one end marker."
+        #expect(try cli.run(["config", "set", "lab", "ending-soon", "true"]).status == 0)
+        let dated = try cli.run(["config", "set", "lab", "ends", "2099-12-31"])
+        #expect(dated.status == 0)
+        #expect(text(dated.stdout).contains(line))
+        #expect(try cli.run(["config", "set", "lab", "ending-soon", "true"]).status == 0)
+        let none = try cli.run(["config", "set", "lab", "ends", "none"])
+        #expect(none.status == 0)
+        #expect(text(none.stdout).contains(line))
+        // With no soon flag to clear, it says nothing more.
+        let plain = try cli.run(["config", "set", "lab", "ends", "2099-12-31"])
+        #expect(plain.status == 0)
+        #expect(!text(plain.stdout).contains("Also cleared"))
     }
 }

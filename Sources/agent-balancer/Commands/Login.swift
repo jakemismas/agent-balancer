@@ -117,6 +117,11 @@ struct LoginCommand: ParsableCommand {
             throw ToolError(issue.text)
         case .status(let status):
             guard !status.loggedIn else {
+                // The sign-in it just read is recorded as any check is, so the status shows it.
+                var observations = StatusObservations()
+                observations.auth[label] = AuthObservation(
+                    FolderKind.evaluate(status, account: account, folder: folder, now: Date()))
+                Shared.rebuildStatus(context, observations: observations)
                 throw ToolError(
                     "'\(safe)' is already signed in. \(Messages.oneAccountPerFolder)")
             }
@@ -126,10 +131,8 @@ struct LoginCommand: ParsableCommand {
         if browser {
             arguments = ["auth", "login"]
             if let email = account.email {
-                guard Shared.isPlainEmail(email) else {
-                    throw ToolError(
-                        "The expected email of '\(safe)' cannot be passed to claude safely. Fix it with `agent-balancer config set`.",
-                        code: .checkFailed)
+                guard ConfigValidator.isPlainEmail(email) else {
+                    throw ToolError(Messages.emailNotPlain(label), code: .checkFailed)
                 }
                 arguments += ["--email", email]
             }
@@ -167,9 +170,7 @@ struct LoginCommand: ParsableCommand {
         }
         if let wrong = check.issues.first(where: { $0.code == .wrongAccount }) {
             print(Shared.line(wrong))
-            print(
-                "Sign the expected account back in to this folder. Do not relabel the folder."
-            )
+            print(Messages.signExpectedBackIn)
             throw ExitCode.failure
         }
         if account.email == nil {

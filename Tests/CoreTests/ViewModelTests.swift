@@ -4,7 +4,7 @@ import Testing
 @testable import Core
 
 /// The row, header and empty-state models of the menu app.
-@Suite struct ViewModelTests {
+@Suite(.localZone("America/Los_Angeles")) struct ViewModelTests {
     static let now = ISO8601DateFormatter().date(from: "2026-11-09T21:13:00Z")!
 
     static func json(_ account: String, next: String? = nil, banner: String = "null") -> String {

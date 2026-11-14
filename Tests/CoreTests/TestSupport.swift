@@ -1,4 +1,5 @@
 import Foundation
+import Testing
 
 @testable import Core
 
@@ -174,5 +175,71 @@ final class HookCalls: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return items
+    }
+}
+
+/// `LocalTime.zone` is one value for the whole process, and suites run at once. A suite whose
+/// expectations name local times takes this trait: each of its tests sets the zone and runs while
+/// no other such test runs, so one suite's zone never leaks into another's.
+struct LocalZone: SuiteTrait, TestTrait, TestScoping {
+    let zone: TimeZone
+    var isRecursive: Bool { true }
+
+    /// Once per test function, never for the suite, so the gate is never taken twice.
+    func scopeProvider(for test: Test, testCase: Test.Case?) -> LocalZone? {
+        test.isSuite || testCase != nil ? nil : self
+    }
+
+    func provideScope(
+        for test: Test, testCase: Test.Case?,
+        performing function: @Sendable () async throws -> Void
+    ) async throws {
+        await ZoneGate.shared.enter()
+        LocalTime.zone = zone
+        do {
+            try await function()
+        } catch {
+            await ZoneGate.shared.leave()
+            throw error
+        }
+        await ZoneGate.shared.leave()
+    }
+}
+
+extension Trait where Self == LocalZone {
+    static func localZone(_ identifier: String) -> LocalZone {
+        LocalZone(zone: TimeZone(identifier: identifier) ?? .gmt)
+    }
+}
+
+/// One holder at a time, in arrival order.
+actor ZoneGate {
+    static let shared = ZoneGate()
+    private var held = false
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+
+    func enter() async {
+        guard held else {
+            held = true
+            return
+        }
+        await withCheckedContinuation { waiting.append($0) }
+    }
+
+    func leave() {
+        if waiting.isEmpty {
+            held = false
+        } else {
+            waiting.removeFirst().resume()
+        }
+    }
+
+    var isHeld: Bool { held }
+}
+
+@Suite(.localZone("Asia/Tokyo")) struct LocalZoneTraitTests {
+    @Test func eachTestRunsHoldingTheGateWithItsZone() async {
+        #expect(await ZoneGate.shared.isHeld)
+        #expect(LocalTime.zone.identifier == "Asia/Tokyo")
     }
 }

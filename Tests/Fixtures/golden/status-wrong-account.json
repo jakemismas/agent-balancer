@@ -36,7 +36,7 @@
       "linked" : null,
       "loginExpiresAt" : null,
       "loginExpiresSource" : null,
-      "planTier" : "max_20x",
+      "planTier" : null,
       "readingsAge" : 240,
       "reserve" : null,
       "role" : "pool",

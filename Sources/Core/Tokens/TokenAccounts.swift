@@ -101,14 +101,17 @@ public enum TokenAccounts {
     /// read-back that no launch file of the label holds a token, the writer's leftover temporary
     /// files in `tokens/`, the token file, the stored reading, and last `finish`, where the caller
     /// deletes the registry entry while the lock is still held. A crash at any step leaves a state
-    /// that a rerun finishes. Works for an account of any kind.
+    /// that a rerun finishes. Works for an account of any kind. `before` runs first, under the
+    /// lock; when it throws, nothing is deleted.
     public static func removeFiles(
         context: ToolContext, label: String,
         leaseMinutes: Int = PickerSettings().leaseMinutes, snapshot: SessionsSnapshot? = nil,
-        keepsRecentPicks: Bool = true, finish: () throws -> Void = {}
+        keepsRecentPicks: Bool = true, before: () throws -> Void = {},
+        finish: () throws -> Void = {}
     ) throws -> Removed {
         let lock = try takeLock(context)
         defer { lock.release() }
+        try before()
         let now = Date()
         let leaseStore = LeaseStore(context: context)
         let leases = try leaseStore.current(now: now, leaseMinutes: 525_600)
@@ -146,21 +149,37 @@ public enum TokenAccounts {
     /// a config loaded and saved while the pick lock is still held, so a `login` waiting on the
     /// lock finds the entry gone and an entry another command saved after `config` was loaded is
     /// kept. `config` gives only the lease span. With no entry, it finishes a remove that stopped
-    /// part way.
+    /// part way. `before` gets the config as it is once the lock is held, ahead of the first
+    /// delete, so a check in it sees a role change that `config set-main` saved under the same
+    /// lock; when it throws, nothing is deleted. The entry is deleted only while it is still the
+    /// account `before` saw under that label (the same `accountKey`); otherwise the remove stops
+    /// and keeps it.
     public static func removeAccount(
-        context: ToolContext, label: String, config: Config, keepsRecentPicks: Bool = true
+        context: ToolContext, label: String, config: Config, keepsRecentPicks: Bool = true,
+        before: (Config?) throws -> Void = { _ in }
     ) throws -> Removed {
-        try removeFiles(
+        var checkedKey: String?
+        return try removeFiles(
             context: context, label: label, leaseMinutes: config.picker.leaseMinutes,
-            keepsRecentPicks: keepsRecentPicks
-        ) {
-            let store = ConfigStore(context: context)
-            guard var fresh = try store.load(),
-                let index = fresh.accounts.firstIndex(where: { $0.label == label })
-            else { return }
-            fresh.accounts.remove(at: index)
-            try store.save(fresh, backup: true)
-        }
+            keepsRecentPicks: keepsRecentPicks,
+            before: {
+                let fresh = try ConfigStore(context: context).load()
+                try before(fresh)
+                checkedKey = fresh?.account(label)?.accountKey
+            },
+            finish: {
+                let store = ConfigStore(context: context)
+                guard var fresh = try store.load(),
+                    let index = fresh.accounts.firstIndex(where: { $0.label == label })
+                else { return }
+                guard fresh.accounts[index].accountKey == checkedKey else {
+                    throw ToolError(
+                        "The account labelled '\(Display.safe(label))' changed while it was being removed, so its entry was kept. Run `agent-balancer remove \(Display.safe(label))` again."
+                    )
+                }
+                fresh.accounts.remove(at: index)
+                try store.save(fresh, backup: true)
+            })
     }
 
     /// Loads the config under the pick lock, applies `change` and saves the result before the
@@ -178,6 +197,21 @@ public enum TokenAccounts {
         var config = try store.loadRequired()
         try change(&config)
         try store.save(config, backup: backup)
+        return config
+    }
+
+    /// `init`'s save, under the pick lock like every other registry writer: `make` gets the
+    /// config as it is once the lock is held, or nil when there is none yet, and what it returns
+    /// is saved before the lock goes. A config that was there goes to `backups/` first.
+    @discardableResult
+    public static func setUpConfig(
+        context: ToolContext, _ make: (Config?) throws -> Config
+    ) throws -> Config {
+        let store = ConfigStore(context: context)
+        let lock = try takeLock(context)
+        defer { lock.release() }
+        let config = try make(try store.load())
+        try store.save(config, backup: true)
         return config
     }
 

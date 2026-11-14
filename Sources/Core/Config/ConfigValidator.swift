@@ -5,6 +5,13 @@ public enum ConfigValidator {
         label.range(of: #"\A[a-z0-9][a-z0-9-]{0,31}\z"#, options: .regularExpression) != nil
     }
 
+    /// An address that is safe as one argument: no leading hyphen, space, quote or control
+    /// character. `login --browser` passes only such an email to claude.
+    public static func isPlainEmail(_ text: String) -> Bool {
+        let pattern = #"\A[A-Za-z0-9._%+][A-Za-z0-9._%+-]*@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\z"#
+        return text.range(of: pattern, options: .regularExpression) != nil
+    }
+
     /// A real calendar day written `YYYY-MM-DD`. `2026-13-45` and `2026-02-30` are refused.
     public static func isValidDate(_ text: String) -> Bool {
         guard text.range(of: #"\A[0-9]{4}-[0-9]{2}-[0-9]{2}\z"#, options: .regularExpression) != nil

@@ -28,6 +28,9 @@ public final class MenuController {
     @ObservationIgnored private let timing: MenuTiming
     @ObservationIgnored private let clock: @Sendable () -> Date
     @ObservationIgnored private var tasks: [Task<Void, Never>] = []
+    /// Runs after each pass of the file loop, so an open Manage accounts window reads the same
+    /// file on the same beat.
+    @ObservationIgnored public var afterFileRead: (@MainActor () -> Void)?
 
     public init(
         context: ToolContext, runner: CLIRunner? = nil, timing: MenuTiming = MenuTiming(),
@@ -108,6 +111,7 @@ public final class MenuController {
             try? await Task.sleep(for: .seconds(timing.fileReadSeconds))
             if Task.isCancelled { return }
             reload()
+            afterFileRead?()
         }
     }
 

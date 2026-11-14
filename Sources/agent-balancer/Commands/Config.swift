@@ -53,15 +53,17 @@ struct ConfigCommand: ParsableCommand {
         func run() throws {
             let context = ToolContext.current()
             try Shared.requireOwnTerminal(context)
-            let store = ConfigStore(context: context)
-            var config = try store.loadRequired()
-            guard let index = config.accounts.firstIndex(where: { $0.label == label }) else {
-                throw ToolError("No account is labelled '\(Display.safe(label))'.")
+            // Under the pick lock, so the role never changes while `remove` checks it and deletes.
+            let config = try TokenAccounts.updateConfig(context: context, backup: true) { config in
+                guard let index = config.accounts.firstIndex(where: { $0.label == label }) else {
+                    throw ToolError("No account is labelled '\(Display.safe(label))'.")
+                }
+                config.accounts[index].role = Role.main
+                if config.accounts[index].reserve == nil {
+                    config.accounts[index].reserve = .standard
+                }
             }
-            config.accounts[index].role = Role.main
-            if config.accounts[index].reserve == nil { config.accounts[index].reserve = .standard }
-            try store.save(config, backup: true)
-            let reserve = config.accounts[index].reserve ?? .standard
+            let reserve = config.account(label)?.reserve ?? .standard
             print("'\(Display.safe(label))' is the main account. Reserve: \(reserve.summary).")
             Shared.rebuildStatus(context)
         }
@@ -76,14 +78,13 @@ struct ConfigCommand: ParsableCommand {
         func run() throws {
             let context = ToolContext.current()
             try Shared.requireOwnTerminal(context)
-            let store = ConfigStore(context: context)
-            var config = try store.loadRequired()
-            guard let index = config.accounts.firstIndex(where: { $0.label == label }) else {
-                throw ToolError("No account is labelled '\(Display.safe(label))'.")
+            try TokenAccounts.updateConfig(context: context, backup: true) { config in
+                guard let index = config.accounts.firstIndex(where: { $0.label == label }) else {
+                    throw ToolError("No account is labelled '\(Display.safe(label))'.")
+                }
+                config.accounts[index].role = Role.pool
+                config.accounts[index].reserve = nil
             }
-            config.accounts[index].role = Role.pool
-            config.accounts[index].reserve = nil
-            try store.save(config, backup: true)
             print("'\(Display.safe(label))' is a pool account.")
             Shared.rebuildStatus(context)
         }
@@ -96,6 +97,8 @@ struct ConfigCommand: ParsableCommand {
             discussion: """
                 config set <label> email|ends|ending-soon|label <value>
                 config set refresh.backgroundMinutes <n>
+                An account keeps one end marker: `ends <date>` clears ending-soon, `ending-soon
+                true` clears the date, and `ends none` clears both.
                 """)
 
         @Argument(parsing: .remaining) var words: [String] = []
@@ -103,19 +106,25 @@ struct ConfigCommand: ParsableCommand {
         func run() throws {
             let context = ToolContext.current()
             try Shared.requireOwnTerminal(context)
-            let store = ConfigStore(context: context)
-            var config = try store.loadRequired()
+            var lines: [String] = []
+            // Under the pick lock like every registry writer, so an add, remove or role change
+            // saved at the same moment is kept and a remove never sees a rename half way.
+            try TokenAccounts.updateConfig(context: context, backup: true) { config in
+                lines = try Self.change(words, in: &config)
+            }
+            for line in lines { print(line) }
+            Shared.rebuildStatus(context)
+        }
 
+        /// Applies one change to `config` and returns the lines to print.
+        static func change(_ words: [String], in config: inout Config) throws -> [String] {
             if words.count == 2, words[0] == "refresh.backgroundMinutes" {
                 guard let minutes = Int(words[1]), minutes >= 1, minutes <= 10_080 else {
                     throw ToolError(
                         "refresh.backgroundMinutes must be a whole number from 1 to 10080.")
                 }
                 config.refresh.backgroundMinutes = minutes
-                try store.save(config, backup: true)
-                print("refresh.backgroundMinutes is \(minutes).")
-                Shared.rebuildStatus(context)
-                return
+                return ["refresh.backgroundMinutes is \(minutes)."]
             }
             guard words.count == 3 else {
                 throw ToolError(
@@ -128,30 +137,38 @@ struct ConfigCommand: ParsableCommand {
             guard let index = config.accounts.firstIndex(where: { $0.label == label }) else {
                 throw ToolError("No account is labelled '\(Display.safe(label))'.")
             }
+            var account = config.accounts[index]
+            var cleared: String?
             switch field {
             case "email":
                 guard value.contains("@"), !value.contains(" ") else {
                     throw ToolError("That is not an email address.")
                 }
-                config.accounts[index].email = value
+                account.email = value
             case "ends":
-                if value == "none" {
-                    config.accounts[index].endsAt = nil
-                } else {
+                if value != "none" {
                     guard ConfigValidator.isTodayOrLater(value) else {
                         throw ToolError(
                             "ends must be today or a later date like 2026-12-31, or none.")
                     }
-                    config.accounts[index].endsAt = value
                 }
+                if account.endingSoon == true { cleared = "ending-soon" }
+                account.endsAt = value == "none" ? nil : value
+                account.endingSoon = nil
             case "ending-soon":
                 guard value == "true" || value == "false" else {
                     throw ToolError("ending-soon must be true or false.")
                 }
-                config.accounts[index].endingSoon = value == "true" ? true : nil
+                if value == "true" {
+                    if account.endsAt != nil { cleared = "ends" }
+                    account.endsAt = nil
+                    account.endingSoon = true
+                } else {
+                    account.endingSoon = nil
+                }
             case "label":
                 // A token account's files carry its label, so a rename would strand the token.
-                guard config.accounts[index].kind != Kind.token else {
+                guard account.kind != Kind.token else {
                     throw ToolError(
                         "A token account cannot be renamed. Run `agent-balancer remove \(Display.safe(label))`, then `agent-balancer add \(Display.safe(value))` and `agent-balancer login \(Display.safe(value))`."
                     )
@@ -164,15 +181,18 @@ struct ConfigCommand: ParsableCommand {
                 guard config.account(value) == nil || value == label else {
                     throw ToolError("Label '\(Display.safe(value))' is already used.")
                 }
-                config.accounts[index].label = value
+                account.label = value
             default:
                 throw ToolError(
                     "Unknown field '\(Display.safe(field))'. Use email, ends, ending-soon or label."
                 )
             }
-            try store.save(config, backup: true)
-            print("Updated \(field) for '\(Display.safe(label))'.")
-            Shared.rebuildStatus(context)
+            config.accounts[index] = account
+            var lines = ["Updated \(field) for '\(Display.safe(label))'."]
+            if let cleared {
+                lines.append("Also cleared \(cleared): an account keeps one end marker.")
+            }
+            return lines
         }
     }
 }

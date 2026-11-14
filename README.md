@@ -23,7 +23,7 @@ arrive slice by slice. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the 
 
 A token account uses a setup-token that you make yourself with `claude setup-token`.
 
-1. `agent-balancer add <label> [--ends YYYY-MM-DD] [--ending-soon]` writes the registry entry. The
+1. `agent-balancer add <label> [--ends YYYY-MM-DD | --ending-soon]` writes the registry entry. The
    `--ends` date must be a real day, today or later.
 2. `agent-balancer login <label>` in Terminal runs `claude setup-token`, takes the token without
    showing it, and saves it to `tokens/<label>.json` (mode 0600) in one atomic rename.

@@ -8,11 +8,15 @@ import SwiftUI
 @MainActor @Observable
 final class AppModel {
     let controller: MenuController
+    let manage: ManageViewModel
     private(set) var loginItemOn = false
     private(set) var loginItemError: String?
 
     init() {
-        controller = MenuController(context: ToolContext.current())
+        let context = ToolContext.current()
+        controller = MenuController(context: context)
+        manage = ManageViewModel(context: context)
+        controller.afterFileRead = { [manage] in manage.statusMayHaveChanged() }
         refreshLoginItem()
         controller.start()
     }
@@ -46,8 +50,20 @@ final class AppModel {
             refresh: { [controller] in Task { await controller.refreshNow() } },
             toggleLogin: { [weak self] in self?.toggleLoginItem() },
             quit: { NSApplication.shared.terminate(nil) },
-            copy: { [weak self] in self?.copy($0) ?? () })
+            copy: { [weak self] in self?.copy($0) ?? () },
+            manage: { [manage] label in
+                if let label { manage.select(label) } else { manage.reload() }
+            })
     }
+}
+
+enum ManageWindowID { static let value = "manage" }
+
+/// A Window scene opens at launch on macOS 14. The window opens only after the person asks for
+/// it, and any other first appearance closes it so the app stays menu bar only.
+@MainActor
+enum ManageWindowGate {
+    static var requested = false
 }
 
 struct AgentBalancerBarApp: App {
@@ -63,5 +79,9 @@ struct AgentBalancerBarApp: App {
             Image(nsImage: MenuIcon.image())
         }
         .menuBarExtraStyle(.window)
+        Window("Manage accounts", id: ManageWindowID.value) {
+            ManageWindowView(model: model.manage, copy: model.copy)
+        }
+        .windowResizability(.contentMinSize)
     }
 }

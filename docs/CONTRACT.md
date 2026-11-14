@@ -107,6 +107,15 @@ spends no model call, so it is the form for every periodic read. Plain `status -
 sign-in state. Only `refresh` and `pick` probe. The fields of `status --json` that its schema
 documents are stable in version 1.
 
+A `folder` account's row also carries `signInCheck`: what the last sign-in check of that folder that
+got an answer saw. `signed_in` is the expected account (any account when no email is set) signed in
+in its own folder, `signed_out` is no account, `other_account` is another account in that folder,
+and `not_confirmed` is an account signed in that the check could not place in that folder. It is
+null before the first such check and stays as it was after a check that got no answer; `login` and
+`token` rows have no such key. The row shows one `error` code, and a higher one can hide
+`wrong_account`, so read `signInCheck` for the folder's sign-in. `planTier` is null after any check
+that did not place the expected account's sign-in.
+
 ## What changed
 
 ```
@@ -142,3 +151,20 @@ writes nothing, starts nothing and prints the line to type in your own terminal,
 Applying a link change (`link`, `link --repair`, `link --accept-source-change`, `unlink`) also needs a
 person at an interactive terminal who types the label (or `accept`) back. Input from a pipe is
 refused before the prompt and nothing changes; `link --dry-run` needs no terminal.
+
+`remove <label>` of the main account also needs a person at an interactive terminal: with
+standard input from a pipe it exits 1, changes nothing, and says to run
+`agent-balancer remove <label>` in Terminal. Removing a pool account needs no terminal. Every
+command that saves `config.json` (`init`, `add`, `login`, `refresh`, `config set`,
+`config set-main`, `config clear-main`, `remove`) saves it under the pick lock, so two at once
+never save over each other, and a role change or a rename is seen by a `remove` that runs at the
+same time. `remove` deletes the entry only while it is still the account it checked, and when
+the label names another account by then it exits 1 and keeps it. A `remove` that waited while
+another `remove` of the same label finished exits 0, as a rerun of a remove that stopped part
+way does.
+
+An account keeps one end marker. `config set <label> ends <date>` also clears its ending-soon
+flag, `config set <label> ending-soon true` also clears its date, `config set <label> ends none`
+clears both, and `ending-soon false` clears only the flag; each is one save. `add` refuses
+`--ends` together with `--ending-soon` and writes nothing. A config saved earlier with both keeps
+working, the date first, until the next change clears one.

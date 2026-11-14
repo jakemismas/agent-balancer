@@ -14,6 +14,7 @@ struct RemoveCommand: ParsableCommand {
         try Shared.requireOwnTerminal(context)
         let config = try ConfigStore(context: context).loadRequired()
         let index = config.accounts.firstIndex(where: { $0.label == label })
+        if let index { try Self.requireConsent(config.accounts[index]) }
         // With no registry entry, a rerun still finishes a remove that stopped part way.
         let leftovers =
             try index == nil && ConfigValidator.isValidLabel(label)
@@ -22,14 +23,27 @@ struct RemoveCommand: ParsableCommand {
             throw ToolError("No account is labelled '\(Display.safe(label))'.")
         }
         let kind = index.map { config.accounts[$0].kind }
-        if kind == Kind.folder {
-            // Forgotten first: a stop part way leaves a folder that counts as not linked, which
-            // fails closed, never one that looks linked after it is added again.
-            try HookRecord(context: context).saveLinks(label: label, entries: [], linked: false)
-        }
+        let key = index.map { config.accounts[$0].accountKey }
         let removed = try TokenAccounts.removeAccount(
             context: context, label: label, config: config,
-            keepsRecentPicks: kind != Kind.folder)
+            keepsRecentPicks: kind != Kind.folder
+        ) { fresh in
+            // Again under the pick lock, which every registry writer takes, before anything is
+            // written.
+            let account = fresh?.account(label)
+            if let account { try Self.requireConsent(account) }
+            // Only another account under the label stops it; a gone entry finishes as leftovers.
+            if let account, account.accountKey != key {
+                throw ToolError(
+                    "'\(Display.safe(label))' changed while remove waited, so nothing was changed. Run `agent-balancer remove \(Display.safe(label))` again."
+                )
+            }
+            if kind == Kind.folder {
+                // Forgotten first: a stop part way leaves a folder that counts as not linked,
+                // which fails closed, never one that looks linked after it is added again.
+                try HookRecord(context: context).saveLinks(label: label, entries: [], linked: false)
+            }
+        }
         if index != nil {
             print("Removed '\(Display.safe(label))'.")
         } else {
@@ -68,5 +82,12 @@ struct RemoveCommand: ParsableCommand {
             )
         }
         Shared.rebuildStatus(context)
+    }
+
+    /// Removing the main account takes its reserve away, so it keeps its typed consent: only a
+    /// person at a terminal may do it. A pool account needs no terminal.
+    static func requireConsent(_ account: Account) throws {
+        guard account.role != Role.pool else { return }
+        try ConsentTerminal.require(message: Messages.removeMainNeedsTerminal(account.label))
     }
 }

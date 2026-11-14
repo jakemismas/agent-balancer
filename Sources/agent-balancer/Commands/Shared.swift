@@ -28,12 +28,6 @@ enum Shared {
         try ConsentTerminal.require(isTerminal: isTerminal)
     }
 
-    /// An address that is safe as one argument: no leading hyphen, space, quote or control character.
-    static func isPlainEmail(_ text: String) -> Bool {
-        let pattern = #"\A[A-Za-z0-9._%+][A-Za-z0-9._%+-]*@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\z"#
-        return text.range(of: pattern, options: .regularExpression) != nil
-    }
-
     static func line(_ issue: Issue) -> String {
         let tag = issue.severity == .error ? "Error" : "Warning"
         return "\(tag) \(issue.code.rawValue): \(Display.safe(issue.text, limit: 400))"

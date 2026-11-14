@@ -40,6 +40,15 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 plutil -lint "$APP/Contents/Info.plist" >/dev/null
+# The app declares no scripting, URL, service, document or extension surface. Checked on the file
+# written, so a bundle that declares one is never signed.
+for key in NSAppleScriptEnabled OSAScriptingDefinition CFBundleURLTypes NSServices \
+  CFBundleDocumentTypes NSUserActivityTypes NSExtension; do
+  if plutil -extract "$key" xml1 -o /dev/null "$APP/Contents/Info.plist" >/dev/null 2>&1; then
+    echo "Info.plist declares $key, which the app must not have" >&2
+    exit 1
+  fi
+done
 
 codesign --force --sign - --timestamp=none "$APP"
 codesign --verify "$APP"

@@ -15,7 +15,11 @@ public struct NoFollowWriter: Sendable {
         try Paths.checkName(name)
         let dir = try NoFollowWriter.openFolder(root: root, folders: folders, create: true)
         defer { close(dir) }
+        try Self.writeFile(data, in: dir, name: name)
+    }
 
+    /// The write `put` does, relative to an open folder handle.
+    static func writeFile(_ data: Data, in dir: Int32, name: String) throws {
         var st = stat()
         if fstatat(dir, name, &st, AT_SYMLINK_NOFOLLOW) == 0 {
             let isRegular = (st.st_mode & S_IFMT) == S_IFREG
@@ -498,5 +502,175 @@ extension NoFollowWriter {
         guard symlinkat(target, dir, name) == 0 else {
             throw ToolError("Could not create the link \(name).")
         }
+    }
+}
+
+/// Which file a descriptor or a path names: its device and inode.
+public struct FileIdentity: Equatable, Sendable {
+    public let device: Int64
+    public let inode: UInt64
+
+    init(_ st: stat) {
+        device = Int64(st.st_dev)
+        inode = UInt64(st.st_ino)
+    }
+
+    /// The identity of what `path` names, following links, or nil when nothing is there.
+    public static func of(path: String) -> FileIdentity? {
+        var st = stat()
+        return stat(path, &st) == 0 ? FileIdentity(st) : nil
+    }
+}
+
+/// A folder opened once and written relative to its handle. Before each write, every name from
+/// the start folder down is checked to still name the folder that was opened, and neither the
+/// folder written into nor any folder above it may be a protected one, as the protected folders
+/// were when the run started or as they read at that moment, so a folder swapped for a link,
+/// moved into a protected folder, or named by a protected path part way stops the run instead of
+/// sending a file there.
+public final class HeldFolder: @unchecked Sendable {
+    private let start: Int32
+    /// The descriptor of each name in `names`; the last is the folder written into.
+    private let chain: [Int32]
+    private let names: [String]
+    private let identities: [FileIdentity]
+    private let refused: [FileIdentity]
+    /// The protected folders as they read now, or nil when one cannot be compared.
+    private let current: @Sendable () -> [FileIdentity]?
+
+    fileprivate init(
+        start: Int32, chain: [Int32], names: [String], identities: [FileIdentity],
+        refused: [FileIdentity], current: @escaping @Sendable () -> [FileIdentity]?
+    ) {
+        self.start = start
+        self.chain = chain
+        self.names = names
+        self.identities = identities
+        self.refused = refused
+        self.current = current
+    }
+
+    deinit {
+        for fd in chain { close(fd) }
+        close(start)
+    }
+
+    /// Writes `data` to `name` in the held folder as `NoFollowWriter.put` does.
+    public func put(_ data: Data, name: String) throws {
+        try Paths.checkName(name)
+        var parent = start
+        for (index, part) in names.enumerated() {
+            var st = stat()
+            guard fstatat(parent, part, &st, AT_SYMLINK_NOFOLLOW) == 0,
+                (st.st_mode & S_IFMT) == S_IFDIR, FileIdentity(st) == identities[index]
+            else {
+                throw ToolError(
+                    "The output folder changed while the files were written, so the run stopped.")
+            }
+            parent = chain[index]
+        }
+        guard let folder = chain.last else { throw ToolError("No output folder.") }
+        guard let now = current(), NoFollowWriter.isOutside(refused + now, from: folder) else {
+            throw ToolError(
+                "The output folder is now a protected folder or inside one, a protected folder cannot be compared, or a folder above it cannot be read, so the run stopped."
+            )
+        }
+        try NoFollowWriter.writeFile(data, in: folder, name: name)
+    }
+}
+
+extension NoFollowWriter {
+    /// Opens `<start>/<names...>` one name at a time, each relative to the folder before it with
+    /// `O_DIRECTORY | O_NOFOLLOW`, and makes the last name at 0700 when it is missing. The start
+    /// must be the folder the path `checked` names, with no folder of `refused` at or above it.
+    /// Every folder opened must be a real folder that is not one of `refused`; the last must be
+    /// owned by the user and private, and neither it nor a folder above it may be one that
+    /// `current` gives, read after it is open. Nothing is made unless every check before it
+    /// passed.
+    public static func holdFolder(
+        start: String, checked: String, names: [String], refused: [FileIdentity],
+        current: @escaping @Sendable () -> [FileIdentity]? = { [] }
+    ) throws -> HeldFolder {
+        guard let last = names.last else { throw ToolError("No output folder was given.") }
+        for name in names { try Paths.checkName(name) }
+        let base = open(start, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard base >= 0 else { throw ToolError("Could not open the current folder.") }
+        var chain: [Int32] = []
+        var identities: [FileIdentity] = []
+        func fail(_ text: String) -> ToolError {
+            for fd in chain { close(fd) }
+            close(base)
+            return ToolError(text)
+        }
+        func identity(_ fd: Int32) -> FileIdentity? {
+            var st = stat()
+            guard fstat(fd, &st) == 0, (st.st_mode & S_IFMT) == S_IFDIR else { return nil }
+            return FileIdentity(st)
+        }
+        guard let baseIdentity = identity(base), !refused.contains(baseIdentity) else {
+            throw fail("Refused the current folder.")
+        }
+        // The rules were checked on a path; a start that is another folder was never checked.
+        var named = stat()
+        guard lstat(checked, &named) == 0, FileIdentity(named) == baseIdentity else {
+            throw fail("Refused the current folder: it is not the folder that was checked.")
+        }
+        guard isOutside(refused, from: base) else {
+            throw fail(
+                "Refused the current folder: it is inside a protected folder, or a folder above it cannot be read."
+            )
+        }
+        var parent = base
+        for (index, name) in names.enumerated() {
+            // Only the output folder itself may be made; every folder above it must exist.
+            if index == names.count - 1 { _ = mkdirat(parent, name, 0o700) }
+            let fd = openat(parent, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+            guard fd >= 0 else {
+                throw fail("Refused the folder \(name): it is missing or a link.")
+            }
+            chain.append(fd)
+            guard let id = identity(fd), !refused.contains(id) else {
+                throw fail("Refused the folder \(name).")
+            }
+            identities.append(id)
+            parent = fd
+        }
+        // A protected path that named nothing before may name the folder just made.
+        guard let now = current(), isOutside(refused + now, from: parent) else {
+            throw fail("Refused the folder \(last): it is a protected folder or inside one.")
+        }
+        do {
+            try verifyFolder(parent, ownerId: getuid())
+        } catch {
+            throw fail("Refused the folder \(last): it is not yours or is wider than 0700.")
+        }
+        return HeldFolder(
+            start: base, chain: chain, names: names, identities: identities, refused: refused,
+            current: current)
+    }
+
+    /// Whether no folder from `folder` up to the root is one of `refused`. Each step opens `..` of
+    /// the folder before it, so the answer holds whatever path, or no path, names the folder. Any
+    /// step that cannot be taken answers no.
+    static func isOutside(_ refused: [FileIdentity], from folder: Int32) -> Bool {
+        var st = stat()
+        guard fstat(folder, &st) == 0 else { return false }
+        var here = FileIdentity(st)
+        var current = folder
+        defer { if current != folder { close(current) } }
+        // Far deeper than any real folder, so a walk that never reaches the root is refused.
+        for _ in 0..<4096 {
+            if refused.contains(here) { return false }
+            let up = openat(current, "..", O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+            guard up >= 0 else { return false }
+            if current != folder { close(current) }
+            current = up
+            guard fstat(up, &st) == 0 else { return false }
+            let parent = FileIdentity(st)
+            // Only the root is its own parent.
+            if parent == here { return true }
+            here = parent
+        }
+        return false
     }
 }

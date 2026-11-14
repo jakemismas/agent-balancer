@@ -119,3 +119,72 @@
   `status --cached` every 60 seconds, and writes no file. Add `scripts/build-app.sh` (bundle, icon
   and ad hoc signature without Xcode) and `scripts/render-views.sh` (light and dark pictures of each
   view in `build/renders/`).
+- Add the Manage accounts window to `AgentBalancerBar` (menu item with Command-comma, and the fix
+  action on a `login_rejected`, `token_missing` or `not_linked` row). It lists every account with
+  its sign-in and end state, shows a token panel, a folder panel and a read-only login panel, and
+  has an Add sheet and a Remove sheet that asks for the label typed back. Every change is one
+  `agent-balancer` command from six shapes (`add`, `add --kind folder`, `remove`,
+  `config set <label> ends|ending-soon`, `login <label>`, `login <label> --browser`); the window
+  never runs `link`, `unlink`, `config set-main`, `config clear-main` or `--paste`, and shows the
+  command with a Copy button where one of those is needed. A token account's Sign in shows the
+  command to copy because `claude setup-token` does not finish without a terminal. The window
+  turns itself off, with a one-line reason, when the app's environment carries the chat-shell
+  variable, and shows the Dock icon only while it is open. `status.json` is read for `kind`,
+  `fullLogin`, `linked`, `stateSince`, `planTier` and the token expiry. `scripts/render-views.sh`
+  also draws the window and both sheets.
+- Keep removing the main account as typed consent in a terminal: `remove <label>` of a main
+  account exits 1 and changes nothing when standard input is not a terminal, and checks the role
+  again under the pick lock before it deletes anything; it stops, keeping the entry, when the label
+  now names another account than the one it checked. Every command that saves `config.json` now
+  saves it under the pick lock: `config set` (every field), `config set-main`,
+  `config clear-main` and `init` join `add`, `login`, `remove` and `refresh`. The Manage accounts
+  window reads `status.json` again before each change and runs `remove` only for an account still
+  listed as a pool account; otherwise it shows the Terminal command.
+- An account keeps one end marker: `config set <label> ends <date>` clears the ending-soon flag,
+  `ending-soon true` clears the date, and `ends none` clears both, each in one save. `add` refuses
+  `--ends` with `--ending-soon`. So every end change from the window is one command, and a failed
+  one leaves the markers as they were.
+- In the Manage accounts window, a folder account counts as signed in only on evidence: it is linked
+  and its row carries the plan tier, which `status.json` holds only from a check that placed the
+  expected account's sign-in in the folder (never from one that found another account or could not
+  place it) and not while the last check or probe says `login_rejected`, `check_failed` or
+  `wrong_account`. Each folder row carries `signInCheck`, what its last sign-in check saw
+  (`signed_in`, `signed_out`, `other_account`, `not_confirmed`), because the row's one error code
+  can hide it. A folder another account is signed in to reads "Signed in as another account" with a
+  red dot in the list and the panel alike, whatever code the row shows, with the tool's own step and
+  no Sign in. A folder signed in where the check could not place it, or a linked one placed and
+  doubted since while its row does not show `login_rejected`, reads "Sign-in not confirmed" with no
+  Sign in, which `login --browser` would refuse. The panel of the first says the last sign-in check
+  could not confirm the sign-in in this folder, whatever code the row shows. A new folder after
+  `add --kind folder` or `link`, or one last seen logged out, shows "Not signed in" (or "Signed
+  out") and offers Sign in once it is linked and its expected email passes the plain-email rule
+  `login --browser` applies (one rule for both; otherwise the panel says why), and the Add sheet's
+  steps follow. A folder row with no `signInCheck` key, from a status written before the field,
+  reads "Sign-in not confirmed" with no Sign in while it shows a code that can hide a doubt. An
+  ended folder keeps its sign-in line, its list row says "ended" (with the date when it has one),
+  and its panel shows the row's `account_ended` error unless a sign-in problem takes that place. A
+  token or login account counts as signed in only while its row has no code: an ended one reads
+  "Account ended" and one with any other code but `login_rejected`, `token_missing` or
+  `wrong_account` reads "Sign-in not confirmed", each with a red dot and the row's own error as the
+  panel's reason. `login <label> --browser` on a folder that
+  is already signed in records that sign-in before it refuses, and the window's bar shows its error
+  or "Signed in." line rather than its advice. Remove runs only for the kind and email its sheet
+  named.
+  The window reads `status.json` again when it becomes key and every 5 seconds while it is open.
+  Both sheets keep Cancel and Esc off while their command runs. The token panel shows its sign-in
+  command on its own line and says the token file is under `~/.agent-balancer`; the folder panel
+  shows the plan tier and copies a folder path made from the label; "On" has a tip to set only a
+  date you know; list rows keep the end state when signed out; each Copy button names what it
+  copies. The window shows when a signed-out account was first seen signed out, labels its fields,
+  choices and date picker for VoiceOver, and shows the account's own end date.
+- The menu and the window pass every text from `status.json` through the display-safe pass. The
+  render flags `--render` and `--iconset` write only into a folder under the current folder's
+  `build/`, written without `..`, with no link and no `.claude` or `.agent-balancer` folder (in any
+  case) on its path below the current folder, and outside the home's `.claude` and `.agent-balancer`
+  however HOME spells it; any other folder exits 1 and writes nothing. The home must be a folder and
+  its `.claude` and `.agent-balancer` missing or a folder: a link to nothing (or a loop, a file, or
+  a link to a file) there exits 1 before anything is made. The folder is opened once and every file
+  is written relative to it after the home's tool folders are read again, so a folder swapped for a
+  link, or a tool folder that comes to name it, part way stops the run.
+  `scripts/build-app.sh` refuses a written Info.plist that declares a scripting, URL, service,
+  document or extension key.

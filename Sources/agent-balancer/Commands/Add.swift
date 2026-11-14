@@ -22,7 +22,9 @@ struct AddCommand: ParsableCommand {
     @Option(name: .long, help: "The last day of the account, like 2026-12-31.")
     var ends: String?
 
-    @Flag(name: .customLong("ending-soon"), help: "Spend this account first.")
+    @Flag(
+        name: .customLong("ending-soon"),
+        help: "Spend this account first. Use it or --ends, not both.")
     var endingSoon = false
 
     func run() throws {
@@ -63,6 +65,10 @@ struct AddCommand: ParsableCommand {
             }
             if let ends, !ConfigValidator.isTodayOrLater(ends) {
                 throw ToolError("ends must be today or a later date, like 2026-12-31.")
+            }
+            if ends != nil, endingSoon {
+                throw ToolError(
+                    "Use --ends or --ending-soon, not both: an account keeps one end marker.")
             }
             if kind == Kind.folder {
                 // An empty folder, private to you. An older one with this name is kept as it is.

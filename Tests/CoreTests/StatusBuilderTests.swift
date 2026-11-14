@@ -5,14 +5,10 @@ import Testing
 
 /// The status document, pinned by golden files for each error and warning code of
 /// docs/ARCHITECTURE.md section 9 that exists in this version.
-@Suite struct StatusBuilderTests {
+/// The texts name local times, so the golden files are written for UTC.
+@Suite(.localZone("UTC")) struct StatusBuilderTests {
     static let now = ISO8601DateFormatter().date(from: "2026-11-09T21:10:00Z") ?? Date()
     let now = StatusBuilderTests.now
-
-    /// The texts name local times, so the golden files are written for UTC.
-    init() {
-        LocalTime.zone = TimeZone(identifier: "UTC") ?? .gmt
-    }
     static let goldenFolder = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent().deletingLastPathComponent()
         .appendingPathComponent("Fixtures/golden")

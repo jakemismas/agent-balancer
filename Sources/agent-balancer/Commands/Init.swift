@@ -12,11 +12,8 @@ struct InitCommand: ParsableCommand {
 
     func run() throws {
         let context = ToolContext.current()
-        let store = ConfigStore(context: context)
-        let existing = try store.load()
-        let hadConfig = existing != nil
-        var config = existing ?? Config()
-        if config.loginAccount != nil {
+        let existing = try ConfigStore(context: context).load()
+        if existing?.loginAccount != nil {
             throw ToolError("Already set up. Run `agent-balancer doctor` to check it.")
         }
 
@@ -38,19 +35,30 @@ struct InitCommand: ParsableCommand {
                 "Label '\(Display.safe(chosen))' is not valid. Use 1 to 32 lowercase letters, digits or hyphens, starting with a letter or digit."
             )
         }
-        if config.account(chosen) != nil {
+        if existing?.account(chosen) != nil {
             throw ToolError("Label '\(Display.safe(chosen))' is already used.")
         }
 
         let hooks = HookRecord(context: context)
         let facts = try hooks.readSettings()
 
-        config.accounts.append(
-            Account(
-                label: chosen, kind: Kind.login, role: Role.pool, email: status.email,
-                expectedPlanTier: status.planTier))
-        if !hadConfig { config.probe.safeMode = true }
-        try store.save(config, backup: hadConfig)
+        // Checked again and saved under the pick lock, so an `add` or `config set` that saves at
+        // the same moment is kept.
+        try TokenAccounts.setUpConfig(context: context) { current in
+            var config = current ?? Config()
+            if config.loginAccount != nil {
+                throw ToolError("Already set up. Run `agent-balancer doctor` to check it.")
+            }
+            if config.account(chosen) != nil {
+                throw ToolError("Label '\(Display.safe(chosen))' is already used.")
+            }
+            config.accounts.append(
+                Account(
+                    label: chosen, kind: Kind.login, role: Role.pool, email: status.email,
+                    expectedPlanTier: status.planTier))
+            if current == nil { config.probe.safeMode = true }
+            return config
+        }
         try hooks.record(facts)
         var observations = StatusObservations()
         observations.settings = SettingsObservation(issue: nil, carriesKey: facts.carriesKey)

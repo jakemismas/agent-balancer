@@ -7,10 +7,11 @@ public enum ConsentTerminal {
         isatty(STDIN_FILENO) != 0
     }
 
-    /// Throws before any prompt when standard input is not a terminal.
+    /// Throws `message` before any prompt or change when standard input is not a terminal.
     public static func require(
-        isTerminal: @Sendable () -> Bool = ConsentTerminal.standardInputIsTerminal
+        isTerminal: @Sendable () -> Bool = ConsentTerminal.standardInputIsTerminal,
+        message: String = Messages.terminalRequired
     ) throws {
-        guard isTerminal() else { throw ToolError(Messages.terminalRequired) }
+        guard isTerminal() else { throw ToolError(message) }
     }
 }

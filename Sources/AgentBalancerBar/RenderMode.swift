@@ -5,16 +5,23 @@ import SwiftUI
 /// The render flags of the app binary, run by scripts/render-views.sh and scripts/build-app.sh.
 /// `--render <dir>` draws each view with `ImageRenderer` at 2x, light and dark, with the panel
 /// material swapped for the flat token colors. `--iconset <dir>` draws the app icon sizes. Both
-/// write through the no-follow writer and only into a folder under a `build` folder.
+/// write only into a folder that `RenderOutput` accepts (under the current folder's `build`
+/// folder, with no `..`, no link and no folder named `.claude` or `.agent-balancer` on its path
+/// below the current folder, and outside the home's `.claude` and `.agent-balancer` folders,
+/// each of which must be missing or a folder: a link to nothing stops the run), held open once
+/// and written relative to its handle.
 enum RenderMode {
     static func run(arguments: [String]) {
         guard
             let flagIndex = arguments.firstIndex(where: { $0 == "--render" || $0 == "--iconset" }),
             flagIndex + 1 < arguments.count
         else { fail("Usage: AgentBalancerBar --render <dir> or --iconset <dir>") }
-        let dir = URL(fileURLWithPath: arguments[flagIndex + 1]).standardizedFileURL
-        guard dir.path.contains("/build/") else { fail("The output folder must be under build/.") }
-        let writer = NoFollowWriter(root: dir)
+        let writer: HeldFolder
+        do {
+            writer = try RenderOutput.hold(arguments[flagIndex + 1])
+        } catch {
+            fail(error.localizedDescription)
+        }
         MainActor.assumeIsolated {
             do {
                 if arguments[flagIndex] == "--render" {
@@ -45,7 +52,7 @@ enum RenderMode {
     }
 
     @MainActor
-    private static func renderIcons(_ writer: NoFollowWriter) throws {
+    private static func renderIcons(_ writer: HeldFolder) throws {
         for size in [16, 32, 128, 256, 512] {
             for scale in [1, 2] {
                 let view = TileIcon().frame(width: CGFloat(size), height: CGFloat(size))
@@ -53,13 +60,13 @@ enum RenderMode {
                     throw ToolError("Could not draw the icon.")
                 }
                 let name = scale == 1 ? "icon_\(size)x\(size).png" : "icon_\(size)x\(size)@2x.png"
-                try writer.put(data, folders: [], name: name)
+                try writer.put(data, name: name)
             }
         }
     }
 
     @MainActor
-    private static func renderViews(_ writer: NoFollowWriter) throws {
+    private static func renderViews(_ writer: HeldFolder) throws {
         LocalTime.zone = TimeZone(identifier: "America/Los_Angeles")!
         for (name, scene) in RenderScenes.all() {
             for scheme in [ColorScheme.light, .dark] {
@@ -69,14 +76,13 @@ enum RenderMode {
                     throw ToolError("Could not draw \(name).")
                 }
                 let suffix = scheme == .dark ? "dark" : "light"
-                try writer.put(data, folders: [], name: "\(name)-\(suffix).png")
+                try writer.put(data, name: "\(name)-\(suffix).png")
             }
         }
         let bar = MenuBarStrip()
         for scheme in [ColorScheme.light, .dark] {
             if let data = png(bar, scheme: scheme, scale: 2) {
-                try writer.put(
-                    data, folders: [], name: "menubar-\(scheme == .dark ? "dark" : "light").png")
+                try writer.put(data, name: "menubar-\(scheme == .dark ? "dark" : "light").png")
             }
         }
     }

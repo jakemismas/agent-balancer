@@ -49,17 +49,38 @@ public struct AccountSnapshot: Decodable, Equatable, Sendable {
     public var readingsAge: Int?
     public var inUse: SnapshotInUse?
     public var endsAt: String?
+    /// The fields below are only read by the Manage accounts window. All are optional so an older
+    /// status file still decodes.
+    public var kind: String?
+    public var fullLogin: Bool?
+    public var configDir: String?
+    public var linked: Bool?
+    public var loginExpiresAt: Date?
+    public var loginExpiresSource: String?
+    /// When the tool first saw the current state. A value that is not a date reads as none, since
+    /// the window only shows it.
+    public var stateSince: Date?
+    /// The plan tier the last check that saw the account signed in reported. A value that is not
+    /// a plain tier reads as none, so it never counts as a sign-in.
+    public var planTier: String?
+    /// A folder account's last sign-in check result, as written. Nil in a status written before
+    /// the field, or before the first check; the window fails closed on a value it does not know.
+    public var signInCheck: String?
+    /// Whether the row carries the `signInCheck` key, null included. A folder row written before
+    /// the field has none, and its plan tier may outlive a check that doubted the sign-in.
+    public var hasSignInCheck: Bool
 
     private enum CodingKeys: String, CodingKey {
         case label, email, role, endingSoon, state, limited, error, warnings, weekly, fable,
-            readingsAge, inUse, endsAt
+            readingsAge, inUse, endsAt, kind, fullLogin, configDir, linked, loginExpiresAt,
+            loginExpiresSource, stateSince, planTier, signInCheck
     }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         label = try c.decode(String.self, forKey: .label)
         email = try c.decodeIfPresent(String.self, forKey: .email)
-        role = try c.decodeIfPresent(String.self, forKey: .role) ?? "pool"
+        role = try c.decodeIfPresent(String.self, forKey: .role) ?? ""
         endingSoon = try c.decodeIfPresent(Bool.self, forKey: .endingSoon) ?? false
         state = try c.decodeIfPresent(String.self, forKey: .state) ?? "ok"
         limited = try c.decodeIfPresent(SnapshotLimited.self, forKey: .limited)
@@ -70,6 +91,17 @@ public struct AccountSnapshot: Decodable, Equatable, Sendable {
         readingsAge = try c.decodeIfPresent(Int.self, forKey: .readingsAge)
         inUse = try c.decodeIfPresent(SnapshotInUse.self, forKey: .inUse)
         endsAt = try c.decodeIfPresent(String.self, forKey: .endsAt)
+        kind = try c.decodeIfPresent(String.self, forKey: .kind)
+        fullLogin = try c.decodeIfPresent(Bool.self, forKey: .fullLogin)
+        configDir = try c.decodeIfPresent(String.self, forKey: .configDir)
+        linked = try c.decodeIfPresent(Bool.self, forKey: .linked)
+        loginExpiresAt = try c.decodeIfPresent(Date.self, forKey: .loginExpiresAt)
+        loginExpiresSource = try c.decodeIfPresent(String.self, forKey: .loginExpiresSource)
+        stateSince = (try? c.decodeIfPresent(Date.self, forKey: .stateSince)) ?? nil
+        planTier = ((try? c.decodeIfPresent(String.self, forKey: .planTier)) ?? nil)
+            .flatMap { AuthStatusReader.isPlainTier($0) ? $0 : nil }
+        signInCheck = try c.decodeIfPresent(String.self, forKey: .signInCheck)
+        hasSignInCheck = c.contains(.signInCheck)
     }
 }
 

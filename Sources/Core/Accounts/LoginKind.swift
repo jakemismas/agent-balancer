@@ -33,7 +33,7 @@ public struct LoginKind: AccountKindHandler {
             expected.lowercased() != actual.lowercased()
         {
             check.issues.append(
-                Issue(.wrongAccount, .error, "Folder is logged in as another account."))
+                Issue(.wrongAccount, .error, Messages.wrongAccount))
         }
         if let expected = account.expectedPlanTier, status.planTier != expected {
             let actual = status.planTier ?? "unknown"

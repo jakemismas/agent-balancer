@@ -114,6 +114,6 @@ enum RenderScenes {
             ("empty-reading", panel(inputs(status: .missing), login: false)),
             ("empty-cli-missing", panel(inputs(status: .missing, cli: false), login: false)),
             ("empty-update", panel(inputs(status: .newerSchema(2)), login: false)),
-        ]
+        ] + ManageScenes.all()
     }
 }

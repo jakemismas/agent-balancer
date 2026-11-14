@@ -37,6 +37,21 @@ public struct CurrentEntry: Codable, Equatable, Sendable {
     /// The other label the last duplicate check of a token account matched, from the
     /// `afterProbe` hook. It stays until the account's next probe checks again.
     public var possibleDuplicateOf: String?
+    /// What the last sign-in check that read a status saw (`SignInSeen`), or nil before one.
+    public var signInCheck: String?
+}
+
+/// What a sign-in check (`auth status`) saw of an account's sign-in.
+public enum SignInSeen: String, CaseIterable, Sendable {
+    /// The expected account, signed in in the account's own folder (any account when none is
+    /// expected).
+    case signedIn = "signed_in"
+    /// No account signed in.
+    case signedOut = "signed_out"
+    /// Another account, signed in in the account's own folder (`wrong_account`).
+    case otherAccount = "other_account"
+    /// An account signed in, but the check could not confirm it is in the account's own folder.
+    case notConfirmed = "not_confirmed"
 }
 
 /// What the default folder's settings showed the last time a command allowed to read them did.
@@ -75,6 +90,7 @@ public struct CurrentFile: Codable, Equatable, Sendable {
                 entry.planTier.map(AuthStatusReader.isPlainTier) ?? true,
                 entry.expiringNotified.map(ConfigValidator.isValidDate) ?? true,
                 entry.possibleDuplicateOf.map(ConfigValidator.isValidLabel) ?? true,
+                entry.signInCheck.map({ SignInSeen(rawValue: $0) != nil }) ?? true,
                 [entry.authError, entry.probeError].allSatisfy({
                     $0.map { StateCode(rawValue: $0.code) != nil } ?? true
                 })
@@ -102,6 +118,18 @@ public struct AuthObservation: Sendable {
         self.init(
             error: check.issues.first { $0.severity == .error }, planTier: check.planTier,
             loginExpiresAt: check.loginExpiresAt, signedIn: check.signedIn)
+    }
+
+    /// What the check saw of the sign-in, or nil when it read no status (it could not run, or
+    /// its answer could not be read), which says nothing about the sign-in.
+    public var seen: SignInSeen? {
+        switch (signedIn, error?.code) {
+        case (false, .loginRejected?): return .signedOut
+        case (false, _): return nil
+        case (true, .checkFailed?): return .notConfirmed
+        case (true, .wrongAccount?): return .otherAccount
+        case (true, _): return .signedIn
+        }
     }
 }
 
@@ -188,8 +216,33 @@ enum Transitions {
 
     static let tokenLifeDays = 365.0
 
+    /// How a row's errors rank: the row shows the first one it has. An end date that has passed
+    /// shows `account_ended` over all of them.
+    static let errorOrder: [StateCode] = [
+        .loginRejected, .settingsChanged, .notLinked, .tokenMissing, .wrongAccount,
+        .duplicateLogin, .planChanged, .checkFailed,
+    ]
+
     static func clean(_ text: String) -> String {
         Display.safe(Scrubber.scrubText(text), limit: 200)
+    }
+
+    /// Codes from a sign-in check or a probe that say the expected sign-in is gone, not
+    /// confirmed, or another account's.
+    static let signInDoubted: Set<String> = [
+        StateCode.loginRejected.rawValue, StateCode.checkFailed.rawValue,
+        StateCode.wrongAccount.rawValue,
+    ]
+
+    /// The plan tier the status row carries: the one the last sign-in check that placed the
+    /// expected sign-in recorded, and none while a current check result says it is gone,
+    /// unconfirmed or another account's. An ended row hides those codes, so the row's tier alone
+    /// must already say it.
+    static func shownTier(_ entry: CurrentEntry) -> String? {
+        let doubted = [entry.authError, entry.probeError].contains {
+            $0.map { signInDoubted.contains($0.code) } ?? false
+        }
+        return doubted ? nil : entry.planTier
     }
 
     /// The entry with this run's observations folded in. The state fields are not touched.
@@ -207,8 +260,11 @@ enum Transitions {
             entry.authError = auth.error.map {
                 IssueRecord(Issue($0.code, $0.severity, clean($0.text)))
             }
+            // The tier is the evidence of the expected sign-in, so only a check that placed that
+            // sign-in here keeps it; another account's tier never stands for this one.
+            entry.planTier = auth.seen == .signedIn ? auth.planTier : nil
+            if let seen = auth.seen { entry.signInCheck = seen.rawValue }
             if auth.signedIn {
-                entry.planTier = auth.planTier
                 entry.loginExpiresAt = auth.loginExpiresAt
                 if entry.probeError?.code == StateCode.loginRejected.rawValue {
                     entry.probeError = nil
@@ -288,11 +344,7 @@ enum Transitions {
                 .duplicateLogin,
                 "Logged in as the same account as \(other). Log one folder into its own account.")
         }
-        let order: [StateCode] = [
-            .loginRejected, .settingsChanged, .notLinked, .tokenMissing, .wrongAccount,
-            .duplicateLogin,
-            .planChanged, .checkFailed,
-        ]
+        let order = errorOrder
         errors.sort {
             (order.firstIndex(of: $0.code) ?? order.count)
                 < (order.firstIndex(of: $1.code) ?? order.count)

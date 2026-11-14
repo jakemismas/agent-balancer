@@ -129,10 +129,26 @@ agent-balancer/
                              (the one http literal), and the render flags of the same binary:
                              `--render <dir>` (each view at 2x, light and dark, flat materials) and
                              `--iconset <dir>` (the app icon sizes); both write through the
-                             no-follow writer and only under a `build/` folder
+                             no-follow writer, into a folder under the current folder's
+                             `build/` that is written without `..`, has no link on its path,
+                             has no folder named `.claude` or `.agent-balancer` (in any case)
+                             below the current folder, and is not inside the home's `.claude`
+                             or `.agent-balancer`, however HOME spells the home; any other
+                             folder exits 1 and writes nothing. Each home must be a folder,
+                             and its `.claude` and `.agent-balancer` missing or a folder (a
+                             link to one included): a link to nothing, a link loop, a link to
+                             a file or a file there exits 1 before anything is made, since a
+                             run could make the folder such a link names. The folder is
+                             opened once, one name at a time with no link followed, and each
+                             file is written relative to that handle after a check that every
+                             name still names the folder opened and that neither it nor a
+                             folder above it is one of the home's tool folders as they
+                             resolve at that moment; a folder swapped part way, or a tool
+                             folder that comes to name it, stops the run
   skill/agent-balancer/SKILL.md   the skill file for a user's Claude (4A.7)
   scripts/build-app.sh       build/AgentBalancerBar.app: release build, hand-made bundle, iconutil
-                             icon, ad hoc signature, no Xcode
+                             icon, ad hoc signature, no Xcode; it refuses a written Info.plist
+                             that declares a scripting, URL, service, document or extension key
   scripts/render-views.sh    runs the render flag into build/renders/
   Tests/
     CoreTests/               picker tables, parsers, scrubber, config validation
@@ -331,8 +347,9 @@ as the hook record (5.7), and warn `key_in_settings` (section 9).
 
 ### 4A.4 The token kind
 
-Adding: `add <label> [--email <address>] [--ends <date>] [--ending-soon]` (kind `token` unless
-`--kind` says otherwise), then `login <label>`.
+Adding: `add <label> [--email <address>] [--ends <date> | --ending-soon]` (kind `token` unless
+`--kind` says otherwise), then `login <label>`. `--ends` and `--ending-soon` together are refused
+and nothing is written: an account keeps one end marker (7.1).
 
 1. `add` writes the registry entry only. `--email` is a note for the person. The tool shows the
    note and never checks it against a token. `add` refuses a label whose `tokens/<label>.json`
@@ -382,16 +399,26 @@ keep working until its year ends, because no way to cancel one is documented. Wh
 ends the old one is not yet known; a manual check at the token-path checkpoint records the answer,
 and until then the text holds either way.
 
-Removing: `remove <label>` never refuses because a session still names a launch file. Under the
-pick lock it works in this order: (a) a launch file of the label that a session record names, or
-whose lease has not ended, or any launch file when the records cannot be read cleanly, is
-overwritten with a tombstone, and every other launch file of the label is deleted; (b) the label's
-leases are deleted; (c) the launch files are listed again and (a) is repeated for any file a `pick`
-wrote meanwhile; (d) every remaining file is read back, and when one still holds a token the remove
-stops and keeps the token file and the account; (e) the writer's leftover temporary files in
-`tokens/`, `tokens/<label>.json` and the stored reading are deleted; (f) the config entry is
-deleted last, still under the pick lock, and the rebuild that follows writes the `account_removed`
-event. A crash after any step leaves a state that `remove <label>` finishes on a
+Removing: `remove <label>` never refuses because a session still names a launch file. Removing
+the main account needs a person at a terminal (5.1): with standard input not a terminal, `remove`
+of a main account exits 1 and changes nothing. Under the pick lock it first reads the config again
+and checks that rule once more, before anything is written or deleted, and stops, writing nothing,
+when the label now names another account than the one it read (another `accountKey`). When another
+`remove` of the label finished while it waited, it finishes what is left, as a rerun does. Every
+command that saves the registry (`init`, `add`, `login`, `refresh`'s plan record, `config set`,
+`config set-main`, `config clear-main`) saves under the same lock, so through the tool neither the
+role nor the account behind the label can change between that check and the last delete; the
+entry is deleted only while it still has the `accountKey` the check saw, and otherwise the remove
+stops and keeps it. A process that edits `config.json` directly takes no lock and is outside this
+guarantee (section 14, T16). Then it works in this order: (a) a launch file of the label that a
+session record names, or whose lease has not ended, or any launch file when the records cannot be
+read cleanly, is overwritten with a tombstone, and every other launch file of the label is deleted;
+(b) the label's leases are deleted; (c) the launch files are listed again and (a) is repeated for
+any file a `pick` wrote meanwhile; (d) every remaining file is read back, and when one still holds
+a token the remove stops and keeps the token file and the account; (e) the writer's leftover
+temporary files in `tokens/`, `tokens/<label>.json` and the stored reading are deleted; (f) the
+config entry is deleted last, still under the pick lock, and the rebuild that follows writes the
+`account_removed` event. A crash after any step leaves a state that `remove <label>` finishes on a
 rerun, also when the config entry is already gone, and `doctor` lists a token file that has no
 account. A tombstone is valid JSON, mode 0600, in the launch file's shape, with the token variable
 set to the literal `invalid` and no other secret: a session that reads it fails to sign in instead
@@ -580,9 +607,9 @@ Consent commands (`link`, `unlink`, `link --repair`, `link --accept-source-chang
 `schedule install`, `uninstall`, `config set-main`, `config set`, `remove`) refuse to run in a chat
 shell, so a chat cannot type the label through a pseudo terminal. `run` and `login` never start
 `claude` in a chat shell either. `run` there prints the command to type in your own terminal,
-`agent-balancer run <label> -- <arguments>`, and writes nothing. The Manage accounts window (section 11) runs `add`, `remove`,
-`config set <label> ends|ending-soon` and `login` for a person who clicks, and it turns itself off
-when the app's own environment carries the chat-shell variable.
+`agent-balancer run <label> -- <arguments>`, and writes nothing. The Manage accounts window (section 11) runs `add`, `remove`
+(of a pool account), `config set <label> ends|ending-soon` and `login` for a person who clicks,
+and it turns itself off when the app's own environment carries the chat-shell variable.
 
 Applying a change also needs a person at a terminal. `link <label>` and `link --repair <label>`
 (after the list), `link --accept-source-change [--all]` (after the printed hook entries) and
@@ -590,7 +617,13 @@ Applying a change also needs a person at a terminal. `link <label>` and `link --
 the word `accept`), and refuse before the prompt, writing nothing, when it is not: "Applying needs
 an interactive terminal. Run this in your own terminal and type the label (or `accept`) when
 asked. Nothing was changed." Piping the label in does not count. The check is one closure
-(`isatty` on standard input) with no variable, flag or file that turns it off. `--dry-run`
+(`isatty` on standard input) with no variable, flag or file that turns it off. `remove <label>` of
+a main account uses the same check: typing the command in a terminal is its consent, so with no
+terminal it refuses before it changes anything and says to run `agent-balancer remove <label>` in
+Terminal (4A.4). The menu app runs the tool with a pipe as standard input, so the window cannot
+remove a main account through the tool, including a role or label change saved at the same moment
+(4A.4); only a process that edits `config.json` directly is outside that. A pool account's
+`remove` needs no terminal. `--dry-run`
 changes nothing and needs no terminal, and an editor's integrated terminal (only `CLAUDECODE`
 set) passes. `init` and `uninstall` ask through the same prompt helper and are unchanged: `init`
 checks for a terminal itself when it must ask for a label, and `uninstall` keeps its typed word
@@ -918,6 +951,14 @@ marked `endingSoon: true` (`config set <label> ending-soon true`): the picker sp
 account first (rule 5 in 7.2), and the tool notices the end itself on the day the plan tier drops
 (section 9, `account_ended`). `config set <label> ends <date>` sets a date that is known.
 
+An account keeps one end marker: `config set <label> ends <date>` also clears `endingSoon`,
+`config set <label> ending-soon true` also clears `endsAt`, `config set <label> ends none` clears
+both, and `ending-soon false` clears only the flag. Each is one save, so one change never leaves
+both markers or neither. `add` refuses `--ends` with `--ending-soon`. A config saved earlier with
+both keeps working, the date first as the picker and the window read it, until the next change
+clears one. `config set` saves under the pick lock, like every command that saves the registry
+(4A.4).
+
 A token account also carries `tokenCreatedAt`, an ISO 8601 time that `login` sets each time it
 saves a token (4A.4). It is optional, so a config from before it stays valid at schema version 1.
 
@@ -1083,7 +1124,7 @@ short scrubbed text the menu shows as is.
 | `duplicate_login` | two configured accounts report one email | error | "Logged in as the same account as pool-a. Log one folder into its own account." |
 | `settings_changed` | a link of a folder account is broken, or a hook entry recorded at link time is gone or changed (5.7); or, after `init`, the hook record is missing or unreadable (4A.5); or, for `run`, the saved verdict is missing or older than the file | error on every affected account, shown as one banner | "Settings changed. Run `agent-balancer link --accept-source-change` in Terminal." For `run`, with no verdict that matches the file's stamp: "Settings changed since the last check. Run `agent-balancer doctor` in Terminal." |
 | `plan_changed` | `planTier` differs from `expectedPlanTier` | error | "Plan is max_5x, expected max_20x." |
-| `account_ended` | `endsAt` passed; or, for an account marked `endingSoon`, the first reading where `planTier` differs from `expectedPlanTier` or is missing. Once ended that way it stays ended until `config set <label> ending-soon false` | ended | "Account ended." |
+| `account_ended` | `endsAt` passed; or, for an account marked `endingSoon`, the first reading where `planTier` differs from `expectedPlanTier` or is missing. Once ended that way it stays ended until the flag is cleared (`config set <label> ending-soon false`, `ends <date>` or `ends none`) | ended | "Account ended." |
 | `check_failed` | probe timeout, no `rate_limit_event`, unparsable output, `claude` missing | error | "Check failed: probe timed out after 60 s." |
 | `limited` | probe status not `allowed`, or weekly or 5-hour use at or above `limitedAtPercent`; a full Fable sub-cap alone is the warning below | limited | "Limited until Wed 4:00 PM." |
 | `fable_limited` (warning) | Fable use is readable and at or above `limitedAtPercent` of the Fable cap; only Fable picks skip the account | ok | "Fable limited until Thu 9:00 AM." |
@@ -1191,7 +1232,20 @@ Field rules:
   sub-cap is the `fable_limited` warning, never a `limited` window (section 9).
 - `planTier` is the plan tier `auth status` reports when it is 1 to 64 letters, digits, dots,
   underscores or hyphens, starting with a letter or digit. Any other value reads as unknown, the
-  same as a missing one, so it is never stored or printed.
+  same as a missing one, so it is never stored or printed. It comes from the last sign-in check,
+  kept only when that check placed the expected account's sign-in (a folder account in its own
+  folder); a check that found another account (`wrong_account`), could not confirm the folder,
+  saw the account logged out or could not run keeps none. The row leaves it null while the
+  account's last check or probe says `login_rejected`, `check_failed` or `wrong_account`.
+- `signInCheck` is on `folder` rows only (login and token rows have no such key): the result of
+  the last sign-in check of the folder that read an answer from `auth status`. `signed_in` is the
+  expected account (any account when none is expected) signed in in the account's own folder;
+  `signed_out` is no account signed in; `other_account` is another account signed in in that
+  folder; `not_confirmed` is an account signed in that the check could not place in that folder.
+  It is null before the first such check. A check that could not run or whose answer could not
+  be read leaves it as it was. A status written before this field has no key; its writer kept
+  the plan tier through a doubt, so the window reads such a folder row by its tier only while
+  the row shows no code that can hide one (section 11).
 - Each account also carries `accountKey` (7.1), `endingSoon` and `linked` (true or false for a
   `folder` account; null for `login` and `token` accounts).
 - The document carries a top-level `next` object (`label` is null when nothing fits),
@@ -1409,11 +1463,15 @@ the events record then keeps only each label's newest line.
 - **Manage accounts window:** one ordinary window. While it is open the app shows the tool's icon
   in the Dock. Left: the account list with sign-in state and plus and minus buttons. Right: the
   panel for the selected account's kind.
-  - *Token panel:* sign-in state and "Sign in again" (runs `agent-balancer login <label>`), the
-    estimated token expiry, Ends, Remove.
+  - *Token panel:* sign-in state and "Sign in again" (runs `agent-balancer login <label>`, or
+    shows that command on its own line with a Copy button), the estimated token expiry with a tip
+    that says the token file is a private file under `~/.agent-balancer`, Ends, Remove.
   - *Folder panel:* sign-in state and "Sign in again" (runs `login <label> --browser`, which runs
     the documented `claude auth login --email <expected email>` in that folder and then checks the
-    email with `auth status`), the folder path with Copy, shared-settings state, Ends, Remove.
+    email with `auth status`; a folder `auth status` finds signed in already is refused, and that
+    answer is recorded as a sign-in check before the command exits), the folder path with Copy,
+    shared-settings state, Ends, Remove. The email line adds the plan tier when the status has
+    one.
   - The `login` account shows its sign-in state and role and has nothing to change here.
   - **Consent:** the window runs six command shapes only: `add`, `add --kind folder`, `remove`,
     `config set <label> ends|ending-soon`, `login <label>` (a token account) and
@@ -1423,18 +1481,107 @@ the events record then keeps only each label's newest line.
     everything that shares hooks or moves protection keeps its typed consent in a terminal (5.1).
     The app has no scripting surface, and it turns management off, with a one-line reason, when
     its own environment carries the chat-shell variable (5.1).
+  - **Checked again when it runs:** the role can change while a sheet is open (`config set-main`
+    in Terminal, or a rewritten status file), so Remove reads `status.json` again when it is
+    confirmed and runs `remove <label>` only when the account is still listed, its role is
+    exactly `pool`, its kind is `token` or `folder`, and its kind and email are the ones the
+    sheet was opened for (its consent text names what that kind loses). Otherwise it runs nothing,
+    closes the sheet, and shows the Terminal command with a Copy button for a main account, or
+    says the account is no longer listed or is another account now. Every other change reads the
+    status again before it runs: the
+    end choice runs only for an account still listed whose kind is not `login`, Sign in and the
+    Add sheet's step buttons check the kind, the link and the sign-in state, and `add` and `login`
+    leave the label and kind checks to the CLI. The CLI is the enforcement point: `remove` of a main
+    account refuses with no terminal (5.1), which is how the app runs it.
   - **No file writes:** every change is one CLI command, run with an argument array; a bar at the
-    bottom of the window shows the last command and its result or error text.
+    bottom of the window shows the last command and its result or error text: the first line of
+    its error output (of its output when it failed with none, or when it worked), with tokens
+    scrubbed and through the display-safe pass. For `login <label> --browser`, which prints
+    its one-account-per-folder advice first, the bar shows the first line that starts with
+    "Error " when the command failed, or the "Signed in." line when it worked, and the first line
+    when there is no such line.
   - **The same account, never another:** "Sign in again" appears only on a folder that is logged
     out, names the expected email and passes it as the pre-fill; the window has no field that
     changes an account's email.
-  - **End date:** no end date; "Ending soon, date unknown" (`ending-soon true`); or "Ends on" with
-    a date picker that takes today or later (`ends <date>`).
+  - **End date:** no end date (`ends none`); "Ending soon, date unknown" (`ending-soon true`); or
+    "Ends on" with a date picker that takes today or later (`ends <date>`), with a ? tip to set
+    only a date you know, because launches stop after that day. Each change runs one command from
+    any state: the tool keeps one end marker per account, so that one save sets the new marker and
+    clears the other (7.1). A failed change leaves the markers as they were; the window reads the
+    status again and the bar names the command that failed.
+  - **Sign-in state:** a folder account counts as signed in only with evidence: it is linked, and
+    its status row carries the plan tier. The tool records the tier only from a sign-in check
+    (`auth status`, as `login <label> --browser` runs it after the browser sign-in or when it
+    finds the folder already signed in, or as `status`, `pick`, `verify` or `refresh` runs it)
+    that placed the expected account's sign-in in the folder itself; any other result of that
+    check (another account, logged out, signed in from another folder, no folder reported, or no
+    answer) clears it, so another account's plan tier never shows on this account's line. The row
+    leaves the tier out while the account's last check or probe says `login_rejected`,
+    `check_failed` or `wrong_account`, so a doubt that the row's own code hides (under
+    `account_ended`, or under a code ranked above it) still counts. The row's one code can also
+    hide what the last check saw, so the window reads a folder row's `signInCheck` (10.1) first:
+    `other_account` shows "Signed in as another account" with a red dot in the list and the panel
+    alike, whatever code the row shows, with the `wrong_account` problem and its step ("Sign the
+    expected account back in to this folder. Do not relabel the folder.") instead of Sign in;
+    `not_confirmed`, or a value the window does not know, shows "Sign-in not confirmed" with no
+    Sign in, since `auth status` lists a sign-in there and `login --browser` would refuse it.
+    Otherwise the window counts the tier only on a row that is `ok`, `limited` or `ended`, or an
+    error that says nothing against the sign-in (`settings_changed`, `duplicate_login`,
+    `plan_changed`), and never when `signInCheck` is `signed_out`. A linked folder the last check
+    placed whose tier a probe or check has doubted since (a visible `login_rejected` aside) shows
+    "Sign-in not confirmed" with no Sign in, for the same reason. A folder with no evidence (a new
+    folder after `add --kind folder` or `link`, one the last check saw logged out, or one whose
+    checks could not run) shows "Not signed in", or "Signed out" while its row shows
+    `login_rejected`, with a red dot, and offers Sign in once it is linked, unless its expected
+    email fails the plain-email rule `login --browser` applies (one rule, in
+    `ConfigValidator.isPlainEmail`): then the panel shows that refusal's text in the button's
+    place. A row whose `signInCheck` is null (a folder no check has read yet) reads by the tier
+    rule alone. A row with no `signInCheck` key comes from a writer that kept the tier through a
+    doubt, so it reads by the tier rule only while it shows no code that can hide one; with
+    `account_ended`, `settings_changed`, `not_linked`, `duplicate_login` or `plan_changed` (each
+    can stand over `check_failed`) it reads "Sign-in not confirmed" with no Sign in. A plan tier that is not the plain shape counts as none. An ended folder keeps its
+    sign-in line, and its list row says it has ended ("Signed in · ended Nov 1", or "ended"
+    alone for a plan that dropped, and ", ended" for VoiceOver). A token or login
+    account has no such evidence (a token row carries no tier, and the window does not count the
+    login account's tier), and any code on its row could hide one that says it is signed out or
+    unconfirmed: `account_ended` hides every other code, and every other code the tool writes
+    ranks above `check_failed`. A token or login account therefore counts as signed in only while
+    its row is `ok` or `limited` with no code. Otherwise the list and the panel read "Account
+    ended" for an ended row, "Signed out" for `login_rejected` or `token_missing`, "Signed in as
+    another account" for `wrong_account`, and "Sign-in not confirmed" for any other code,
+    `check_failed` and any code the window does not know included, each with a red dot. On every
+    "Sign-in not confirmed" and "Account ended" panel, the row's own error, through the
+    display-safe pass, is the problem that says why, with no steps, except a folder whose
+    `signInCheck` is `not_confirmed`: its problem is "Check failed" with "The last sign-in check
+    could not confirm the sign-in in this folder.", whatever code the row shows. An ended folder
+    that reads as signed in or not signed in shows its own `account_ended` error as the problem;
+    one that reads as another account's, or as not confirmed, keeps that problem, and its list
+    row still says it has ended. The `wrong_account` problem
+    lists the menu's steps for that code less "Choose Refresh now.", which only the menu has. The
+    token panel offers Sign in again in every state, and the Add sheet's token sign-in step reads
+    done only while the account counts as signed in.
+  - **Add sheet:** the folder steps follow the status: Share settings reads done once the folder
+    is linked, and Sign in stays off until then, while the folder reads as another account's or
+    as not confirmed, and while its expected email fails the plain-email rule, and reads done only
+    while the window counts the folder as signed in.
+    Cancel and Esc are off on both sheets while their command runs, and the view model refuses to
+    close a sheet then; a sheet replaced while a command runs keeps the new form and starts no
+    sign-in.
+  - **Display-safe text:** every string from `status.json` that the menu or the window shows
+    (labels, emails, end dates, error and warning codes and texts, the banner, the next-launch
+    labels and reasons) passes the display-safe pass, so a control or bidi character shows as an
+    escape and an over-long value is cut, and so does the tool's output in the bar. The window
+    lists only accounts whose label is a plain label, shows a plan tier only in the plain tier
+    shape, and shows and copies a folder path it makes from the label and the data folder, never
+    the status file's `configDir`. A signed-out account shows when the tool first saw it signed
+    out (`stateSince`), as "Signed out at 12:40 PM" or "Signed out since today, 12:40 PM".
 - **Look:** system font, vibrancy material, macOS menu spacing, light and dark from the system,
   hover highlight on rows, full keyboard navigation, VoiceOver labels on meters.
-- **Data:** reads `~/.agent-balancer/state/status.json` and checks whether `config.json` exists;
-  it looks at `status.json` every 5 seconds and again after every command it runs, which stands in
-  for a file watcher because the safety scan lets no source outside `Paths/` open a file. It writes
+- **Data:** reads `~/.agent-balancer/state/status.json` and checks whether `config.json` exists.
+  The menu reads `status.json` every 5 seconds. While the Manage accounts window is open it reads
+  the file on the same beat, when the window or one of its sheets becomes key, and after every
+  command it runs, so a sheet follows a `link` run in Terminal. The timed reads stand in for a file
+  watcher because the safety scan lets no source outside `Paths/` open a file. It writes
   no file and never runs `claude` itself. Open usage page goes through the SwiftUI `openURL`
   action, and Open at login through `SMAppService`; the app keeps no preference store.
 
@@ -1449,7 +1596,7 @@ the events record then keeps only each label's newest line.
      `config.json` with that account as a `login` account with role `pool`. It also always writes
      the hook record (5.7).
   2. `agent-balancer refresh`, then open the app: the first account shows at once.
-  3. `agent-balancer add <label> [--email <address>] [--ends <date>] [--ending-soon]` writes the
+  3. `agent-balancer add <label> [--email <address>] [--ends <date> | --ending-soon]` writes the
      registry entry of a `token` account and creates no folder (4A.4).
   4. `agent-balancer login <label>`, in Terminal: it runs `claude setup-token`, the browser opens,
      the person approves once, and the tool keeps the token and runs one probe under it.

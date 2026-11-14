@@ -1,7 +1,7 @@
 import Foundation
 
 /// Error and warning codes of the states table (docs/ARCHITECTURE.md section 9).
-public enum StateCode: String, Codable, Sendable {
+public enum StateCode: String, Codable, Sendable, CaseIterable {
     case loginRejected = "login_rejected"
     case wrongAccount = "wrong_account"
     case duplicateLogin = "duplicate_login"
@@ -58,6 +58,13 @@ public enum Messages {
         "Applying needs an interactive terminal. Run this in your own terminal and type the label (or `accept`) when asked. Nothing was changed."
     public static let chatShellRefusal =
         "Run this in your own terminal, outside a Claude Code session."
+
+    /// `remove` of the main account where no person is at a terminal, such as from the menu app.
+    public static func removeMainNeedsTerminal(_ label: String) -> String {
+        let safe = Display.safe(label, limit: 32)
+        return
+            "'\(safe)' is the main account. Removing it needs your own terminal: run `agent-balancer remove \(safe)` in Terminal. Nothing was changed."
+    }
     public static let hookRecordMissing =
         "Hook record missing. Run `agent-balancer link --accept-source-change` in Terminal."
     public static let settingsChanged =
@@ -84,6 +91,16 @@ public enum Messages {
 
     public static let oneAccountPerFolder =
         "Never sign a different account into a folder that already has chats. Add a new folder for the new account instead."
+
+    /// `login --browser` for a folder whose expected email fails `ConfigValidator.isPlainEmail`.
+    public static func emailNotPlain(_ label: String) -> String {
+        "The expected email of '\(Display.safe(label, limit: 32))' cannot be passed to claude safely. Fix it with `agent-balancer config set`."
+    }
+
+    /// The `wrong_account` text, and the one step that fixes it.
+    public static let wrongAccount = "Folder is logged in as another account."
+    public static let signExpectedBackIn =
+        "Sign the expected account back in to this folder. Do not relabel the folder."
 
     public static let trustStep =
         "Open `claude` once in each project folder on that account, so the folder is trusted there."

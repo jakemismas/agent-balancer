@@ -78,14 +78,18 @@ struct RowView: View {
     let palette: Palette
     let copy: (String) -> Void
     @State private var hovering = false
+    let manage: ((String) -> Void)?
     @State private var showSteps: Bool
 
     init(
-        model: RowModel, palette: Palette, copy: @escaping (String) -> Void, stepsOpen: Bool = false
+        model: RowModel, palette: Palette, copy: @escaping (String) -> Void,
+        stepsOpen: Bool = false,
+        manage: ((String) -> Void)? = nil
     ) {
         self.model = model
         self.palette = palette
         self.copy = copy
+        self.manage = manage
         _showSteps = State(initialValue: stepsOpen)
     }
 
@@ -164,7 +168,20 @@ struct RowView: View {
                         )
                         .fixedSize()
                 }
-                if showSteps { StepsView(steps: e.steps, palette: palette, copy: copy) }
+                if showSteps {
+                    StepsView(steps: e.steps, palette: palette, copy: copy)
+                    if e.manageable, let manage {
+                        Button("Open Manage accounts") { manage(model.label) }
+                            .buttonStyle(.plain).font(.ui(11)).foregroundStyle(palette.text1)
+                            .padding(.horizontal, 8).padding(.vertical, 3)
+                            .background(RoundedRectangle(cornerRadius: 6).fill(palette.cardBg))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 6).stroke(
+                                    palette.panelBorder, lineWidth: 0.5)
+                            )
+                            .padding(.leading, 19)
+                    }
+                }
             }
             .padding(.horizontal, 9).padding(.vertical, 7)
             .background(RoundedRectangle(cornerRadius: 8).fill(palette.errBg))

@@ -309,11 +309,13 @@ public enum StatusBuilder {
             stateSince: showSince ? entry.since : nil, limited: limited,
             error: e.error.map { StatusIssue(code: $0.code.rawValue, text: $0.text) },
             warnings: e.warnings.map { StatusIssue(code: $0.code.rawValue, text: $0.text) },
-            planTier: account.kind == Kind.token ? nil : entry.planTier, weekly: weekly,
+            planTier: account.kind == Kind.token ? nil : Transitions.shownTier(entry),
+            weekly: weekly,
             fable: fable, fiveHour: window(reading?.fiveHour, source: source),
             readingsAge: reading.map { max(0, Int(now.timeIntervalSince($0.readAt))) },
             inUse: inUse, endsAt: account.endsAt, loginExpiresAt: e.loginExpiresAt,
-            loginExpiresSource: e.loginExpiresSource, reserve: reserve)
+            loginExpiresSource: e.loginExpiresSource, reserve: reserve,
+            signInCheck: account.kind == Kind.folder ? entry.signInCheck : nil)
     }
 
     // MARK: Rebuild

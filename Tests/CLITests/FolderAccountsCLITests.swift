@@ -135,13 +135,24 @@ private func text(_ data: Data) -> String { String(decoding: data, as: UTF8.self
         let cli = try setUp(folder: false)
         defer { cli.cleanup() }
         let day = "2099-12-31"
-        let out = try cli.run([
-            "add", "spare", "--kind", "folder", "--ends", day, "--ending-soon",
-        ])
+        let out = try cli.run(["add", "spare", "--kind", "folder", "--ends", day])
         #expect(out.status == 0, "\(text(out.stderr))")
         let account = try #require(
             try ConfigStore(context: context(cli)).loadRequired().account("spare"))
-        #expect(account.endsAt == day && account.endingSoon == true)
+        #expect(account.endsAt == day && account.endingSoon == nil)
+        let soon = try cli.run(["add", "soon", "--kind", "folder", "--ending-soon"])
+        #expect(soon.status == 0, "\(text(soon.stderr))")
+        let flagged = try #require(
+            try ConfigStore(context: context(cli)).loadRequired().account("soon"))
+        #expect(flagged.endsAt == nil && flagged.endingSoon == true)
+        // An account keeps one end marker, so both together are refused and nothing is made.
+        let both = try cli.run(["add", "both", "--kind", "folder", "--ends", day, "--ending-soon"])
+        #expect(both.status == 1)
+        #expect(text(both.stderr).contains("Use --ends or --ending-soon, not both"))
+        #expect(try ConfigStore(context: context(cli)).loadRequired().account("both") == nil)
+        #expect(
+            !FileManager.default.fileExists(
+                atPath: cli.dataRoot.appendingPathComponent("accounts/both").path))
         let past = try cli.run(["add", "old", "--kind", "folder", "--ends", "2001-01-01"])
         #expect(past.status == 1)
         let config = try ConfigStore(context: context(cli)).loadRequired()

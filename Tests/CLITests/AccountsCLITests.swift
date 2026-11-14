@@ -540,3 +540,40 @@ private let refusal = "Run this in your own terminal, outside a Claude Code sess
         #expect(initOut.status == 0)
     }
 }
+
+extension AccountsCLITests {
+    /// The names in the backups folder.
+    func backups(_ h: CLIHome) -> Set<String> {
+        let dir = h.dataRoot.appendingPathComponent("backups")
+        return Set((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? [])
+    }
+
+    @Test func initOnAConfigWithNoLoginAccountKeepsEveryAccountAndBacksTheOldFileUp() throws {
+        let h = try ready()
+        defer { h.cleanup() }
+        #expect(try h.run(["add", "lab", "--ends", "2099-12-31"]).status == 0)
+        #expect(try h.run(["add", "spare", "--kind", "folder", "--ending-soon"]).status == 0)
+        // Removing the pool login account leaves a config with no login account.
+        let removed = try h.run(["remove", "main"])
+        #expect(removed.status == 0, "\(text(removed.stderr))")
+        let old = h.read("config.json")
+        let kept = try #require(try config(h)["accounts"] as? [[String: Any]])
+        #expect(kept.compactMap { $0["label"] as? String } == ["lab", "spare"])
+        let before = backups(h)
+
+        let out = try h.run(["init", "--label", "main2"])
+        #expect(out.status == 0, "\(text(out.stderr))")
+        let accounts = try #require(try config(h)["accounts"] as? [[String: Any]])
+        #expect(accounts.compactMap { $0["label"] as? String } == ["lab", "spare", "main2"])
+        for (index, entry) in kept.enumerated() {
+            #expect(NSDictionary(dictionary: accounts[index]).isEqual(to: entry), "\(index)")
+        }
+        #expect(accounts[2]["kind"] as? String == "login")
+        let added = backups(h).subtracting(before)
+        #expect(added.count == 1)
+        for name in added {
+            let saved = h.dataRoot.appendingPathComponent("backups").appendingPathComponent(name)
+            #expect((try? String(contentsOf: saved, encoding: .utf8)) == old)
+        }
+    }
+}

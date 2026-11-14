@@ -124,22 +124,24 @@ $(grep -nE 'url:' Package.swift | grep -v 'https://github.com/apple/swift-argume
 fi
 
 TEXT_DIRS="Sources Tests docs skill"
+ROOT_DOCS="README.md CONTRIBUTING.md CHANGELOG.md SECURITY.md CODE_OF_CONDUCT.md"
 
-# Emails: only example.com addresses may appear.
-for d in $TEXT_DIRS; do
-  [ -d "$d" ] || continue
-  hits=$(grep -rEnIo '[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+' "$d" 2>/dev/null \
+# Emails: only example.com addresses may appear. -H keeps the file name on a hit in a single file,
+# so the report prints a place and never the matching text.
+for d in $TEXT_DIRS $ROOT_DOCS; do
+  [ -e "$d" ] || continue
+  hits=$(grep -rHEnIo '[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+' "$d" 2>/dev/null \
     | grep -Eiv '@([A-Za-z0-9-]+\.)*example\.com$' || true)
   report email "$hits"
-  hits=$(grep -rEnIio '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' "$d" 2>/dev/null || true)
+  hits=$(grep -rHEnIio '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' "$d" 2>/dev/null || true)
   report orgid "$hits"
 done
 
 # Attribution phrase: a past-tense verb, by/with/using/via/through, then the product or company.
 ATTR_RE="([a-z]+ed|written|made|built|done|given|wrote) (by|with|using|via|through) ($CL|$AN)"
-for t in $TEXT_DIRS scripts .github README.md CHANGELOG.md SECURITY.md Package.swift; do
+for t in $TEXT_DIRS scripts .github $ROOT_DOCS Package.swift; do
   [ -e "$t" ] || continue
-  hits=$(grep -rEnIi -e "$ATTR_RE" "$t" 2>/dev/null || true)
+  hits=$(grep -rHEnIi -e "$ATTR_RE" "$t" 2>/dev/null || true)
   report attribution "$hits"
 done
 

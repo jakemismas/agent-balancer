@@ -144,12 +144,61 @@ agent-balancer/
                              name still names the folder opened and that neither it nor a
                              folder above it is one of the home's tool folders as they
                              resolve at that moment; a folder swapped part way, or a tool
-                             folder that comes to name it, stops the run
+                             folder that comes to name it, stops the run. The render scenes
+                             hold made-up data only: `RenderScenes.swift` and
+                             `Manage/ManageScenes.swift` draw the frames of design/render.html,
+                             and `ReadmeScenes.swift` holds the three status documents the
+                             README pictures are drawn from; every state they show is one the
+                             status writer can produce
   skill/agent-balancer/SKILL.md   the skill file for a user's Claude (4A.7)
+  scripts/check.sh           the test command: typecheck, format lint, tests, the safety scan
+                             (`scripts/check-safety.sh`), the README check, the secret scan
   scripts/build-app.sh       build/AgentBalancerBar.app: release build, hand-made bundle, iconutil
                              icon, ad hoc signature, no Xcode; it refuses a written Info.plist
                              that declares a scripting, URL, service, document or extension key
-  scripts/render-views.sh    runs the render flag into build/renders/
+  scripts/render-views.sh    builds the app and the CLI, runs the render flag into
+                             build/renders/ (an older render of a README picture is deleted
+                             first), copies the three README pictures that run drew, light and
+                             dark, into docs/media/ and runs the README check with that CLI
+  scripts/check-readme.sh    the README check. README.md holds only printable ASCII and tabs. The
+                             check reads every inline code span of README.md and every line of a
+                             fenced code block (three or more backticks or tildes, closed only by
+                             a run of the same mark at least as long) except a json block, with a
+                             leading `$ ` or `% ` prompt dropped. A fence closes before the list
+                             item that holds it ends: a line that is not blank and is indented
+                             less than the opening fence ends it, and a fence that ends there or
+                             at the end of the file without closing fails. A json block parses as
+                             JSON (read by `osascript` with JavaScript, which ships with macOS),
+                             and each string in it, key or value, is read as a later part of a
+                             chain. Each span or line is cut into parts at &&, ||, ;, & and |
+                             (a | before a flag is a choice in a usage line), each $(...) or
+                             backtick substitution is a part of its own, and quotes, backslashes
+                             and parentheses read as spaces. The first part starts with
+                             agent-balancer, claude, brew, gh or mkdir, or is one word naming a
+                             path, file or key. In every part but a claude, brew, gh or mkdir
+                             line, each word agent-balancer, and a path to it that starts the
+                             part, begins a command whose subcommand and flags are in its --help.
+                             No code span runs across a line break, no code, pre, kbd, samp or tt
+                             HTML tag is used, and no flag sits in plain text, where
+                             agent-balancer followed by spaces or tabs and a word fails unless
+                             that word is on the check's word list. Each local file that an
+                             inline link or picture, or a src or srcset attribute, names exists.
+                             The pictures carry no compressed chunk, and their metadata chunks
+                             hold no absolute path of two or more parts (also right after a URL's
+                             scheme and host), home path (`~/`, `~user/` or `$HOME/`), address
+                             outside example.com, org id or token. The scene sources the pictures
+                             are drawn from (`ReadmeScenes.swift`, `ManageScenes.swift`,
+                             `RenderScenes.swift`) name accounts only by the labels main,
+                             personal, lab, spare-a and spare-b; every word with a letter in
+                             their strings and comments, lowercased and ISO times aside, is a
+                             label or on the check's word list; and they hold only those labels'
+                             example.com addresses and the fixture's paths. When the local
+                             banned-string list is present, neither the metadata nor the scene
+                             sources may hold a banned string. With no binary given, it builds
+                             the CLI when the CLI is missing
+  docs/media/                the README pictures, PNG, light and dark, of made-up accounts only
+  CONTRIBUTING.md            tools, build and check, the safety rules the scan enforces, issue
+                             first, landing, license
   Tests/
     CoreTests/               picker tables, parsers, scrubber, config validation
     CLITests/                end to end with a fake `claude` under a temporary HOME; leak tests
@@ -166,7 +215,9 @@ Access rules that follow from the module map: every read and write of a file goe
 Build notes: run `scripts/check-safety.sh` after each module. CLI tests use
 `Support.builtBinary()` and a fake `claude` at `.local/bin/claude` under a temporary `HOME`, fail
 with a clear message when the binary is missing, and never run the real `claude`. The test command
-stays `scripts/check.sh` and the install check stays unchanged.
+stays `scripts/check.sh` and the install check stays unchanged. `scripts/check.sh` runs the README
+check (`scripts/check-readme.sh`), and `scripts/render-views.sh` runs it again after it copies the
+pictures.
 
 Data flow: readers run `claude` (auth status, probe) and write one reading file per account. Every
 command that writes under the data folder ends by rebuilding `state/status.json` atomically.
@@ -1011,8 +1062,9 @@ the last point at which a launch may start. A validator refuses any point above 
    launch does nothing; the lease lapses after `picker.leaseMinutes`, and a lease dated in the
    future is dropped. For `picker.leaseMinutes` (default 10) each open lease adds
    `picker.expectedRunPercent` (default 5) to that account's weekly used and 5-hour used before
-   rules 2 to 4, so two callers picking seconds apart spread out. `pick --dry-run` takes the lock
-   but writes no lease.
+   rules 2 to 4, so an account near its limit is not handed out again seconds later. Rule 5 still
+   ranks the soonest expiry first, so two callers picking seconds apart can land on the same
+   account. `pick --dry-run` takes the lock but writes no lease.
 8. Units: the probe's `utilization` (0 to 1) is stored as percent 0 to 100 with one decimal
    before any rule runs.
 9. A protected account also needs `fiveHour used + expectedRunPercent < limitedAtPercent` when a
@@ -1589,6 +1641,10 @@ the events record then keeps only each label's newest line.
 
 - **Install:** the CLI with Homebrew from the project's tap. The app ships as a zip attached to
   the GitHub release; the README gives the unzip, drag to Applications and Open Anyway steps.
+- **Skill file:** the formula installs the skill folder, `skill/agent-balancer/` with its
+  `SKILL.md`, at `$(brew --prefix)/share/agent-balancer/skill/agent-balancer`. The README gives
+  the one line the user runs to link that folder into `~/.claude/skills/`; the tool never writes
+  inside `~/.claude`.
 - **First run, in this order:**
   1. `agent-balancer init [--label <label>]` creates `~/.agent-balancer/` (0700), reads the
      default folder with `auth status`, asks for that account's label (`--label` is required when
@@ -1778,7 +1834,7 @@ accounts and the 15 minute floor of 10.4 they stay under about 5 MB. The rebuild
 
 ## 14. Threat model
 
-**Assets:** (1) Claude logins (Keychain entries and fallback files), which the tool never touches,
+**Assets:** (1) Claude logins (Keychain entries and fallback files), which the tool never reads,
 and the setup-tokens it stores for token accounts, (2) account emails and usage numbers, (3) the
 integrity of the shared hooks and settings that apply to every session, (4) the user's weekly
 capacity, (5) release artifacts, (6) the machine (no network exposure).
@@ -1847,9 +1903,14 @@ Threat numbers are not reused or renumbered.
   launch files, on any token-like match, and on any email outside `example.com`. A canary split
   across two 4 KB reads is still caught. A positive control proves the detector fires. Planted
   tokens and planted safety violations are assembled at runtime from split strings, never stored
-  whole in a file.
+  whole in a file. The same file runs the leak shapes as patterns (a token or token-like run, an
+  org id or org field, an address other than a made-up account's at example.com, a path the
+  fixture does not own, a named session) over every chunk of the README pictures but their pixel
+  data, compressed text inflated, and over the scene sources the pictures are drawn from.
 - **Safety script tests:** `scripts/check-safety.sh` is tested with planted violations for each
-  rule, assembled at runtime in a temporary tree. The script passes on the real tree.
+  rule, assembled at runtime in a temporary tree. The script passes on the real tree. Its address
+  and org id scans also read the Markdown files at the top of the repository, and its attribution
+  scan reads them all, `CONTRIBUTING.md` and `CODE_OF_CONDUCT.md` included.
 - **Fixtures:** probe and auth fixtures are recorded from real runs, then scrubbed and relabeled
   to `example.com`; unit normalization (0 to 1 versus 0 to 100) has its own tests.
 - **Golden JSON:** `status --json`, `pick --json`, `events --json` and `history --json` outputs for

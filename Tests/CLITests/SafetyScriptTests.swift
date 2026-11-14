@@ -68,6 +68,22 @@ import Testing
             Plant(
                 rule: "attribution", path: "docs/x.md",
                 body: "Text " + verb + " by " + cl + " Code.\n"),
+            // The Markdown files at the top of the repository are read as well.
+            Plant(rule: "email", path: "README.md", body: "write to pat@" + "contoso" + ".test\n"),
+            Plant(
+                rule: "email", path: "CONTRIBUTING.md",
+                body: "write to pat@" + "contoso" + ".test\n"),
+            Plant(
+                rule: "email", path: "SECURITY.md", body: "write to pat@" + "contoso" + ".test\n"),
+            Plant(
+                rule: "orgid", path: "CHANGELOG.md",
+                body: "org " + "123e4567" + "-e89b-" + "12d3-a456-" + "426614174000\n"),
+            Plant(
+                rule: "attribution", path: "CONTRIBUTING.md",
+                body: "Text " + verb + " by " + cl + " Code.\n"),
+            Plant(
+                rule: "attribution", path: "CODE_OF_CONDUCT.md",
+                body: "Text " + verb + " by " + cl + " Code.\n"),
             Plant(
                 rule: "tokenstring", path: "Sources/Core/A/A.swift",
                 body: "let n = \"CLAUDE_CODE" + "_OAUTH_TOKEN\"\n"),

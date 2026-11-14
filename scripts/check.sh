@@ -31,6 +31,9 @@ swift test --skip-build
 step "safety"
 scripts/check-safety.sh
 
+step "readme"
+scripts/check-readme.sh
+
 step "secrets"
 if ! command -v gitleaks >/dev/null 2>&1; then
   echo "gitleaks is required and was not found on PATH" >&2

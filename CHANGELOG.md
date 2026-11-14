@@ -188,3 +188,39 @@
   link, or a tool folder that comes to name it, part way stops the run.
   `scripts/build-app.sh` refuses a written Info.plist that declares a scripting, URL, service,
   document or extension key.
+- Write the final README: the pitch, the three pictures, requirements (with where Claude Code must
+  be installed for the tool to find it), install (with the four steps that open the unsigned app on
+  macOS 14), first five minutes, how it picks, how it works, what it does not do, privacy, where
+  tokens live, limits and uninstall. Add `CONTRIBUTING.md` (tools, build and check, the safety
+  rules the scan enforces, issue first, landing, license). Add the README pictures in
+  `docs/media/`, which `scripts/render-views.sh` draws from three status documents of made-up
+  accounts in states the status writer can produce; the script builds the app and the CLI and
+  copies only the pictures its own run drew. Add `scripts/check-readme.sh`, run by
+  `scripts/check.sh` and `scripts/render-views.sh`. It fails on any character in the README other
+  than printable ASCII and tabs. It reads every inline code span of the README and every line of a
+  fenced code block except a `json` block, with a leading `$ ` or `% ` prompt dropped. A fence must
+  close before the list item that holds it ends: a line that is not blank and is indented less than
+  the opening fence ends it, and the check fails on a fence that ends there or at the end of the
+  file without closing. A `json` block must parse as JSON, and each string in it, key or value, is
+  read as a later part of a chain. It cuts each span or line into parts at `&&`, `||`, `;`, `&` and
+  `|` (a `|` before a flag is a choice in a usage line) and reads each `$(...)` or backtick
+  substitution as a part of its own. The first part must start with `agent-balancer`, `claude`,
+  `brew`, `gh` or `mkdir`, or be one word naming a path, file or key. In every part but a `claude`,
+  `brew`, `gh` or `mkdir` line, each word `agent-balancer`, and a path to it that starts the part,
+  begins a command whose subcommand and flags must be in its `--help`. No code span may run across
+  a line break, no `code`, `pre`, `kbd`, `samp` or `tt` HTML tag may be used, and no flag may sit
+  in plain text, where `agent-balancer` followed by spaces or tabs and a word fails unless that
+  word is on the check's word list. Each local file that an inline link or picture, or a `src` or
+  `srcset` attribute, names must exist. The pictures may carry no compressed chunk, and their
+  metadata chunks must hold no absolute path of two or more parts (also right after a URL's scheme
+  and host), home path (`~/`, `~user/` or `$HOME/`), address outside example.com, org id or token.
+  The scene sources the pictures are drawn from must name accounts only by the labels `main`,
+  `personal`, `lab`, `spare-a` and `spare-b`, every word with a letter in their strings and
+  comments, lowercased and ISO times aside, must be a label or on the check's word list, and they
+  must hold only those labels' example.com addresses and the fixture's paths. When the local
+  banned-string list is present, the check also fails on a banned string in the pictures' metadata
+  or the scene sources. The leak test now also runs its shapes over every chunk of the README
+  pictures but their pixel data, compressed text inflated, and over those scene sources. The safety
+  scan now also reads the Markdown files at the top of the repository for addresses, org ids and
+  attribution phrases. The other render scenes now use the five labels too, and the Manage window
+  scenes date the link check by the status file's time, as the window does.

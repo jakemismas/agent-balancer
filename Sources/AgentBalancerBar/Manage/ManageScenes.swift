@@ -3,7 +3,8 @@ import Foundation
 import SwiftUI
 
 /// Fixed data for the render tool: the frames of design/render.html for the Manage accounts
-/// window. Labels and example.com addresses only.
+/// window. The labels main, personal, lab, spare-a and spare-b and example.com addresses only,
+/// because the README pictures reuse this file.
 enum ManageScenes {
     static let now = RenderScenes.now
     static let barTime = ISO8601DateFormatter().date(from: "2026-11-09T21:12:00Z") ?? Date()
@@ -54,7 +55,7 @@ enum ManageScenes {
             "spare-a", email: "spare-a@example.com", kind: kind,
             extra: "\"endsAt\": \"2026-11-16\", " + (folder ? signedInFolder : ""))
         return """
-            { "schemaVersion": 1, "generatedAt": "2026-11-09T21:10:00Z", "banner": null,
+            { "schemaVersion": 1, "generatedAt": "2026-11-09T21:11:00Z", "banner": null,
               "accounts": [
                 { "label": "main", "email": "main@example.com", "role": "main", "kind": "login",
                   "fullLogin": true, "state": "ok", "weekly": null },
@@ -62,25 +63,32 @@ enum ManageScenes {
             """
     }
 
-    static func snapshot(_ json: String) -> [AccountSnapshot] {
-        if case .loaded(let s) = StatusSnapshot.parse(Data(json.utf8)) { return s.accounts }
-        return []
+    static func document(_ json: String) -> StatusSnapshot? {
+        if case .loaded(let s) = StatusSnapshot.parse(Data(json.utf8)) { return s }
+        return nil
     }
 
-    @MainActor static func window(folder: Bool, settings: ManageSettings = ManageSettings())
-        -> AnyView
-    {
-        let accounts = snapshot(accounts(folder: folder))
+    static func snapshot(_ json: String) -> [AccountSnapshot] {
+        document(json)?.accounts ?? []
+    }
+
+    @MainActor static func window(
+        folder: Bool, settings: ManageSettings = ManageSettings(), json: String? = nil
+    ) -> AnyView {
+        let status = document(json ?? self.accounts(folder: folder))
+        let accounts = status?.accounts ?? []
         let rows = accounts.map { ManageBuilder.listRow($0, now: now) }
         let selected = accounts.last
+        // The window dates its link check by when the status file it read was written.
+        let checked = status?.generatedAt ?? ManageScenes.checked
         let panel = selected.map {
             ManageBuilder.panel(
-                $0, settings: settings, now: now, checked: ManageScenes.checked,
+                $0, settings: settings, now: now, checked: checked,
                 folderPath: ManageBuilder.folderPath($0.label, context: home))
         }
         let bar = ManageBar(
             command: "agent-balancer config set spare-b ending-soon true", ok: true,
-            text: "Updated ending-soon.", at: barTime)
+            text: "Updated ending-soon for 'spare-b'.", at: barTime)
         return AnyView(
             WindowFrame {
                 ManageContent(
@@ -99,8 +107,8 @@ enum ManageScenes {
     static let addedFolder = """
         { "schemaVersion": 1, "generatedAt": "2026-11-09T21:10:00Z", "banner": null,
           "accounts": [
-            { "label": "spare", "email": "spare@example.com", "role": "pool", "kind": "folder",
-              "fullLogin": true, "configDir": "~/.agent-balancer/accounts/spare/.claude",
+            { "label": "spare-b", "email": "spare-b@example.com", "role": "pool", "kind": "folder",
+              "fullLogin": true, "configDir": "~/.agent-balancer/accounts/spare-b/.claude",
               "linked": false, "state": "error",
               "error": { "code": "not_linked", "text": "Settings not shared." }, "weekly": null } ] }
         """
@@ -109,8 +117,8 @@ enum ManageScenes {
         -> AnyView
     {
         var draft = AddDraft(endDate: "2026-11-16")
-        draft.label = "spare"
-        draft.email = "spare@example.com"
+        draft.label = "spare-b"
+        draft.email = "spare-b@example.com"
         draft.kind = folder ? Kind.folder : Kind.token
         if folder { draft.stage = .added }
         let steps = ManageBuilder.addSteps(
@@ -169,7 +177,8 @@ enum ManageScenes {
         let rows = accounts.map { ManageBuilder.listRow($0, now: now) }
         let panel = accounts.first { $0.label == "lab" }.map {
             ManageBuilder.panel(
-                $0, settings: ManageSettings(), now: now, checked: ManageScenes.checked,
+                $0, settings: ManageSettings(), now: now,
+                checked: document(statesJson)?.generatedAt ?? ManageScenes.checked,
                 folderPath: ManageBuilder.folderPath($0.label, context: home))
         }
         let bar = ManageBar(

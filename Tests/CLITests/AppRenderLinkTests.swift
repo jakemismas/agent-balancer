@@ -100,7 +100,14 @@ extension AppSurfaceTests {
                         #expect(status == 0, "\(label)")
                         let files = try fm.contentsOfDirectory(
                             atPath: root.appendingPathComponent("repo/" + output).path)
-                        #expect(files.count == (flag == "--render" ? 32 : 10), "\(label)")
+                        #expect(files.count == (flag == "--render" ? 38 : 10), "\(label)")
+                        if flag == "--render" {
+                            // The README pictures scripts/render-views.sh copies, by these names.
+                            let readme = LeakShapes.picturePaths.map {
+                                "readme-" + $0.dropFirst("docs/media/".count)
+                            }
+                            #expect(Set(files).isSuperset(of: readme), "\(label)")
+                        }
                         // Read through HOME's own spelling, links followed.
                         for tool in [".claude", ".agent-balancer"] {
                             let listed = try? fm.contentsOfDirectory(

@@ -2,8 +2,9 @@ import Core
 import Foundation
 import SwiftUI
 
-/// Fixed data for the render tool. Labels and example.com addresses only. The first scene is the
-/// mock of design/render.html.
+/// Fixed data for the render tool. The labels main, personal, lab, spare-a and spare-b and
+/// example.com addresses only, because the README pictures reuse this file. The first scene is
+/// the mock of design/render.html.
 enum RenderScenes {
     static let now = ISO8601DateFormatter().date(from: "2026-11-09T21:13:00Z") ?? Date()
 
@@ -56,13 +57,13 @@ enum RenderScenes {
               "weekly": { "usedPercent": 96.0, "resetsAt": "2026-11-13T17:00:00Z", "source": "probe" },
               "fable": { "usedPercent": 40.0, "resetsAt": "2026-11-13T17:00:00Z", "source": "probe" },
               "readingsAge": 20000, "warnings": [ { "code": "login_expiring", "text": "Login expires Dec 7." } ] },
-            { "label": "pool-a", "email": "pool-a@example.com", "role": "pool", "state": "limited",
+            { "label": "spare-a", "email": "spare-a@example.com", "role": "pool", "state": "limited",
               "limited": { "window": "weekly", "until": "2026-11-11T00:00:00Z" },
               "weekly": { "usedPercent": 82.0, "resetsAt": "2026-11-11T00:00:00Z", "source": "probe" },
               "fable": { "usedPercent": 10.0, "resetsAt": "2026-11-11T00:00:00Z", "source": "probe" },
               "readingsAge": 90, "warnings": [ { "code": "possible_duplicate", "text": "Same reset times as main. If this is the same account, remove one." } ] },
-            { "label": "pool-b", "email": "pool-b@example.com", "role": "pool", "state": "error",
-              "error": { "code": "not_linked", "text": "Settings not shared. Run agent-balancer link pool-b in Terminal." },
+            { "label": "spare-b", "email": "spare-b@example.com", "role": "pool", "state": "error",
+              "error": { "code": "not_linked", "text": "Settings not shared. Run agent-balancer link spare-b in Terminal." },
               "weekly": { "usedPercent": null, "source": "none" } }
           ]
         }
@@ -107,13 +108,13 @@ enum RenderScenes {
                 "menu-states",
                 panel(
                     screen(moreStates), refresh: .failed("Refresh failed: a probe timed out."),
-                    login: false, steps: ["pool-b"])
+                    login: false, steps: ["spare-b"])
             ),
             ("menu-refreshing", panel(screen(sample), refresh: .running)),
             ("empty-first-run", panel(inputs(status: .missing, config: false), login: false)),
             ("empty-reading", panel(inputs(status: .missing), login: false)),
             ("empty-cli-missing", panel(inputs(status: .missing, cli: false), login: false)),
             ("empty-update", panel(inputs(status: .newerSchema(2)), login: false)),
-        ] + ManageScenes.all()
+        ] + ManageScenes.all() + ReadmeScenes.all()
     }
 }

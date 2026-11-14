@@ -251,3 +251,276 @@ struct Collected {
         #expect(collected.leaks(of: canaries).isEmpty)
     }
 }
+
+struct LeakShapeError: Error, CustomStringConvertible {
+    let description: String
+}
+
+/// The leak shapes as patterns, for files that hold no planted canary: the text chunks of the
+/// README pictures and the scene sources they are drawn from. A hit names the shape, never the
+/// text, so a real value never reaches a log.
+enum LeakShapes {
+    static let labels = ["main", "personal", "lab", "spare-a", "spare-b"]
+    /// The paths the made-up accounts own, the made-up home and the app's two CLI paths.
+    static let fixturePaths = Set(labels.map { "~/.agent-balancer/accounts/\($0)/.claude" })
+        .union([
+            "/Users/example", "/opt/homebrew/bin/agent-balancer", "/usr/local/bin/agent-balancer",
+        ])
+    static let picturePaths = ["menu", "manage-tokens", "manage-folders"].flatMap { scene in
+        ["light", "dark"].map { "docs/media/\(scene)-\($0).png" }
+    }
+    static let sceneSources = [
+        "Sources/AgentBalancerBar/ReadmeScenes.swift",
+        "Sources/AgentBalancerBar/Manage/ManageScenes.swift",
+        "Sources/AgentBalancerBar/RenderScenes.swift",
+    ]
+
+    static func matches(_ pattern: String, in text: String, caseless: Bool = false) -> [String] {
+        guard
+            let regex = try? NSRegularExpression(
+                pattern: pattern, options: caseless ? [.caseInsensitive] : [])
+        else { return ["unreadable pattern"] }
+        let range = NSRange(text.startIndex..., in: text)
+        return regex.matches(in: text, range: range).compactMap { match in
+            Range(match.range(at: match.numberOfRanges - 1), in: text).map { String(text[$0]) }
+        }
+    }
+
+    /// A run of 32 or more token characters with more than 4 bits of entropy per character.
+    static func hasTokenLikeRun(_ text: String) -> Bool {
+        let bytes = Array(text.utf8)
+        func isRun(_ b: UInt8) -> Bool {
+            (b >= 48 && b <= 57) || (b >= 65 && b <= 90) || (b >= 97 && b <= 122) || b == 95
+                || b == 45
+        }
+        var i = 0
+        while i < bytes.count {
+            guard isRun(bytes[i]) else {
+                i += 1
+                continue
+            }
+            var j = i
+            while j < bytes.count && isRun(bytes[j]) { j += 1 }
+            if j - i >= 32 {
+                var counts = [Int](repeating: 0, count: 256)
+                for b in bytes[i..<j] { counts[Int(b)] += 1 }
+                let n = Double(j - i)
+                let bits = counts.filter { $0 > 0 }.reduce(0.0) {
+                    $0 - Double($1) / n * log2(Double($1) / n)
+                }
+                if bits > 4.0 { return true }
+            }
+            i = j
+        }
+        return false
+    }
+
+    /// The names of the leak shapes in `text`: a token or a token-like run, an org id or an org
+    /// field, an address other than a made-up account's at example.com, a path the fixture does
+    /// not own, and a session with a name.
+    static func found(in text: String) -> [String] {
+        var shapes: [String] = []
+        if text.contains("sk-" + "ant-") { shapes.append("token") }
+        if hasTokenLikeRun(text) { shapes.append("token-like run") }
+        let orgId = #"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"#
+        if !matches(orgId, in: text, caseless: true).isEmpty { shapes.append("org id") }
+        if !matches(#"\\?"(?:org|organization)[A-Za-z]*\\?"\s*:"#, in: text, caseless: true).isEmpty
+        {
+            shapes.append("org field")
+        }
+        let addresses = matches(#"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+"#, in: text)
+        if addresses.contains(where: { address in
+            !labels.contains { address == $0 + "@example.com" }
+        }) {
+            shapes.append("email")
+        }
+        // The path rule of scripts/check-readme.sh: an absolute path of two or more parts, also
+        // right after a URL's scheme and host, and a home path (~/, ~user/ or $HOME/).
+        let path =
+            #"(?:(?<![A-Za-z0-9._~/-])|[A-Za-z][A-Za-z0-9+.-]*://[^/\s]*)"#
+            + #"((?:~[A-Za-z0-9._-]*/|\$HOME/|/[A-Za-z0-9._-]+/)[A-Za-z0-9._-][^\s"'`),\\]*)"#
+        let paths = matches(path, in: text)
+        if paths.contains(where: { !fixturePaths.contains($0) }) { shapes.append("path") }
+        let named = #"\\?"sessions\\?"\s*:\s*\[\s*[^\]\s]|\\?"name\\?"\s*:"#
+        if !matches(named, in: text).isEmpty { shapes.append("session name") }
+        return shapes
+    }
+
+    /// Inflates a zlib stream: a 2-byte header, raw DEFLATE data and a 4-byte checksum.
+    /// Foundation reads the raw DEFLATE part.
+    static func inflate(_ stream: ArraySlice<UInt8>) throws -> [UInt8] {
+        guard stream.count > 6 else { throw LeakShapeError(description: "short compressed text") }
+        let raw = Data(stream.dropFirst(2).dropLast(4))
+        return [UInt8](try (raw as NSData).decompressed(using: .zlib) as Data)
+    }
+
+    /// A zlib stream of `bytes`, for planting compressed text.
+    static func deflate(_ bytes: [UInt8]) throws -> [UInt8] {
+        let raw = [UInt8](try (Data(bytes) as NSData).compressed(using: .zlib) as Data)
+        var a: UInt32 = 1
+        var b: UInt32 = 0
+        for byte in bytes {
+            a = (a + UInt32(byte)) % 65521
+            b = (b + a) % 65521
+        }
+        let sum = b << 16 | a
+        return [0x78, 0x9C] + raw + [24, 16, 8, 0].map { UInt8(truncatingIfNeeded: sum >> $0) }
+    }
+
+    /// The PNG `png` with one more chunk right after its signature and IHDR.
+    static func png(_ png: Data, adding type: String, _ body: [UInt8]) -> Data {
+        var chunk = Data(
+            [24, 16, 8, 0].map { UInt8(truncatingIfNeeded: UInt32(body.count) >> $0) })
+        chunk.append(Data(type.utf8))
+        chunk.append(Data(body))
+        chunk.append(contentsOf: [0, 0, 0, 0])
+        var out = png
+        out.insert(contentsOf: chunk, at: out.startIndex + 33)
+        return out
+    }
+
+    /// The text of every chunk of a PNG but its pixel data: compressed text read in full and any
+    /// bytes after the end chunk. A file that is not a PNG, a chunk that runs past the end or
+    /// compressed text that does not inflate throws, so a check over it fails closed.
+    static func pngTexts(_ data: Data) throws -> [String] {
+        let bytes = [UInt8](data)
+        func text(_ part: ArraySlice<UInt8>) -> String { String(decoding: part, as: UTF8.self) }
+        guard bytes.starts(with: [137, 80, 78, 71, 13, 10, 26, 10]) else {
+            throw LeakShapeError(description: "not a PNG")
+        }
+        var texts: [String] = []
+        var offset = 8
+        while offset < bytes.count {
+            guard offset + 12 <= bytes.count else {
+                throw LeakShapeError(description: "a chunk is cut short")
+            }
+            let length = bytes[offset..<offset + 4].reduce(0) { $0 << 8 | Int($1) }
+            let type = text(bytes[offset + 4..<offset + 8])
+            let start = offset + 8
+            guard start + length + 4 <= bytes.count else {
+                throw LeakShapeError(description: "a chunk runs past the end")
+            }
+            let body = bytes[start..<start + length]
+            offset = start + length + 4
+            switch type {
+            case "IDAT": continue
+            case "IEND":
+                texts.append(text(bytes[offset...]))
+                return texts
+            case "zTXt", "iCCP":
+                let name = body.firstIndex(of: 0) ?? body.endIndex
+                texts.append(text(body[..<name]))
+                guard name + 2 <= body.endIndex else {
+                    throw LeakShapeError(description: "\(type) is cut short")
+                }
+                texts.append(text(try inflate(body[(name + 2)...])[...]))
+            case "iTXt":
+                guard let name = body.firstIndex(of: 0), name + 3 <= body.endIndex,
+                    let language = body[(name + 3)...].firstIndex(of: 0),
+                    let translated = body[(language + 1)...].firstIndex(of: 0)
+                else { throw LeakShapeError(description: "iTXt is cut short") }
+                texts += [
+                    body[..<name], body[(name + 3)..<language], body[(language + 1)..<translated],
+                ]
+                .map(text)
+                let content = body[(translated + 1)...]
+                texts.append(body[name + 1] == 1 ? text(try inflate(content)[...]) : text(content))
+            default: texts.append(text(body))
+            }
+        }
+        throw LeakShapeError(description: "no end chunk")
+    }
+}
+
+extension LeakTests {
+    /// Each shape fires on its canary, and on an org id planted in each kind of picture chunk,
+    /// compressed text included. Each planted text fires its own shape and no other, so no shape
+    /// is pinned only by another. An organization name has no shape to match; the documents carry
+    /// no org field, which the org field shape checks. Token-shaped text is built here in pieces
+    /// and never printed: a failure shows only shape names.
+    @Test func theLeakShapesFireOnEveryCanaryAndInEveryPictureChunk() throws {
+        for canary in Canary.all() where canary.name != "org-name" {
+            #expect(
+                !LeakShapes.found(in: "noise " + canary.value + " noise").isEmpty, "\(canary.name)")
+        }
+        // Forty different characters with no prefix: more than 4 bits each.
+        let alphabet = Array("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+        let run = String(alphabet.shuffled().prefix(40))
+        let planted = [
+            ("a path outside the fixture", "/Vol" + "umes/Someone/Desktop/shot.png", "path"),
+            ("a home path", "~/Desk" + "top/shot.png", "path"),
+            ("a path in a file URL", "file://" + "/Users/" + "someone/Desktop/shot.png", "path"),
+            ("a path in a file URL with a host", "file://host" + "/Vol" + "umes/x/y.png", "path"),
+            ("a home path of another user", "~some" + "one/Desktop/shot.png", "path"),
+            ("a path in a URL with another scheme", "smb://host" + "/share/some" + "one/x", "path"),
+            ("a home path written with $HOME", "$HO" + "ME/Desktop/shot.png", "path"),
+            ("an address with an upper-case domain", "someone@" + "EXAMPLE.ORG", "email"),
+            ("a token-like run with no prefix", run, "token-like run"),
+            ("a token prefix with no run", "sk-" + "ant-" + "x", "token"),
+            (
+                "a named session", "\"sessions\": [ { \"id\": \"abcd1234\", \"name\": \"x\" } ]",
+                "session name"
+            ),
+            ("an org field", "\"org" + "Name\": \"x\"", "org field"),
+        ]
+        for (what, text, shape) in planted {
+            let shapes = LeakShapes.found(in: "noise " + text + " noise")
+            #expect(shapes == [shape], "\(what): \(shapes)")
+        }
+        for clean in [
+            "lab@example.com", "~/.agent-balancer/accounts/lab/.claude", "\"sessions\": []",
+            String(repeating: "ab", count: 20), "https://example.com",
+        ] {
+            #expect(LeakShapes.found(in: clean).isEmpty, "\(clean)")
+        }
+
+        let png = try Data(
+            contentsOf: Support.root.appendingPathComponent("docs/media/menu-light.png"))
+        #expect(try LeakShapes.pngTexts(png).flatMap { LeakShapes.found(in: $0) }.isEmpty)
+        let orgId = Array(("org " + UUID().uuidString.lowercased()).utf8)
+        let key = Array("Comment".utf8) + [0]
+        let plants: [(String, Data)] = [
+            ("tEXt", LeakShapes.png(png, adding: "tEXt", key + orgId)),
+            (
+                "zTXt",
+                LeakShapes.png(png, adding: "zTXt", key + [0] + (try LeakShapes.deflate(orgId)))
+            ),
+            ("iTXt", LeakShapes.png(png, adding: "iTXt", key + [0, 0, 0, 0] + orgId)),
+            (
+                "compressed iTXt",
+                LeakShapes.png(
+                    png, adding: "iTXt", key + [1, 0, 0, 0] + (try LeakShapes.deflate(orgId)))
+            ),
+            (
+                "iCCP",
+                LeakShapes.png(png, adding: "iCCP", key + [0] + (try LeakShapes.deflate(orgId)))
+            ),
+            ("another chunk", LeakShapes.png(png, adding: "prVt", orgId)),
+            ("bytes after the end", png + Data(orgId)),
+        ]
+        for (what, data) in plants {
+            let shapes = try LeakShapes.pngTexts(data).flatMap { LeakShapes.found(in: $0) }
+            #expect(shapes.contains("org id"), "\(what)")
+        }
+    }
+
+    /// The leak test's shapes over every text chunk of the README pictures and over the scene
+    /// sources they are drawn from.
+    @Test func theReadmePicturesAndTheirSceneSourcesHoldNoLeakShape() throws {
+        let media = Support.root.appendingPathComponent("docs/media")
+        let pictures = try FileManager.default.contentsOfDirectory(atPath: media.path)
+            .filter { $0.hasSuffix(".png") }.map { "docs/media/" + $0 }.sorted()
+        #expect(Set(pictures).isSuperset(of: LeakShapes.picturePaths))
+        for picture in pictures {
+            let data = try Data(contentsOf: Support.root.appendingPathComponent(picture))
+            let shapes = try LeakShapes.pngTexts(data).flatMap { LeakShapes.found(in: $0) }
+            #expect(shapes.isEmpty, "\(picture): \(shapes)")
+        }
+        for source in LeakShapes.sceneSources {
+            let text = try String(
+                contentsOf: Support.root.appendingPathComponent(source), encoding: .utf8)
+            let shapes = LeakShapes.found(in: text)
+            #expect(shapes.isEmpty, "\(source): \(shapes)")
+        }
+    }
+}

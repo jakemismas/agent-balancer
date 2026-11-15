@@ -24,7 +24,9 @@ struct AddCommand: ParsableCommand {
 
     @Flag(
         name: .customLong("ending-soon"),
-        help: "Spend this account first. Use it or --ends, not both.")
+        help:
+            "Spend this account first, unless it has no 5-hour reading. Use it or --ends, not both."
+    )
     var endingSoon = false
 
     func run() throws {

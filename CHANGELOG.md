@@ -324,3 +324,7 @@
   refuses the options that switch hooks off or start the session somewhere else, and `init`,
   `uninstall` and `login --paste` need an interactive terminal. A token account whose reset times
   match the main account's gets a `possible_duplicate` warning and is still offered.
+- `pick` skips the main account while its stored reading has no 5-hour window; when nothing
+  earlier refuses it, the reason is `No 5-hour reading, which the main account needs.` A pool
+  account without one is still judged on its weekly use but ranks after every account that has
+  one, and when it is eligible, its reason ends with `5-hour use unknown.`

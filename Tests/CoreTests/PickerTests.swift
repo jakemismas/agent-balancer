@@ -201,6 +201,177 @@ import Testing
                 == "stale reading, refresh failed")
     }
 
+    // MARK: No 5-hour reading
+
+    @Test func theMainAccountNeedsAFiveHourReading() {
+        let missing = "No 5-hour reading, which the main account needs."
+        let none = [PickInput(account: main(), reading: reading(week: 10, five: nil))]
+        for d in [decide(none), decide(none, model: .fable), decide(none, leases: ["main": 1])] {
+            #expect(d.chosen == nil)
+            #expect(d.candidates.map(\.eligible) == [false])
+            #expect(reason(d, "main") == missing)
+            #expect(d.reason == "No account has room. main: " + missing)
+        }
+        // The 5-hour refusal comes before the Fable one.
+        let noFable = decide(
+            [PickInput(account: main().withFable(false), reading: reading(week: 10, five: nil))],
+            model: .fable)
+        #expect(noFable.chosen == nil)
+        #expect(reason(noFable, "main") == missing)
+        // The rule follows the role, whatever the kind.
+        for kind in [Kind.token, Kind.folder] {
+            let other = Account(label: "m", kind: kind, role: Role.main)
+            let d = decide([PickInput(account: other, reading: reading(week: 10, five: nil))])
+            #expect(d.chosen == nil, "\(kind)")
+            #expect(reason(d, "m") == missing, "\(kind)")
+        }
+        let known = decide([PickInput(account: main(), reading: reading(week: 10, five: 10))])
+        #expect(known.chosen == 0)
+        let over = decide([
+            PickInput(account: main(), reading: reading(week: 45.1, five: nil, resetDays: 7))
+        ])
+        #expect(over.chosen == nil)
+        #expect(reason(over, "main").contains("reserve line"))
+        #expect(reason(over, "main") != missing)
+    }
+
+    @Test func aFiveHourWindowWithNoResetTimeCountsAsPresent() {
+        func noReset(_ five: Double) -> Reading {
+            var r = reading(week: 10, five: five)
+            r.windows[WindowName.fiveHour]?.resetsAt = nil
+            return r
+        }
+        let open = decide([PickInput(account: main(), reading: noReset(10))])
+        #expect(open.chosen == 0)
+        #expect(!open.reason.contains("5-hour"))
+        let full = decide([PickInput(account: main(), reading: noReset(92))])
+        #expect(full.chosen == nil)
+        #expect(reason(full, "main") == "5-hour use 92.0% leaves no room for a run.")
+        let pooled = decide([PickInput(account: pool("a"), reading: noReset(10))])
+        #expect(pooled.chosen == 0)
+        #expect(!reason(pooled, "a").contains("5-hour"))
+    }
+
+    @Test(.localZone("UTC")) func aPoolAccountWithNoFiveHourReadingGoesLast() {
+        let day = Picker.shortTime(Self.now.addingTimeInterval(86_400))
+        let fourDays = Picker.shortTime(Self.now.addingTimeInterval(4 * 86_400))
+        let unknown = PickInput(
+            account: pool("u"), reading: reading(week: 10, five: nil, resetDays: 1))
+        let goLast =
+            "Soonest weekly reset: resets \(fourDays). Accounts with no 5-hour reading go last."
+        let plain = "Soonest weekly reset: resets \(fourDays)."
+        let knownPool = PickInput(
+            account: pool("k"), reading: reading(week: 10, five: 10, resetDays: 4))
+        for known in [
+            knownPool,
+            PickInput(account: main(), reading: reading(week: 10, five: 10, resetDays: 4)),
+        ] {
+            let d = decide([unknown, known])
+            #expect(d.chosen == 1)
+            #expect(d.candidates.map(\.eligible) == [true, true])
+            #expect(reason(d, "u") == "Resets \(day). 5-hour use unknown.")
+            #expect(reason(d, known.account.label) == "Resets \(fourDays).")
+            #expect(d.reason == goLast)
+            let flipped = decide([known, unknown])
+            #expect(flipped.chosen == 0)
+            #expect(flipped.reason == goLast)
+        }
+        let refused = decide([
+            unknown,
+            PickInput(account: pool("k"), reading: reading(week: 95, five: 10, resetDays: 4)),
+            PickInput(account: main(), reading: reading(week: 95, five: 10, resetDays: 4)),
+        ])
+        #expect(refused.chosen == 0)
+        #expect(refused.reason == "Soonest weekly reset: resets \(day). 5-hour use unknown.")
+        // Within the group, the soonest reset still goes first, and only the note is added.
+        let later = PickInput(
+            account: pool("v"), reading: reading(week: 10, five: nil, resetDays: 2))
+        let twoUnknown = decide([later, unknown])
+        #expect(twoUnknown.chosen == 1)
+        #expect(twoUnknown.reason == "Soonest weekly reset: resets \(day). 5-hour use unknown.")
+        // A refused account with no 5-hour window is not passed over.
+        for left in [
+            PickInput(account: main(), reading: reading(week: 10, five: nil)),
+            PickInput(account: pool("r"), reading: reading(week: 95, five: nil)),
+        ] {
+            let d = decide([left, knownPool])
+            #expect(d.chosen == 1)
+            #expect(d.reason == plain)
+        }
+        // An unknown account that resets later is still passed over.
+        let lateUnknown = PickInput(
+            account: pool("w"), reading: reading(week: 10, five: nil, resetDays: 5))
+        #expect(decide([lateUnknown, knownPool]).reason == goLast)
+        let twoKnown = decide([
+            knownPool,
+            PickInput(account: pool("m"), reading: reading(week: 10, five: 10, resetDays: 5)),
+        ])
+        #expect(twoKnown.chosen == 0)
+        #expect(twoKnown.reason == plain)
+        // A known account whose week has no reset time still ranks ahead of an unknown one.
+        var open = reading(week: 10, five: 10)
+        open.windows[WindowName.sevenDay]?.resetsAt = nil
+        let openKnown = decide([unknown, PickInput(account: pool("o"), reading: open)])
+        #expect(openKnown.chosen == 1)
+        #expect(openKnown.reason.hasSuffix(". Accounts with no 5-hour reading go last."))
+        // An unknown account marked ending soon, which ranks as ending in 2 days, still goes last.
+        let endingSoon = PickInput(
+            account: pool("e") { $0.endingSoon = true },
+            reading: reading(week: 10, five: nil, resetDays: 3))
+        for order in [[endingSoon, knownPool], [knownPool, endingSoon]] {
+            let d = decide(order)
+            #expect(d.chosen.map { order[$0].account.label } == "k")
+            #expect(d.reason == goLast)
+        }
+        let fable = decide([unknown, knownPool], model: .fable)
+        #expect(fable.chosen == 1)
+        #expect(
+            fable.reason
+                == "Soonest weekly reset: resets \(fourDays). Fable room guaranteed at 80% of cap. Accounts with no 5-hour reading go last."
+        )
+    }
+
+    @Test(.localZone("UTC")) func aLonePoolAccountWithNoFiveHourReadingIsPicked() {
+        func lone(_ week: Double) -> [PickInput] {
+            [PickInput(account: pool("a"), reading: reading(week: week, five: nil))]
+        }
+        let resets = Picker.shortTime(Self.now.addingTimeInterval(3 * 86_400))
+        let d = decide(lone(10))
+        #expect(d.chosen == 0)
+        #expect(reason(d, "a") == "Resets \(resets). 5-hour use unknown.")
+        #expect(d.reason == "Soonest weekly reset: resets \(resets). 5-hour use unknown.")
+        let fable = decide(lone(10), model: .fable)
+        #expect(fable.chosen == 0)
+        #expect(
+            fable.reason
+                == "Soonest weekly reset: resets \(resets). Fable room guaranteed at 80% of cap. 5-hour use unknown."
+        )
+        // Ranked by ending soon rather than by its weekly reset, the pick still says so.
+        let soon = decide([
+            PickInput(
+                account: pool("a") { $0.endingSoon = true }, reading: reading(week: 10, five: nil))
+        ])
+        #expect(soon.chosen == 0)
+        let ends = Picker.shortTime(Self.now.addingTimeInterval(2 * 86_400))
+        #expect(soon.reason == "Soonest expiry: ends \(ends). 5-hour use unknown.")
+        let leased = decide(lone(80), leases: ["a": 3])
+        #expect(leased.chosen == nil)
+        #expect(reason(leased, "a") == "Only 0.0% of the week is left, and 5% is needed.")
+        let tight = decide(lone(90.1))
+        #expect(tight.chosen == nil)
+        #expect(reason(tight, "a") == "Only 4.9% of the week is left, and 5% is needed.")
+    }
+
+    @Test func aStoredFiveHourWindowThatResetStillRefusesBothRoles() {
+        var passed = reading(week: 10)
+        passed.windows[WindowName.fiveHour]?.resetsAt = Self.now.addingTimeInterval(-1)
+        for account in [main(), pool("a")] {
+            let d = decide([PickInput(account: account, reading: passed)])
+            #expect(d.chosen == nil)
+            #expect(reason(d, account.label) == "window reset, refresh failed")
+        }
+    }
+
     // MARK: Fable
 
     func fableReading(used: Double, weekly: Double, age: TimeInterval = 60) -> FableReading {

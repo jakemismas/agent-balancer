@@ -135,6 +135,62 @@ import Testing
         #expect((answer["reason"] as? String)?.isEmpty == false)
     }
 
+    @Test func aLoginAccountRenamedToALabelWithNoReadingHasNoFiveHourWindow() throws {
+        let missing = "No 5-hour reading, which the main account needs."
+        for role in [Role.pool, Role.main] {
+            let cli = try setUp([
+                Account(
+                    label: "main", kind: Kind.login, role: role, email: "main@example.com",
+                    expectedPlanTier: "max_20x")
+            ])
+            defer { cli.cleanup() }
+            let store = ReadingStore(context: ToolContext(home: cli.home, ambient: [:]))
+            let now = Date()
+            let weeklyReset = Int(now.timeIntervalSince1970) + 3 * 86_400
+            // Stored 20 minutes ago with a 5-hour window, so each pick probes again.
+            let old = now.addingTimeInterval(-1_200)
+            try store.save(
+                Reading(
+                    readAt: old,
+                    windows: [
+                        WindowName.sevenDay: WindowReading(
+                            usedPercent: 10,
+                            resetsAt: Date(timeIntervalSince1970: Double(weeklyReset)),
+                            readAt: old),
+                        WindowName.fiveHour: WindowReading(
+                            usedPercent: 10, resetsAt: now.addingTimeInterval(3_600), readAt: old),
+                    ]), label: "main")
+            try cli.fake(
+                "probe.jsonl",
+                "{\"type\":\"rate_limit_event\",\"rate_limit_info\":{\"status\":\"allowed\","
+                    + "\"unifiedWindows\":{\"seven_day\":{\"utilization\":0.1,\"resetsAt\":"
+                    + "\(weeklyReset)}}}}\n")
+            // While the stored reading holds the window, the reply is refused.
+            let held = try cli.run(["pick", "--json", "--dry-run"])
+            #expect(held.status == 2, "\(role)")
+            #expect(
+                try object(held)["reason"] as? String
+                    == "No account has room. main: stale reading, refresh failed", "\(role)")
+            #expect(try cli.run(["config", "set", "main", "label", "primary"]).status == 0)
+            let renamed = try cli.run(["pick", "--json", "--dry-run"])
+            let answer = try object(renamed)
+            let reason = answer["reason"] as? String ?? ""
+            if role == Role.main {
+                #expect(renamed.status == 2)
+                #expect(answer["label"] is NSNull)
+                #expect(reason == "No account has room. primary: " + missing)
+            } else {
+                #expect(renamed.status == 0)
+                #expect(answer["label"] as? String == "primary")
+                #expect(reason.hasSuffix(" 5-hour use unknown."))
+            }
+            // The old label's reading keeps its window, and the new label's has none.
+            #expect(try store.load(label: "main")?.fiveHour != nil, "\(role)")
+            #expect(try store.load(label: "primary")?.fiveHour == nil, "\(role)")
+            #expect(try store.load(label: "primary")?.sevenDay?.usedPercent == 10, "\(role)")
+        }
+    }
+
     @Test func pickNeverReadsTheEventsRecordOrTheCurrentFile() throws {
         let cli = try setUp([login()]) { $0.picker.limitedAtPercent = 40 }
         defer { cli.cleanup() }

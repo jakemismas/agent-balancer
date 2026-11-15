@@ -111,13 +111,14 @@ Upgrade the tool with `brew upgrade agent-balancer` and replace the app from the
    token rejected and has seen its latest reading (only a probe that works stores a newer one);
    its email is a note that is never checked.
 2. It keeps accounts with enough room in the weekly window (and the five-hour window when there is
-   one). For a Fable launch, it also needs room in the Fable allowance.
+   one), and keeps the main account only when it has a five-hour reading. For a Fable launch, it
+   also needs room in the Fable allowance.
 3. The main account has a reserve: it is eligible only while its weekly use stays under a line
    that rises as its weekly reset gets closer, so less of its week is held back for you.
 4. Among the rest, the account whose use resets soonest goes first, because its unused room is
-   about to be lost. An account with an end date ranks by that date when it is sooner, and one
-   marked as ending soon ranks as if it ended `picker.endingSoonAssumeDays` days from now (2 by
-   default).
+   about to be lost, but an account with no five-hour reading goes after every account that has
+   one. An account with an end date ranks by that date when it is sooner, and one marked as
+   ending soon ranks as if it ended `picker.endingSoonAssumeDays` days from now (2 by default).
 5. If nothing fits, it says so and picks nothing.
 
 ## How it works

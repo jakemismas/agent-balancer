@@ -346,6 +346,33 @@ import Testing
         #expect(built.document.next.all.reason.contains("main"))
     }
 
+    @Test func statusNextRefusesAMainAccountWithNoFiveHourReading() throws {
+        let missing = "No 5-hour reading, which the main account needs."
+        let main = account(role: Role.main)
+        var obs = StatusObservations()
+        obs.auth["main"] = AuthObservation(
+            error: nil, planTier: "max_20x", loginExpiresAt: now.addingTimeInterval(30 * 86_400),
+            signedIn: true)
+        let noFive = reading(weekly: 10, five: nil)
+        let alone = build([main], readings: ["main": noFive], observations: obs)
+        #expect(row(alone).fiveHour == nil)
+        #expect(row(alone).reserve?.launchAllowed == true)
+        for choice in [alone.document.next.all, alone.document.next.fable] {
+            #expect(choice.label == nil)
+            #expect(choice.reason == "No account has room. main: " + missing)
+        }
+        let pool = account("pool-a", kind: Kind.token)
+        var known = reading()
+        known.windows[WindowName.sevenDay]?.resetsAt = now.addingTimeInterval(3 * 86_400)
+        let both = build(
+            [main, pool], readings: ["main": noFive, "pool-a": known], observations: obs,
+            tokens: ["pool-a": TokenInfo(usable: true, modified: now)])
+        #expect(both.document.next.all.label == "pool-a")
+        #expect(both.document.next.fable.label == "pool-a")
+        let resets = Picker.shortTime(now.addingTimeInterval(3 * 86_400))
+        #expect(both.document.next.all.reason == "Soonest weekly reset: resets \(resets).")
+    }
+
     // MARK: In use
 
     @Test func inUseCountsASessionByIdTowardTheLabelItsLaunchFileNames() throws {

@@ -569,7 +569,12 @@ Renaming: `config set <label> label <new>` refuses on a token account, exits 1 a
 because its token file and launch files carry the label; remove the account and add it again under
 the new label. It refuses on a folder account the same way, because the account's folder is named
 for the label: "A folder account cannot be renamed: its folder is named for the label. Nothing was
-changed."
+changed." On a `login` account it changes the label in the registry and moves no stored reading
+(6.3): the reading stays under the old label, and an account that later takes that label is
+judged by whatever reading is stored there, which can be the renamed account's. The renamed
+account is judged by whatever reading is stored under its new label, which may be none or an
+older one left there (7.2 rule 10). Open leases are kept by label too (7.2 rule 7), so a lease
+taken before the rename counts for the old label, not for the renamed account.
 
 Where a token may be: the token file, the launch files of that label, and nowhere else, except a
 writer's temporary file that a write killed before its rename leaves in `tokens/` or
@@ -992,10 +997,14 @@ claude -p "Reply with the single word OK." --model haiku --tools "" --disallowed
   account included, on old use as if it were current. A window entry with no `utilization` key
   adds no value, and a reply with no usage value at all gives `check_failed`, never an empty
   reading. The reading cache checks the weekly part and the stored 5-hour part again where every
-  probe reading is saved, so no path records a probe reading without them. So once a `five_hour`
-  is stored, a reply without one is refused: if the service stops sending it for an account,
-  every probe of that account gives `check_failed` until its stored reading is deleted (`remove`
-  deletes it).
+  probe reading is saved, so no path records a probe reading without them. "The stored reading"
+  is the one under the account's current label, as the cache reads it (6.3). While it holds a
+  5-hour window, a reply without one is refused, so if the service stops sending `five_hour` for
+  an account, every probe of that account gives `check_failed`. When it holds none, whatever the
+  cause (for example none was ever stored, `remove` deleted the reading, a `login` account was
+  renamed to a label with no stored reading, or the stored file does not decode as a reading or
+  holds a 5-hour use outside 0 to 100, 6.3), a reply without one is stored. A stored file that
+  cannot be read at all fails every refresh of the account instead (6.3).
 - Fable probe check, recorded on 2026-11-10 with the exact probe form above and a Fable model. A
   first, cold run with a 0.05 USD cap spent 0.099 USD in about 4 seconds and was cut off
   (`error_max_budget_usd`, no `rate_limit_event`, so no reading). A second run with a 1.00 USD cap
@@ -1093,6 +1102,22 @@ lower value that does not replace the stored one leaves the window's `readAt` wh
 `fableProbedAt` is the time of the last Fable probe tried, so the once-a-day limit holds when one
 fails. `refresh --force` does not lift that limit.
 
+None of those keys names an account: readings are kept by label. `state/readings/<label>.json`
+holds the reading last saved under that label, and everything that reads one for an account (the
+checks of 6.2, the merge and the age rule below, `pick` and `status`) reads the one under the
+account's current label. A rename (`config set <label> label <new>`, 4A.4) moves, copies, checks
+and clears no reading file, and neither `add` nor `init` checks for one. So after a rename the
+account is judged by whatever reading is stored under its new label, which may be none or an older
+one left under that label (a rename back to a label it held before can find the reading it left
+there), and an account that later takes the old label is judged by whatever reading is stored
+there, which can be the one the renamed account left. A reading left under a label counts like any
+stored one: until it is older than `picker.maxReadingAgeMinutes` (15 minutes by default) or a
+5-hour or weekly reset time in it passes, `pick` runs no plain probe and judges the account by it,
+its 5-hour window included, so a main account can be picked on a 5-hour use that is older and
+lower than its newest one, or on another account's use. After that, the account's own replies
+merge into it by the rule below, and while it holds a 5-hour window, a reply without one is
+refused (6.2), so an account whose replies carry no 5-hour window is then skipped (7.2 rule 10).
+
 `status` shows the age; the menu greys a row whose
 reading is older than twice the refresh interval. `pick` refreshes any candidate whose reading is
 older than `picker.maxReadingAgeMinutes` (default 15) and skips the probe when the reading is
@@ -1122,9 +1147,12 @@ with `seven_day`, and 31 days 5 minutes for any other name. From that time on,
 the next reading with a later reset time replaces it. A stored `resetsAt` more than its window
 length plus 600 seconds after the new reading's time (a file from before the bounds of 6.2, an
 edited one, or a reading taken while the clock ran ahead) is not trusted, so the next valid
-reading replaces it at once. A stored file that does not decode as a whole reads as no reading,
-and the next good probe writes a new one; a stored reset time that does not decode reads as
-unknown, and a stored use outside 0 to 100 is dropped. A reading whose
+reading replaces it at once. A stored file that does not decode as a whole, or whose `source` is
+not `probe` or `estimate`, reads as no reading, and the next good probe writes a new one; a stored
+reset time that does not decode reads as unknown, and a stored use outside 0 to 100 is dropped. A
+stored file that cannot be read at all (for example a link, a file that is not regular, or one
+over 1 MiB) is neither read nor replaced: every refresh of that account fails until the file can
+be read, and `pick` skips the account as `no weekly reading`. A reading whose
 `resetsAt` has passed, that has no weekly value, or that is dated more than 60 seconds in the
 future counts as stale: it is refreshed first, and the account is skipped with
 `window reset, refresh failed` or `no weekly reading` if that refresh fails. A `pick` forces the
@@ -1232,8 +1260,9 @@ LaunchAgent, are parked for a later release.
 `configDir: null` means the default folder with `CLAUDE_CONFIG_DIR` unset. The tool cannot learn a
 subscription's end date, because none of its sources carries one. An account that ends soon is
 marked `endingSoon: true` (`config set <label> ending-soon true`): the picker spends such an
-account first (rule 5 in 7.2), and the tool notices the end itself on the day the plan tier drops
-(section 9, `account_ended`). `config set <label> ends <date>` sets a date that is known.
+account first within its 5-hour group (rule 5 in 7.2), and the tool notices the end itself on the
+day the plan tier drops (section 9, `account_ended`). `config set <label> ends <date>` sets a date
+that is known.
 
 An account keeps one end marker: `config set <label> ends <date>` also clears `endingSoon`,
 `config set <label> ending-soon true` also clears `endsAt`, `config set <label> ends none` clears
@@ -1280,17 +1309,18 @@ the last point at which a launch may start. A validator refuses any point above 
    point value, linear between points, flat beyond the ends. Eligible only if
    `weekly used + marginPercent <= line`.
 3. Pool account: eligible only if `limitedAtPercent - weekly used >= minRoomPercent` and the
-   5-hour window (when present) is under `limitedAtPercent`.
+   5-hour window (when present) is under `limitedAtPercent`. With no 5-hour window, rule 10
+   applies.
 4. Model-aware: for a Fable launch, also require Fable room (7.4): with a Fable reading,
    `100 - usedPercent >= fable.minRoomPercentOfCap`, both in percent of the Fable cap; with no
    reading, the guaranteed room of the fallback `>= minRoomPercent`. Skip any account with
    `fable.allowLaunches: false`.
-5. Rank the eligible by effective expiry `min(weekly reset, endsAt)`, soonest first. An account
-   marked `endingSoon` with no `endsAt` ranks as if its `endsAt` were
-   `picker.endingSoonAssumeDays` (default 2) from now; a known `endsAt` sooner than that still
-   ranks ahead of it. Ties go to the most room (`line - marginPercent - used` for a protected
-   account, `limitedAtPercent - used` for a pool account), then to config order, so the answer
-   never flips between runs.
+5. Rank first the eligible that have a 5-hour window, then those without one (rule 10); within
+   each group, by effective expiry `min(weekly reset, endsAt)`, soonest first. An account marked
+   `endingSoon` with no `endsAt` ranks as if its `endsAt` were `picker.endingSoonAssumeDays`
+   (default 2) from now; a known `endsAt` sooner than that still ranks ahead of it. Ties go to the
+   most room (`line - marginPercent - used` for a protected account, `limitedAtPercent - used` for
+   a pool account), then to config order, so the answer never flips between runs.
 6. Nothing eligible: return `label: null` with one reason per account; exit code 2. Never fall
    back past the line.
 7. Lease: `pick` runs its refreshes first, then holds an exclusive lock on `locks/pick.lock` (wait
@@ -1300,13 +1330,43 @@ the last point at which a launch may start. A validator refuses any point above 
    future is dropped. For `picker.leaseMinutes` (default 10) each open lease adds
    `picker.expectedRunPercent` (default 5) to that account's weekly used and 5-hour used before
    rules 2 to 4, so an account near its limit is not handed out again seconds later. Rule 5 still
-   ranks the soonest expiry first, so two callers picking seconds apart can land on the same
-   account. `pick --dry-run` takes the lock but writes no lease.
+   ranks the soonest expiry first within each group, so two callers picking seconds apart can land
+   on the same account. `pick --dry-run` takes the lock but writes no lease.
 8. Units: the probe's `utilization` (0 to 1) is stored as percent 0 to 100 with one decimal
    before any rule runs.
-9. A protected account also needs `fiveHour used + expectedRunPercent < limitedAtPercent` when a
-   5-hour window is present, so a worker cannot lock the user out of the main account until the
-   5-hour reset.
+9. A protected account also needs a 5-hour window and
+   `fiveHour used + expectedRunPercent < limitedAtPercent`, so a worker cannot lock the user out
+   of the main account until the 5-hour reset. A window with a use and no reset time is present.
+   Without one it is not eligible: `No 5-hour reading, which the main account needs.`
+10. No 5-hour reading. A protected account whose stored reading, the one under its current label
+    (6.3), holds no 5-hour window is never picked (rule 9), and with nothing else eligible the
+    pick returns `label: null` (rule 6); `config clear-main` makes it a pool account, without its
+    reserve line. A pool account with no 5-hour window is judged on its weekly use (rules 3, 4 and
+    7) and ranks after every eligible account that has one (rule 5). When it is eligible, its
+    candidate reason ends with `5-hour use unknown.`, and so does the pick's reason when it is
+    picked, after any Fable note. A pick of an account that has a 5-hour window, made while an
+    account without one is eligible, ends with `Accounts with no 5-hour reading go last.` Whether
+    an account has a 5-hour reading follows the reading stored under its current label, as the
+    cache reads it (6.2, 6.3). While that reading holds a 5-hour window, a reply without one is
+    refused (6.2), so once the reading is stale or its window has reset, the account is skipped as
+    `stale reading, refresh failed` or `window reset, refresh failed` until a reply carries the
+    window or the stored reading no longer holds one. When the stored reading holds no 5-hour
+    window, whatever the cause (for example the service never reported one, `remove` deleted the
+    reading, a `login` account was renamed to a label with no stored reading, or the stored file
+    does not decode as a reading or holds a 5-hour use outside 0 to 100, 6.3), the next reply
+    without the window is stored, and the account is judged as one with no 5-hour reading. A
+    stored file that cannot be read at all fails every refresh instead, so the account is skipped
+    as `no weekly reading` until it can be read (6.3). So when the service never reports a 5-hour
+    window for an account, no reply adds one, and the account is judged as one with no 5-hour
+    reading unless a reading left under its label holds one (6.3). In that case the account is
+    judged by that reading, its 5-hour window included, while the reading is fresh (younger than
+    `picker.maxReadingAgeMinutes`, 15 minutes by default), so a main account can be picked on it,
+    and is skipped once the reading is stale or its window has reset. A reply that names
+    `five_hour` with no value fails the probe. `init` and `add` make pool accounts; of the
+    commands, only `config set-main` makes a main one. The reason: with no 5-hour reading the tool
+    cannot show that a run leaves the user room on the main account, and a lockout until the reset
+    cannot be undone, so there the unknown is the worst case. On a pool account an unread limit
+    costs worker runs, so it stays usable but never ahead of an account known to have room.
 
 The line applies only to `pick`. The user's own chats on the main account never call `pick` and
 are never gated.
@@ -1507,7 +1567,11 @@ Field rules:
   `{ "code": ..., "text": ... }`. `source` is one of `probe | estimate | none`.
 - `reserve` is present only on `main` accounts:
   `{ "linePercent": 63.3, "marginPercent": 5, "launchAllowed": true, "daysLeft": 4.0 }`.
-- `fiveHour` is null when the plan has no 5-hour window.
+  `launchAllowed` is the reserve line's answer alone (7.2 rule 2); `pick` also applies rules 7
+  (open leases), 9 and 10, and `next` rules 9 and 10, so either can refuse a main account whose
+  `launchAllowed` is true.
+- `fiveHour` is null when the stored reading holds no 5-hour window, whether or not the plan has
+  one (7.2).
 - `stateSince` is when the tool first saw the current `state` with its error code (null before the
   first reading of an account that is `ok`).
   `limited` is null unless `state` is `limited`; then it is
@@ -2254,7 +2318,7 @@ empty lists, and the events record keeps only each label's newest line.
                                           only while the account's entries are still the ones
                                           the person was shown
   state/status.json                0600   last merged status (what the menu reads)
-  state/readings/<label>.json      0600   last reading per account, with source and time
+  state/readings/<label>.json      0600   last reading saved under the label, with source and time
   state/picks.log                  0600   one line per pick: time, model, label or none, lease id
                                           or `-`, reason; no line for a dry run
   state/history/<label>.jsonl      0600   readings history, one JSON line per changed reading (10.4)

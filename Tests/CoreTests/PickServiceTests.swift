@@ -645,6 +645,75 @@ import Testing
         #expect(launchFiles(t).isEmpty)
     }
 
+    @Test func aMainAccountWhoseRepliesNeverNameFiveHourIsRefused() throws {
+        let (t, service) = try setUp([login(role: Role.main)])
+        // Nothing is stored, and the reply carries only the weekly use.
+        let seconds = Int(Date().timeIntervalSince1970)
+        try t.fake(
+            "probe.jsonl",
+            "{\"type\":\"rate_limit_event\",\"rate_limit_info\":{\"status\":\"allowed\","
+                + "\"unifiedWindows\":{\"seven_day\":{\"utilization\":0.1,\"resetsAt\":"
+                + "\(seconds + 3 * 86_400)}}}}\n")
+        let missing = "No 5-hour reading, which the main account needs."
+        let result = try service.pick(PickRequest())
+        #expect(result.label == nil)
+        #expect(result.candidates.map(\.reason) == [missing])
+        #expect(result.reason == "No account has room. main: " + missing)
+        #expect(launchFiles(t).isEmpty)
+        #expect(try LeaseStore(context: t.context).current(now: Date(), leaseMinutes: 600).isEmpty)
+        let stored = try #require(try ReadingStore(context: t.context).load(label: "main"))
+        #expect(stored.sevenDay?.usedPercent == 10)
+        #expect(stored.fiveHour == nil)
+    }
+
+    @Test func aStoredReadingThatCannotBeReadCountsAsNoFiveHourWindow() throws {
+        let missing = "No 5-hour reading, which the main account needs."
+        for role in [Role.pool, Role.main] {
+            for damage in ["a file that does not decode", "a 5-hour use outside 0 to 100"] {
+                let (t, service) = try setUp([login(role: role)])
+                let store = ReadingStore(context: t.context)
+                let now = Date()
+                let weeklyReset = Int(now.timeIntervalSince1970) + 3 * 86_400
+                if damage == "a file that does not decode" {
+                    try NoFollowWriter(root: t.context.dataRoot).put(
+                        Data("{not json".utf8), folders: Layout.readingsFolders,
+                        name: Layout.readingName("main"))
+                } else {
+                    // Stored 20 minutes ago, so the pick probes again.
+                    let old = now.addingTimeInterval(-1_200)
+                    try store.save(
+                        Reading(
+                            readAt: old,
+                            windows: [
+                                WindowName.sevenDay: WindowReading(
+                                    usedPercent: 10,
+                                    resetsAt: Date(timeIntervalSince1970: Double(weeklyReset)),
+                                    readAt: old),
+                                WindowName.fiveHour: WindowReading(
+                                    usedPercent: 150, resetsAt: now.addingTimeInterval(3_600),
+                                    readAt: old),
+                            ]), label: "main")
+                }
+                try t.fake(
+                    "probe.jsonl",
+                    "{\"type\":\"rate_limit_event\",\"rate_limit_info\":{\"status\":\"allowed\","
+                        + "\"unifiedWindows\":{\"seven_day\":{\"utilization\":0.1,\"resetsAt\":"
+                        + "\(weeklyReset)}}}}\n")
+                let result = try service.pick(PickRequest(dryRun: true))
+                if role == Role.main {
+                    #expect(result.label == nil, "\(damage)")
+                    #expect(result.candidates.map(\.reason) == [missing], "\(damage)")
+                } else {
+                    #expect(result.label == "main", "\(damage)")
+                    #expect(result.reason.hasSuffix(" 5-hour use unknown."), "\(damage)")
+                }
+                let stored = try #require(try store.load(label: "main"))
+                #expect(stored.fiveHour == nil, "\(damage)")
+                #expect(stored.sevenDay?.usedPercent == 10, "\(damage)")
+            }
+        }
+    }
+
     @Test(arguments: ["null", "6 days out", "2 days out"])
     func aHeldWeeklyWindowNeverKeepsLessUseThanTheReplyGives(weeklyReset: String) throws {
         let (t, service) = try setUp([login(role: Role.main)])

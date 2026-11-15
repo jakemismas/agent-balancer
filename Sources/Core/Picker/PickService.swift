@@ -51,6 +51,11 @@ public struct PickService: Sendable {
         let prefixlessReason =
             request.caller == .typed ? SessionFolder.prefixlessReason(context: context) : nil
         let ambientKey = inherited.key
+        // No measurement says a background worker ignores a hooks-off or stored-login name.
+        if request.caller == .typed {
+            try Self.checkHooksOff(inherited)
+            try Self.checkStoredLogin(inherited)
+        }
 
         // Settings of the default folder: hook record, and key names (never values).
         let state = settingsState()
@@ -65,7 +70,7 @@ public struct PickService: Sendable {
         let runner = ClaudeRunner(context: context)
         for account in config.accounts {
             if let skip = preSkip(
-                account, request: request, prefixlessReason: prefixlessReason,
+                account, config: config, request: request, prefixlessReason: prefixlessReason,
                 settingsIssue: settingsIssue, carriesKey: carriesKey, runner: runner,
                 observations: &observations)
             {
@@ -126,7 +131,14 @@ public struct PickService: Sendable {
         {
             skips[account.label] = "login rejected"
         }
-
+        // A sign-in may have switched since the checks before the probes, so a login or folder
+        // account is checked again before its reading is trusted.
+        for account in config.accounts
+        where skips[account.label] == nil && [Kind.login, Kind.folder].contains(account.kind) {
+            if let issue = Refresher.identityIssue(account: account, runner: runner, now: now) {
+                skips[account.label] = Display.safe(issue.text, limit: 200)
+            }
+        }
         var decision: PickDecision
         var leaseId: String?
         var path: URL?
@@ -198,7 +210,7 @@ public struct PickService: Sendable {
                 result.launchArgs = typedArgs
                 result.backgroundOnly = ambientKey
             case .launcher:
-                result.unsetEnv = Recipe.unsetNames(env: env)
+                result.unsetEnv = Recipe.unsetNames(env: env, ambient: context.ambient)
             }
         }
         if !request.dryRun {
@@ -217,11 +229,33 @@ public struct PickService: Sendable {
     struct AmbientState {
         var configDir: Bool
         var key: Bool
+        /// A name that switches hooks off in the session the line starts.
+        var hooksOff: Bool
+        /// The first name that chooses the stored login, so the refusal can name it.
+        var storeName: String?
 
         init(_ ambient: [String: String]) {
+            hooksOff = ambient.keys.contains { ProtectedEnv.mayDisableHooks($0) }
             configDir = ambient[ProtectedEnv.configDirVariable] != nil
-            key = ([ProtectedEnv.tokenVariable] + ProtectedEnv.keyNames)
-                .contains { ambient[$0] != nil }
+            key = ambient.keys.contains { ProtectedEnv.carriesCredential($0) }
+            storeName = ProtectedEnv.storeNames.first { ambient[$0] != nil }
+        }
+    }
+
+    static func checkHooksOff(_ ambient: AmbientState) throws {
+        if ambient.hooksOff {
+            throw ToolError(
+                "A variable that switches hooks off is set in this shell, so no line is given. Unset it in your own terminal and try again."
+            )
+        }
+    }
+
+    /// A folder prefix does not override these names, so no kind is offered on such a line.
+    static func checkStoredLogin(_ ambient: AmbientState) throws {
+        if let name = ambient.storeName {
+            throw ToolError(
+                "\(name) is set in this shell and chooses which stored login a session reads, so no line is given. Start the line from a shell without it."
+            )
         }
     }
 
@@ -242,10 +276,18 @@ public struct PickService: Sendable {
 
     /// A reason to leave an account out before any probe, or nil.
     func preSkip(
-        _ account: Account, request: PickRequest, prefixlessReason: String?, settingsIssue: String?,
+        _ account: Account, config: Config, request: PickRequest, prefixlessReason: String?,
+        settingsIssue: String?,
         carriesKey: Bool, runner: ClaudeRunner, observations: inout StatusObservations
     ) -> Skip? {
         if request.exclude.contains(account.label) { return Skip("excluded by caller") }
+        if account.role != Role.main, let email = account.email?.lowercased(),
+            config.accounts.contains(where: {
+                $0.label != account.label && $0.email?.lowercased() == email
+            })
+        {
+            return Skip("duplicate login", code: .duplicateLogin)
+        }
         if let ends = Picker.endsAtEnd(account.endsAt), clock() >= ends {
             return Skip("account ended")
         }
@@ -258,7 +300,11 @@ public struct PickService: Sendable {
         // A folder account's recipe carries its own literal prefix, which beats whatever the
         // caller's environment holds. A login or token recipe has no prefix.
         if let prefixlessReason, account.kind != Kind.folder { return Skip(prefixlessReason) }
+        // A folder account links the default folder's settings file, so it carries the same keys.
         if account.kind == Kind.folder {
+            if carriesKey {
+                return Skip("settings carry an API key or key helper", code: .keyInSettings)
+            }
             let outcome = Verifier.failures(
                 context: context, account: account, runner: runner, settingsIssue: settingsIssue,
                 now: clock(), stopAtFirst: true)
@@ -271,10 +317,10 @@ public struct PickService: Sendable {
             return nil
         }
         if let settingsIssue { return Skip(settingsIssue, code: .settingsChanged) }
+        if carriesKey {
+            return Skip("settings carry an API key or key helper", code: .keyInSettings)
+        }
         if account.kind == Kind.token {
-            if carriesKey {
-                return Skip("settings carry an API key or key helper", code: .keyInSettings)
-            }
             // A file that does not parse counts as no token, so it is never probed or offered.
             guard TokenStore.isUsable(context: context, label: account.label) else {
                 return Skip("no token saved", code: .tokenMissing)

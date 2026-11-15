@@ -302,3 +302,25 @@
   without waiting for the reading to age, unless its probe fails or another command records the
   account's rejection after that probe. A plan already recorded for an account stays as it is,
   and a check that sees another plan shows `plan_changed`, as `status` does.
+- Security audit (2026-11-15). The pre-release security audit fixed these. The email scrubber
+  reads text in one pass, so a long line can no longer stall a command. The environment that
+  `run`, `login` and a launcher give `claude` now leaves out every Claude Code variable but the
+  chat marker, and every name the installed `claude` reads to find a stored login, a credential
+  store, a token file or a sign-in endpoint, such as `CLAUDE_SECURESTORAGE_CONFIG_DIR`. A typed
+  `pick` or `run --print-command` refuses while a variable that chooses the stored login, switches
+  hooks off or points `claude` at another settings source (`CLAUDE_CODE_MANAGED_SETTINGS_PATH`,
+  `CLAUDE_CODE_REMOTE_SETTINGS_PATH`) is set, and answers background only under any credential
+  variable, not just the three key names. The default folder's settings are checked for
+  credential names only, so a harmless name such as `CLAUDE_CODE_SUBAGENT_MODEL` skips no
+  account, while a key helper, a credential name or `CLAUDE_CONFIG_DIR` there skips every account,
+  and a name there that switches hooks off refuses every account as hooks off. Caller settings take
+  only `env` and `crossSessionInbound`, never a key that runs a command or switches hooks off, and
+  the config's two launch lists are checked when the config loads and again at pick time; names
+  of your own such as `CLAUDE_ROLE` and `CLAUDE_CLIENT` are allowed. Every launch file sets
+  `disableAllHooks` to false. An unreadable lease file stops a pick instead of reading as no
+  picks. A login or folder account with no recorded email fails its checks, a pool account that
+  shares another account's email is skipped, and a sign-in is checked again before and after each
+  probe and under the pick lock. A token's rejection survives a damaged status file. `run`
+  refuses the options that switch hooks off or start the session somewhere else, and `init`,
+  `uninstall` and `login --paste` need an interactive terminal. A token account whose reset times
+  match the main account's gets a `possible_duplicate` warning and is still offered.

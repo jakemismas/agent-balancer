@@ -31,7 +31,7 @@ private func exists(_ url: URL) -> Bool { FileManager.default.fileExists(atPath:
 private func launchEnv(_ url: URL) -> [String: String]? {
     guard let data = try? Data(contentsOf: url),
         let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-        object.count == 1
+        object.keys.allSatisfy({ $0 == "env" || $0 == "disableAllHooks" })
     else { return nil }
     return object["env"] as? [String: String]
 }

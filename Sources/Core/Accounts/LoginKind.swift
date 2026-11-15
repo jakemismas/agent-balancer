@@ -32,6 +32,10 @@ public struct LoginKind: AccountKindHandler {
             emailDigest: account.emailDigest)
         // A stored claude.ai sign-in reports its email, so an expected email is always compared:
         // a missing one fails like a different one.
+        // An account with no recorded email cannot be told from another sign-in, so it fails.
+        if account.email == nil {
+            check.issues.append(Issue(.checkFailed, .error, Messages.emailNotRecorded))
+        }
         if let expected = account.email {
             if let actual = status.email {
                 if expected.lowercased() != actual.lowercased() {

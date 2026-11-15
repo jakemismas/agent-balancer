@@ -80,15 +80,22 @@ public struct PickResult: Encodable, Equatable, Sendable {
 /// validators: a launch file path under the data folder.
 public enum Recipe {
     /// The names a launcher removes from the child's environment (section 4A.3).
-    public static let unsetNames = [
-        ProtectedEnv.configDirVariable, ProtectedEnv.tokenVariable, "ANTHROPIC_API_KEY",
-        "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_USE_BEDROCK",
-        "CLAUDE_CODE_USE_VERTEX",
-    ]
+    public static let unsetNames = ProtectedEnv.baselineUnset
 
-    /// The names a launcher removes, less `CLAUDE_CONFIG_DIR` when the recipe's `env` sets it.
-    public static func unsetNames(env: [String: String]) -> [String] {
-        unsetNames.filter { env[$0] == nil }
+    /// The names a launcher removes, less `CLAUDE_CONFIG_DIR` when the recipe's `env` sets it. The
+    /// list is the fixed names plus every protected name the caller's environment holds.
+    public static func unsetNames(env: [String: String], ambient: [String: String] = [:])
+        -> [String]
+    {
+        var names = unsetNames
+        for name in ambient.keys.sorted()
+        where (ProtectedEnv.isProtected(name) || ChildEnvironment.dropsForLaunch(name))
+            && !names.contains(name)
+            && name.range(of: "^[A-Za-z_][A-Za-z0-9_]*$", options: .regularExpression) != nil
+        {
+            names.append(name)
+        }
+        return names.filter { env[$0] == nil }
     }
 
     /// `CLAUDE_CONFIG_DIR='<folder>' `, written in front of `claude` for a folder account. The

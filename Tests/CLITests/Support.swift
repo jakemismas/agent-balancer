@@ -247,6 +247,22 @@ struct CLIHome {
     {
         var env = ["HOME": home.path, "PATH": "/usr/bin:/bin"]
         for (k, v) in extra { env[k] = v }
+        // These commands need a person at a terminal, so what a test pipes in is typed on one.
+        let needsTerminal =
+            ["init", "uninstall"].contains(args.first ?? "")
+            || (args.first == "login" && args.contains("--paste"))
+        if needsTerminal {
+            return try Support.runOnTerminal(exe, args, env: env, input: stdin ?? "")
+        }
+        return try Support.run(exe, args, env: env, stdin: stdin.map { Data($0.utf8) })
+    }
+
+    /// Runs with a pipe as input even for a command that needs a terminal, to test its refusal.
+    func runPiped(_ args: [String], env extra: [String: String] = [:], stdin: String? = nil) throws
+        -> Support.Output
+    {
+        var env = ["HOME": home.path, "PATH": "/usr/bin:/bin"]
+        for (k, v) in extra { env[k] = v }
         return try Support.run(exe, args, env: env, stdin: stdin.map { Data($0.utf8) })
     }
 

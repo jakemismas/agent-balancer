@@ -220,11 +220,11 @@ import Testing
         refuses(service, t, code: .settingsChanged)
     }
 
-    @Test func aStoredKeyRefusesATokenAccountOnly() throws {
+    @Test func aStoredKeyRefusesEveryAccountKind() throws {
         let (t, service) = try setUp(settings: #"{"apiKeyHelper":"x"}"#)
         try installToken(t)
         refuses(service, t, label: "pool-a", code: .keyInSettings)
-        _ = try service.prepareRun(label: "main", arguments: [])
+        refuses(service, t, label: "main", code: .keyInSettings)
     }
 
     @Test func theVerdictHoldsNoEnvNameNoValueAndNoCommand() throws {
@@ -253,7 +253,7 @@ import Testing
     @Test func theSettingsPairComesFirstInTheArgvAndTheLine() throws {
         let (t, service) = try setUp(settings: hookBody)
         for arguments in [
-            ["-c"], ["foo", "--", "bar"], ["--model"], ["x", "mcp", "list"], ["--", "-p"],
+            ["-c"], ["foo", "--", "bar"], ["--model"], ["x", "y", "z"], ["--", "-p"],
             ["-notacommand"],
         ] {
             let launch = try service.prepareRun(label: "main", arguments: arguments)
@@ -285,9 +285,13 @@ import Testing
             refuses(service, t, arguments: [name])
             refuses(service, t, arguments: [name, "x"], printOnly: true)
         }
-        // Later arguments and other first arguments are never refused for their words.
-        _ = try service.prepareRun(label: "main", arguments: ["--name", "list"])
-        _ = try service.prepareRun(label: "main", arguments: ["-p", "mcp"])
+        // A leading option does not hide the subcommand, and the hook-off options are refused.
+        refuses(service, t, arguments: ["--verbose", "auth", "logout"])
+        refuses(service, t, arguments: ["--model", "x", "mcp", "list"])
+        for option in ["--bare", "--safe-mode", "--restricted", "--setting-sources=project"] {
+            refuses(service, t, arguments: [option])
+        }
+        _ = try service.prepareRun(label: "main", arguments: ["-p", "a longer prompt"])
         _ = try service.prepareRun(label: "main", arguments: ["mcp list now"])
         _ = try service.prepareRun(label: "main", arguments: ["-mcp"])
     }
@@ -360,6 +364,34 @@ import Testing
             refuses(service, t, label: "pool-a", printOnly: true)
             _ = try service.prepareRun(label: "pool-a", arguments: [])
         }
+    }
+
+    @Test func printOnlyRefusesUnderAStoredLoginOrSettingsSourceNameButNotAHarmlessOne() throws {
+        for name in ProtectedEnv.storeNames + ProtectedEnv.settingsSourceNames {
+            let (t, service) = try setUp(settings: hookBody, ambient: [name: "/x"])
+            try installToken(t)
+            refuses(service, t, printOnly: true)
+            refuses(service, t, label: "pool-a", printOnly: true)
+            // Starting the session drops the name from the child, so run itself goes ahead.
+            _ = try service.prepareRun(label: "pool-a", arguments: [])
+        }
+        for name in ["CLAUDE_CODE_SUBAGENT_MODEL", "ANTHROPIC_MODEL", "CLAUDE_CODE_ENTRYPOINT"] {
+            let (t, service) = try setUp(settings: hookBody, ambient: [name: "x"])
+            _ = try service.prepareRun(label: "main", arguments: [], printOnly: true)
+            withExtendedLifetime(t) {}
+        }
+    }
+
+    @Test func aStoredKeyNameRefusesRunButAHarmlessNameDoesNot() throws {
+        let (t, service) = try setUp(settings: #"{"env":{"ANTHROPIC_PROFILE":"x"}}"#)
+        try installToken(t)
+        refuses(service, t, label: "pool-a", code: .keyInSettings)
+        refuses(service, t, label: "main", code: .keyInSettings)
+        let (u, other) = try setUp(settings: #"{"env":{"CLAUDE_CODE_SUBAGENT_MODEL":"x"}}"#)
+        try installToken(u)
+        _ = try other.prepareRun(label: "main", arguments: [])
+        _ = try other.prepareRun(label: "pool-a", arguments: [])
+        withExtendedLifetime(t) {}
     }
 
     @Test func printOnlyAndATypedPickUseTheSameAmbientPredicate() throws {

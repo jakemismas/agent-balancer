@@ -21,6 +21,15 @@ enum ClaudeSubcommands {
         "add", "agents", "attach", "auth", "config", "doctor", "install", "kill", "list", "login",
         "logout", "logs", "mcp", "plugin", "plugins", "project", "rc", "remote-control", "remove",
         "respawn", "rm", "serve", "setup-token", "status", "stop", "update", "upgrade", "uninstall",
+        "purge", "import", "gateway", "auto-mode", "ultrareview",
+    ]
+
+    /// Options that switch hooks off, change which settings files a session reads, or start the
+    /// session on claude.ai, in another environment or in the desktop app, where the launch
+    /// file's account, token and hooks do not govern it.
+    static let refusedOptions: [String] = [
+        "--bare", "--safe-mode", "--restricted", "--setting-sources", "--cloud", "--environment",
+        "--desktop", "--teleport", "--remote", "--remote-control", "--rc",
     ]
 }
 
@@ -72,9 +81,19 @@ extension PickService {
             throw ToolError(
                 "Pass no --settings to run. It adds the account's own settings file itself.")
         }
-        if let first = arguments.first, ClaudeSubcommands.names.contains(first) {
+        for option in arguments {
+            if ClaudeSubcommands.refusedOptions.contains(where: {
+                option == $0 || option.hasPrefix($0 + "=")
+            }) {
+                throw ToolError(
+                    "run keeps the account's hooks on, so it refuses '\(Display.safe(option, limit: 32))'."
+                )
+            }
+        }
+        // A leading global option moves the subcommand to a later operand, so every operand counts.
+        if let verb = arguments.first(where: { ClaudeSubcommands.names.contains($0) }) {
             throw ToolError(
-                "run starts a session, and '\(first)' is a claude command. Start with an option or a longer prompt."
+                "run starts a session, and '\(verb)' is a claude command. Start with an option or a longer prompt."
             )
         }
     }
@@ -115,6 +134,8 @@ extension PickService {
         let runner = ClaudeRunner(context: context)
         let ambient = AmbientState(context.ambient)
         if printOnly {
+            try Self.checkHooksOff(ambient)
+            try Self.checkStoredLogin(ambient)
             try Self.checkPrintableArguments(arguments)
             if ambient.key {
                 throw ToolError(
@@ -131,7 +152,7 @@ extension PickService {
         // variable cannot change where a started session lands.
         let request = PickRequest(caller: printOnly ? .typed : .launcher)
         if let skip = preSkip(
-            account, request: request,
+            account, config: config, request: request,
             prefixlessReason: printOnly ? SessionFolder.prefixlessReason(context: context) : nil,
             settingsIssue: seen.issue, carriesKey: seen.carriesKey, runner: runner,
             observations: &observations)
@@ -156,6 +177,11 @@ extension PickService {
         // Another command may have recorded the token's rejection while this run waited.
         if account.kind == Kind.token, tokenRejectionStands(account) {
             throw ToolError(Messages.probeLoginRejected, code: .loginRejected)
+        }
+        if [Kind.login, Kind.folder].contains(account.kind),
+            let issue = Refresher.identityIssue(account: account, runner: runner, now: now)
+        {
+            throw ToolError(issue.text, code: issue.code)
         }
         let leaseStore = LeaseStore(context: context)
         var leases = try leaseStore.current(now: now, leaseMinutes: config.picker.leaseMinutes)

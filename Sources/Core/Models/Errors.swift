@@ -87,7 +87,7 @@ public enum Messages {
     public static let settingsMovedAfterApproval =
         "The default folder's settings changed after you approved, so nothing was changed."
     public static let keyInSettings =
-        "Settings carry an API key or key helper. Token accounts are skipped."
+        "Settings carry an API key or key helper. Every account is skipped."
     public static let notSetUp = "Setup has not run. Run `agent-balancer init`."
 
     public static func notLinked(_ label: String) -> String {
@@ -119,6 +119,9 @@ public enum Messages {
     /// A sign-in that reports no email cannot be matched to the account's expected email.
     public static let signInEmailMissing =
         "Check failed: the sign-in reported no email, so it could not be confirmed as this account."
+    /// A login or folder account that holds no email cannot be checked against its sign-in.
+    public static let emailNotRecorded =
+        "Check failed: no email is recorded for this account, so its sign-in cannot be confirmed."
     public static let signExpectedBackIn =
         "Sign the expected account back in to this folder. Do not relabel the folder."
     /// The same step for a login account, the default folder's own sign-in.

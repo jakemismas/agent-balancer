@@ -150,6 +150,10 @@ struct LinkCommand: ParsableCommand {
             for entry in facts.hooks { print("  + \(entry.summary)") }
         }
         print("disableAllHooks: \(facts.disableAllHooks ? "present" : "not present")")
+        if !facts.hooksOffEnvNames.isEmpty {
+            let names = facts.hooksOffEnvNames.map { Display.safe($0, limit: 64) }
+            print("env names that switch hooks off: \(names.joined(separator: ", "))")
+        }
         let covered = folders.filter { hooks.isLinked($0.label) && hooks.sharesSettings($0.label) }
         if all || label != nil {
             let names = covered.map { Display.safe($0.label, limit: 32) }

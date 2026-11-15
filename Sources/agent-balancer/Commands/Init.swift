@@ -12,6 +12,9 @@ struct InitCommand: ParsableCommand {
 
     func run() throws {
         let context = ToolContext.current()
+        // Init accepts the default folder's hooks as the trusted baseline, so it needs a person.
+        try Shared.requireOwnTerminal(context)
+        try Shared.requireTerminal()
         let existing = try ConfigStore(context: context).load()
         if existing?.loginAccount != nil {
             throw ToolError("Already set up. Run `agent-balancer doctor` to check it.")

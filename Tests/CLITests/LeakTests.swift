@@ -1,6 +1,13 @@
 import Foundation
 import Testing
 
+/// Accepted residual: the launch file hands a token account's setup-token to the launched session
+/// through settings `env`. That session exports it to its own subprocesses (shell tools, hooks,
+/// status line, MCP servers), and a misbehaving session could print it into its own transcript.
+/// The tool cannot scrub a session it does not run, and this suite checks only the tool's own
+/// outputs and the two homes it writes. Whether Claude Code removes the variable from subprocess
+/// environments was not measured.
+///
 /// Canaries are built at runtime from split strings so no whole token, email or id is stored.
 struct Canary: Sendable {
     let name: String

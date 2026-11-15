@@ -419,7 +419,35 @@ public struct Refresher: Sendable {
         return false
     }
 
+    /// The first error that says a login or folder account is not signed in as its own account, or
+    /// nil. Other kinds have no sign-in to check.
+    static func identityIssue(account: Account, runner: ClaudeRunner, now: Date) -> Issue? {
+        guard [Kind.login, Kind.folder].contains(account.kind),
+            let handler = AccountKinds.handler(for: account.kind)
+        else { return nil }
+        let codes: [StateCode] = [.wrongAccount, .loginRejected, .checkFailed]
+        return handler.check(account: account, runner: runner, now: now).issues.first {
+            $0.severity == .error && codes.contains($0.code)
+        }
+    }
+
+    /// A probe bound to the account's sign-in: it is checked just before the probe and again after
+    /// it, and a reading made while the sign-in was another account's is dropped.
     private func runProbe(account: Account, probe: ProbeContext, fable: Bool)
+        -> ProbeReadResult
+    {
+        if let issue = Self.identityIssue(account: account, runner: runner, now: clock()) {
+            return .failed(issue)
+        }
+        let result = runProbeUnchecked(account: account, probe: probe, fable: fable)
+        guard case .reading = result else { return result }
+        if let issue = Self.identityIssue(account: account, runner: runner, now: clock()) {
+            return .failed(issue)
+        }
+        return result
+    }
+
+    private func runProbeUnchecked(account: Account, probe: ProbeContext, fable: Bool)
         -> ProbeReadResult
     {
         let timeout = fable ? config.fable.probeTimeoutSeconds : config.probe.timeoutSeconds

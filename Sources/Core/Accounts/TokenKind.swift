@@ -12,30 +12,43 @@ enum TokenKind {
         return fileModified
     }
 
-    /// The first other account whose weekly and 5-hour reset times both equal this account's, or
-    /// nil. A reset time that is unknown or already past never counts. Reads no file: it works
-    /// from the readings it is given. The refresher runs it in the reading cache's `afterProbe`
-    /// hook, so it runs on every probe of a token account.
+    /// The first of `possibleDuplicates`, or nil.
     static func possibleDuplicate(
         of label: String, accounts: [Account], readings: [String: Reading], now: Date
     ) -> String? {
-        guard let mine = readings[label] else { return nil }
-        func pair(_ reading: Reading) -> (Date, Date)? {
-            guard let week = reading.sevenDay?.resetsAt, let five = reading.fiveHour?.resetsAt,
-                week > now, five > now
-            else { return nil }
-            return (week, five)
-        }
-        guard let own = pair(mine) else { return nil }
+        possibleDuplicates(of: label, accounts: accounts, readings: readings, now: now).first
+    }
+
+    /// Every other account whose reset times equal this account's. The weekly reset must be known
+    /// and still ahead on both sides. The 5-hour reset must match when both sides have one, and an
+    /// idle account has none, so the weekly time alone decides then. Reads no file: it works from
+    /// the readings it is given. The refresher runs it in the reading cache's `afterProbe` hook,
+    /// so it runs on every probe of a token account.
+    static func possibleDuplicates(
+        of label: String, accounts: [Account], readings: [String: Reading], now: Date
+    ) -> [String] {
+        guard let mine = readings[label], let ownWeek = future(mine.sevenDay?.resetsAt, now)
+        else { return [] }
+        let ownFive = future(mine.fiveHour?.resetsAt, now)
+        var found: [String] = []
         for other in accounts where other.label != label {
-            guard let reading = readings[other.label], let theirs = pair(reading) else { continue }
-            if abs(theirs.0.timeIntervalSince(own.0)) < 1
-                && abs(theirs.1.timeIntervalSince(own.1)) < 1
+            guard let reading = readings[other.label],
+                let week = future(reading.sevenDay?.resetsAt, now),
+                abs(week.timeIntervalSince(ownWeek)) < 1
+            else { continue }
+            if let ownFive, let five = future(reading.fiveHour?.resetsAt, now),
+                abs(five.timeIntervalSince(ownFive)) >= 1
             {
-                return other.label
+                continue
             }
+            found.append(other.label)
         }
-        return nil
+        return found
+    }
+
+    private static func future(_ date: Date?, _ now: Date) -> Date? {
+        guard let date, date > now else { return nil }
+        return date
     }
 
     static func duplicateText(_ other: String) -> String {

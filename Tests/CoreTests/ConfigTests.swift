@@ -177,4 +177,38 @@ import Testing
         #expect(bad { $0.launch.settingsKeys = ["a b"] }?.contains("settingsKeys") == true)
         #expect(bad { _ in } == nil)
     }
+
+    @Test func theDesignsExampleLaunchListsLoad() throws {
+        let keys = #""settingsKeys":["env","crossSessionInbound"]"#
+        let names = #""envNames":["CLAUDE_ROLE","CLAUDE_CLIENT"]"#
+        let text = "{\"schemaVersion\":1,\"accounts\":[],\"launch\":{\(keys),\(names)}}"
+        let decoded = try JSONDecoder().decode(Config.self, from: Data(text.utf8))
+        #expect(decoded.launch.settingsKeys == ["env", "crossSessionInbound"])
+        #expect(decoded.launch.envNames == ["CLAUDE_ROLE", "CLAUDE_CLIENT"])
+        #expect(message(decoded) == nil)
+    }
+
+    @Test(arguments: [
+        "hooks", "apiKeyHelper", "statusLine", "permissions", "disableAllHooks", "awsAuthRefresh",
+        "forceLoginMethod", "model",
+    ])
+    func aSettingsKeyThatIsNotOnTheAllowlistIsRefusedAtLoad(key: String) {
+        var c = config([login()])
+        c.launch.settingsKeys = ["env", key]
+        #expect(message(c)?.contains("settingsKeys") == true, "\(key)")
+    }
+
+    @Test(arguments: [
+        "CLAUDE_SECURESTORAGE_CONFIG_DIR", "CLAUDE_CODE_SHELL_PREFIX", "CLAUDE_CODE_CHILD_SESSION",
+        "CLAUDE_JOB_DIR", "CLAUDE_PID", "CLAUDE_CONFIG_DIR", "CLAUDE_ENV_FILE",
+        "ANTHROPIC_BASE_URL", "CLAUDE_BG_SESSION_CREDENTIAL", "CLAUDE_BRIDGE_BASE_URL",
+        "CLAUDE_RUNNER_CLAUDE_BIN", "CCR_OAUTH_TOKEN_FILE", "USE_STAGING_OAUTH",
+        "CLAUDE_LOCAL_OAUTH_API_BASE", "LD_PRELOAD", "DYLD_INSERT_LIBRARIES", "BASH_ENV",
+        "NODE_OPTIONS", "HTTPS_PROXY", "https_proxy", "AGENT_BALANCER_ACCOUNT", "PATH",
+    ])
+    func aNeverAllowedEnvNameIsRefusedAtLoad(name: String) {
+        var c = config([login()])
+        c.launch.envNames = [name]
+        #expect(message(c)?.contains("envNames") == true, "\(name)")
+    }
 }

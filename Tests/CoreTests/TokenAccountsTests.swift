@@ -382,6 +382,27 @@ private func dataText(_ t: TestHome, skipping: URL) -> String {
                 of: "pool-a", accounts: accounts, readings: none, now: now) == nil)
     }
 
+    @Test func everyMatchIsReturnedNotOnlyTheFirst() {
+        let readings = [
+            "main": reading(week: 400_000, five: 9_000),
+            "pool-a": reading(week: 400_000, five: 9_000),
+            "pool-b": reading(week: 400_000, five: 9_000),
+        ]
+        #expect(
+            TokenKind.possibleDuplicates(
+                of: "pool-b", accounts: accounts, readings: readings, now: now)
+                == ["main", "pool-a"])
+    }
+
+    @Test func anIdleSideWithNoFiveHourResetMatchesOnTheWeeklyTime() {
+        var idle = reading(week: 400_000, five: 9_000)
+        idle.windows[WindowName.fiveHour] = nil
+        let readings = ["main": reading(week: 400_000, five: 9_000), "pool-a": idle]
+        #expect(
+            TokenKind.possibleDuplicates(
+                of: "pool-a", accounts: accounts, readings: readings, now: now) == ["main"])
+    }
+
     @Test func theTextNamesTheOtherLabel() {
         #expect(
             TokenKind.duplicateText("main")

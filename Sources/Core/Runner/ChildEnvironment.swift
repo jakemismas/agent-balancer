@@ -38,10 +38,24 @@ public enum ChildEnvironment {
         return env
     }
 
+    /// Names that tie the parent session's job, process or credential channel to a child, which a
+    /// launched session of another account must not inherit.
+    static let launchDropNames = ["CLAUDE_JOB_DIR", "CLAUDE_PID"]
+
+    /// Every `CLAUDE_CODE_` name is dropped except these.
+    static let launchPassCodeNames = ["CLAUDE_CODE_CHILD_SESSION"]
+
+    static func dropsForLaunch(_ name: String) -> Bool {
+        launchDropNames.contains(name)
+            || (name.hasPrefix("CLAUDE_CODE_") && !launchPassCodeNames.contains(name))
+    }
+
     /// For a person's own interactive launch: the user's environment minus the protected group,
     /// with the terminal attached. `TERM` and `SSH_AUTH_SOCK` pass through.
     public static func person(context: ToolContext, configDir: URL?) -> [String: String] {
-        var env = context.ambient.filter { !ProtectedEnv.isProtected($0.key) }
+        var env = context.ambient.filter {
+            !ProtectedEnv.isProtected($0.key) && !dropsForLaunch($0.key)
+        }
         if let dir = configDir, !isDefaultFolder(dir, context: context) {
             env[ProtectedEnv.configDirVariable] = dir.path
         }

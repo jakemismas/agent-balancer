@@ -6,8 +6,6 @@ public enum Scrubber {
     public static let redacted = "[redacted]"
 
     private static let tokenPrefix = try! NSRegularExpression(pattern: "sk-ant-[A-Za-z0-9_-]*")
-    private static let email = try! NSRegularExpression(
-        pattern: "[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\\.[A-Za-z0-9-]+)+")
     private static let uuid = try! NSRegularExpression(
         pattern: "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
     private static let userPath = try! NSRegularExpression(pattern: "/Users/[^/\\s\"'\\\\]+")
@@ -26,7 +24,7 @@ public enum Scrubber {
     /// Second pass: email addresses, UUIDs and `/Users/<name>`. For stderr, error texts and log
     /// lines only, never for the JSON fields the readers map.
     public static func personalPass(_ text: String) -> String {
-        var out = replace(email, in: text, with: "[email]")
+        var out = redactEmails(text)
         out = replace(uuid, in: out, with: "[id]")
         out = replace(userPath, in: out, with: "/Users/[user]")
         return out
@@ -46,6 +44,59 @@ public enum Scrubber {
         return regex.stringByReplacingMatches(
             in: text, options: [], range: range,
             withTemplate: NSRegularExpression.escapedTemplate(for: template))
+    }
+
+    private static func isLocalByte(_ b: UInt8) -> Bool {
+        (b >= 0x30 && b <= 0x39) || (b >= 0x41 && b <= 0x5A) || (b >= 0x61 && b <= 0x7A)
+            || b == 0x2E || b == 0x5F || b == 0x25 || b == 0x2B || b == 0x2D
+    }
+
+    private static func isLabelByte(_ b: UInt8) -> Bool {
+        (b >= 0x30 && b <= 0x39) || (b >= 0x41 && b <= 0x5A) || (b >= 0x61 && b <= 0x7A)
+            || b == 0x2D
+    }
+
+    /// Replaces `local@label(.label)+` with `[email]` in one pass that anchors on each `@` and
+    /// walks outward, so a long run of address characters costs linear time.
+    private static func redactEmails(_ text: String) -> String {
+        let bytes = Array(text.utf8)
+        guard bytes.contains(0x40) else { return text }
+        var out = [UInt8]()
+        out.reserveCapacity(bytes.count)
+        let marker = Array("[email]".utf8)
+        var copied = 0
+        var i = 0
+        while i < bytes.count {
+            guard bytes[i] == 0x40 else {
+                i += 1
+                continue
+            }
+            var start = i
+            while start > copied && isLocalByte(bytes[start - 1]) { start -= 1 }
+            var j = i + 1
+            var labels = 0
+            while true {
+                let labelStart = j
+                while j < bytes.count && isLabelByte(bytes[j]) { j += 1 }
+                if j == labelStart { break }
+                labels += 1
+                if j + 1 < bytes.count && bytes[j] == 0x2E && isLabelByte(bytes[j + 1]) {
+                    j += 1
+                } else {
+                    break
+                }
+            }
+            if start < i && labels >= 2 {
+                out += bytes[copied..<start]
+                out += marker
+                copied = j
+                i = j
+            } else {
+                i += 1
+            }
+        }
+        out += bytes[copied...]
+        return String(decoding: out, as: UTF8.self)
     }
 
     private static func isRunByte(_ b: UInt8) -> Bool {

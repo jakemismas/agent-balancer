@@ -15,7 +15,9 @@ extension FolderAccountsCLITests {
         config.accounts[index].expectedPlanTier = nil
         try store.save(config)
         try cli.fake("auth.json", auth)
-        #expect(try cli.run(["refresh", "--label", "spare", "--force"]).status == 0)
+        // A sign-in that is not the account's own now fails the refresh before a probe, so the
+        // exit code is not part of what this checks.
+        _ = try cli.run(["refresh", "--label", "spare", "--force"])
         return try ConfigStore(context: context(cli)).loadRequired().account("spare")?
             .expectedPlanTier
     }

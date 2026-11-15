@@ -42,7 +42,7 @@
       "warnings" : [
         {
           "code" : "key_in_settings",
-          "text" : "Settings carry an API key or key helper. Token accounts are skipped."
+          "text" : "Settings carry an API key or key helper. Every account is skipped."
         }
       ],
       "weekly" : {

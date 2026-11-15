@@ -794,7 +794,7 @@ import Testing
         // A label of its own: the write hook is keyed by file name across the whole run.
         let account = Account(
             label: "fable-save-fails", kind: Kind.login, role: Role.pool,
-            email: "fable@example.com")
+            email: "main@example.com")
         let r = refresher(t, accounts: [account], clock: ClockBox(Self.start))
         // The plain reading and the Fable probe time are saved; the Fable reading's save fails.
         let name = Layout.readingName(account.label)

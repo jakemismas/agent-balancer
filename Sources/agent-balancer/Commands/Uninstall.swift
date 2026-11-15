@@ -10,6 +10,7 @@ struct UninstallCommand: ParsableCommand {
     func run() throws {
         let context = ToolContext.current()
         try Shared.requireOwnTerminal(context)
+        try Shared.requireTerminal()
         let leaseMinutes = Uninstall.leaseWindow(context: context)
         let plan = try Uninstall.plan(context: context, leaseMinutes: leaseMinutes)
         if plan.isEmpty {

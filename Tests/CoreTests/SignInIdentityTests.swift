@@ -27,13 +27,15 @@ import Testing
         #expect(
             LoginKind.evaluate(status("other@example.com"), account: login(), now: Date())
                 .issues.map(\.code) == [.wrongAccount])
-        // With no expected email, only the plan tier can mark another account.
+        // With no recorded email the account fails closed, and the plan tier still marks a change.
         let unset = login(email: nil)
-        #expect(LoginKind.evaluate(status(nil), account: unset, now: Date()).issues.isEmpty)
+        #expect(
+            LoginKind.evaluate(status(nil), account: unset, now: Date()).issues.map(\.text)
+                == [Messages.emailNotRecorded])
         #expect(
             LoginKind.evaluate(
                 AuthStatus(loggedIn: true, planTier: "max_5x"), account: unset, now: Date()
-            ).issues.map(\.code) == [.planChanged])
+            ).issues.map(\.code) == [.checkFailed, .planChanged])
     }
 
     @Test func theShapeTheInstalledClientPrintsWithANullEmailFailsTheCheck() throws {

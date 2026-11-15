@@ -79,9 +79,31 @@ private let refusal = "Run this in your own terminal, outside a Claude Code sess
         let h = try CLIHome()
         defer { h.cleanup() }
         try h.fakeFixture("logged_in")
-        let out = try h.run(["init"])
+        let out = try h.runOnTerminal(["init"])
         #expect(out.status == 1)
-        #expect(text(out.stderr).contains("--label is required"))
+        #expect(text(out.stderr).contains("A label is required"))
+        #expect(!FileManager.default.fileExists(atPath: h.dataRoot.path))
+    }
+
+    @Test func initUninstallAndPasteRefuseWhenInputIsNotATerminal() throws {
+        let h = try CLIHome()
+        defer { h.cleanup() }
+        try h.fakeFixture("logged_in")
+        for args in [["init", "--label", "x"], ["uninstall"]] {
+            let out = try h.runPiped(args, stdin: "uninstall\n")
+            #expect(out.status == 1, "\(args)")
+            #expect(text(out.stderr).contains("interactive terminal"), "\(args)")
+        }
+        #expect(!FileManager.default.fileExists(atPath: h.dataRoot.path))
+    }
+
+    @Test func initRefusesInAChatShell() throws {
+        let h = try CLIHome()
+        defer { h.cleanup() }
+        try h.fakeFixture("logged_in")
+        let out = try h.runOnTerminal(
+            ["init", "--label", "x"], env: ["CLAUDE_CODE_CHILD_SESSION": "1"])
+        #expect(out.status == 1)
         #expect(!FileManager.default.fileExists(atPath: h.dataRoot.path))
     }
 
@@ -224,6 +246,23 @@ private let refusal = "Run this in your own terminal, outside a Claude Code sess
         // The child never saw them.
         let seen = h.fakeRecord("env-names.txt")
         #expect(!seen.contains("ANTHROPIC_API_KEY") && !seen.contains("CLAUDE_CONFIG_DIR"))
+    }
+
+    @Test func doctorWarnsOfTheStoredLoginFolderAndItsSiblingsByNameOnly() throws {
+        let h = try ready()
+        defer { h.cleanup() }
+        let names = [
+            "CLAUDE_SECURESTORAGE_CONFIG_DIR", "CLAUDE_BRIDGE_OAUTH_TOKEN", "USE_STAGING_OAUTH",
+        ]
+        let env = Dictionary(uniqueKeysWithValues: names.map { ($0, "/somewhere/else") })
+        let out = try h.run(["doctor"], env: env)
+        let s = text(out.stdout)
+        for name in names {
+            #expect(s.contains("Warning: \(name) is set in this shell"), "\(name)")
+        }
+        #expect(!s.contains("/somewhere/else"))
+        let seen = h.fakeRecord("env-names.txt")
+        for name in names { #expect(!seen.contains(name), "\(name)") }
     }
 
     @Test func doctorPrintsAProtectedNameWithControlCharactersEscaped() throws {

@@ -453,6 +453,8 @@ public enum StatusBuilder {
         } catch {
             Self.log(context, "history step failed: \((error as? ToolError)?.message ?? "unknown")")
         }
+        recordRejections(
+            context: context, config: config, current: current, observations: observations)
         if eventsSaved {
             try writer.put(
                 try EventLog.encoder().encode(current) + Data([0x0A]),
@@ -471,20 +473,114 @@ public enum StatusBuilder {
         probeRejection(context: context, account: account) != nil
     }
 
-    /// While a probe's rejection of the sign-in of `account` stands, as `state/current.json`
-    /// records it, the time that file counts as the latest stored reading it saw (`lastReadingAt`,
-    /// `Date.distantPast` for none). Nil otherwise, and for a file that cannot be read or that
-    /// holds another account under the label.
+    static let rejectionsName = "token-rejections.json"
+
+    struct RejectionRecord: Codable {
+        var accountKey: String
+        var at: Date
+    }
+
+    struct RejectionsFile: Codable {
+        var schemaVersion = 1
+        var tokens: [String: RejectionRecord] = [:]
+    }
+
+    /// Keeps token rejections in a file of their own, so deleting or damaging `current.json` does
+    /// not make a rejected account eligible again. A label leaves the file only on positive
+    /// evidence: a stored reading newer than the one the rejection saw, a new sign-in seen by a
+    /// check, a changed account key, or the account's removal. An entry rebuilt from nothing is
+    /// never such evidence.
+    static func recordRejections(
+        context: ToolContext, config: Config, current: CurrentFile,
+        observations: StatusObservations
+    ) {
+        let reader = NoFollowReader(root: context.dataRoot)
+        var file = RejectionsFile()
+        if let data = try? reader.read(folders: Layout.stateFolders, name: rejectionsName),
+            let old = try? EventLog.decoder().decode(RejectionsFile.self, from: data),
+            old.schemaVersion == 1
+        {
+            file = old
+        }
+        // The record of the last rebuild, when it can be trusted: a rejection it showed and this
+        // rebuild's entry no longer shows was ended by a check or probe seen by the status.
+        var previous: CurrentFile?
+        if let data = try? reader.read(folders: Layout.stateFolders, name: currentName),
+            let old = try? EventLog.decoder().decode(CurrentFile.self, from: data),
+            old.schemaVersion == CurrentFile.currentSchema, old.isSound
+        {
+            previous = old
+        }
+        let before = file.tokens
+        for label in Array(file.tokens.keys)
+        where !config.accounts.contains(where: { $0.label == label && $0.kind == Kind.token }) {
+            file.tokens[label] = nil
+        }
+        for account in config.accounts where account.kind == Kind.token {
+            if let record = file.tokens[account.label], record.accountKey != account.accountKey {
+                file.tokens[account.label] = nil
+            }
+            guard let entry = current.accounts[account.label],
+                entry.accountKey == account.accountKey
+            else { continue }
+            let known = file.tokens[account.label]
+            if entry.probeError?.code == StateCode.loginRejected.rawValue {
+                let at = entry.lastReadingAt ?? .distantPast
+                if known == nil || at > known!.at {
+                    file.tokens[account.label] = RejectionRecord(
+                        accountKey: account.accountKey, at: at)
+                }
+            } else if let known {
+                let newerReading = entry.lastReadingAt.map { $0 > known.at } ?? false
+                let newSignIn = observations.auth[account.label]?.newSignIn ?? false
+                let ended =
+                    previous?.accounts[account.label].map {
+                        $0.accountKey == account.accountKey
+                            && $0.probeError?.code == StateCode.loginRejected.rawValue
+                    } ?? false
+                if newerReading || newSignIn || ended { file.tokens[account.label] = nil }
+            }
+        }
+        let unchanged =
+            before.mapValues { [$0.accountKey, "\($0.at.timeIntervalSince1970)"] }
+            == file.tokens.mapValues { [$0.accountKey, "\($0.at.timeIntervalSince1970)"] }
+        if unchanged { return }
+        if let data = try? EventLog.encoder().encode(file) {
+            try? NoFollowWriter(root: context.dataRoot).put(
+                data + Data([0x0A]), folders: Layout.stateFolders, name: rejectionsName)
+        }
+    }
+
+    /// While a probe's rejection of the token or sign-in of `account` stands, the time that counts
+    /// as the latest stored reading it saw (`Date.distantPast` for none). `state/current.json`
+    /// and the durable rejection file both answer, and either one's rejection stands. A durable
+    /// file that is there but cannot be read counts as a rejection (`distantFuture`). Nil
+    /// otherwise.
     public static func probeRejection(context: ToolContext, account: Account) -> Date? {
-        guard
-            let data = try? NoFollowReader(root: context.dataRoot).read(
-                folders: Layout.stateFolders, name: currentName),
+        let reader = NoFollowReader(root: context.dataRoot)
+        var found: Date?
+        if let data = try? reader.read(folders: Layout.stateFolders, name: currentName),
             let file = try? EventLog.decoder().decode(CurrentFile.self, from: data),
             file.schemaVersion == CurrentFile.currentSchema, file.isSound,
             let entry = file.accounts[account.label], entry.accountKey == account.accountKey,
             entry.probeError?.code == StateCode.loginRejected.rawValue
-        else { return nil }
-        return entry.lastReadingAt ?? .distantPast
+        {
+            found = entry.lastReadingAt ?? .distantPast
+        }
+        guard account.kind == Kind.token else { return found }
+        let data: Data?
+        do {
+            data = try reader.read(folders: Layout.stateFolders, name: rejectionsName)
+        } catch {
+            return .distantFuture
+        }
+        guard let data else { return found }
+        guard let file = try? EventLog.decoder().decode(RejectionsFile.self, from: data),
+            file.schemaVersion == 1
+        else { return .distantFuture }
+        guard let record = file.tokens[account.label], record.accountKey == account.accountKey
+        else { return found }
+        return max(found ?? .distantPast, record.at)
     }
 
     /// Rebuilds after a command's own work is done. A failure is logged and never changes the

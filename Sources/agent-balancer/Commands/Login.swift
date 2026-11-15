@@ -45,6 +45,8 @@ struct LoginCommand: ParsableCommand {
 
         let captured: TokenCapture.Result
         if paste {
+            // A piped token would sit in the command text of whatever fed it.
+            try Shared.requireTerminal()
             captured = try TokenCapture.pasted(context: context, label: label)
         } else {
             print("Opening the browser. Approve the sign-in there. The token is not shown.")

@@ -107,6 +107,7 @@ public enum ConfigValidator {
         where name.range(of: "^[A-Z][A-Z0-9_]{0,63}$", options: .regularExpression) == nil {
             throw ToolError("launch.envNames holds a name that is not valid.")
         }
+        try CallerSettings.checkLaunchLists(launch)
         var seen = Set<String>()
         var logins = 0
         for account in config.accounts {

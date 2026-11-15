@@ -60,6 +60,9 @@ case "$1" in
       cat "$dir/auth-default.json"
     elif [ -f "$dir/auth.json" ]; then
       cat "$dir/auth.json"
+    else
+      # A test that staged no answer is signed in as the example main account.
+      echo '{"loggedIn":true,"email":"main@example.com","planTier":"max_20x","subscriptionType":"max","loginExpiresAt":"2099-01-01T00:00:00Z"}'
     fi
     if [ -f "$dir/auth.exit" ]; then exit "$(cat "$dir/auth.exit")"; fi
     exit 0

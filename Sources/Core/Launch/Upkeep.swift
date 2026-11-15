@@ -65,9 +65,11 @@ public enum Upkeep {
                 folders: Layout.locksFolders, name: Layout.pickLockName, wait: 5)
         else { return 0 }
         defer { lock.release() }
-        let leases =
-            (try? LeaseStore(context: context).current(
-                now: now, leaseMinutes: config.picker.leaseMinutes)) ?? []
+        // Without a readable lease file the open picks are unknown, so nothing is removed.
+        guard
+            let leases = LeaseStore(context: context).currentIfReadable(
+                now: now, leaseMinutes: config.picker.leaseMinutes)
+        else { return 0 }
         return run(
             context: context, snapshot: SessionsReader.read(context: context), openLeases: leases,
             leaseMinutes: config.picker.leaseMinutes, keepDays: config.launch.keepDays, now: now)

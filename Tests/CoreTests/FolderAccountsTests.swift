@@ -34,6 +34,14 @@ import Testing
             try writer.prepare(folders: FolderPaths.folders(label: label))
         }
         try fakeAuth(t, context: context, label: folders.first ?? "spare")
+        // The default folder answers as the example main account, so a login account is its own.
+        if !extra.isEmpty {
+            try t.fake(
+                "auth-default.json",
+                try String(
+                    contentsOf: t.fixtures.appendingPathComponent("auth/logged_in.json"),
+                    encoding: .utf8))
+        }
         let source = t.home.appendingPathComponent(".claude")
         try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
         try "notes".write(
@@ -490,6 +498,28 @@ import Testing
         #expect(document.banner?.text == Messages.settingsChangedAll)
     }
 
+    @Test func aCredentialNameInTheSharedSettingsSkipsTheFolderAndAHarmlessOneDoesNot() throws {
+        let (t, context) = try setUp()
+        defer { withExtendedLifetime(t) {} }
+        _ = try link(context)
+        let shared = t.home.appendingPathComponent(".claude/settings.json")
+        let hooks = #""hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo one"}]}]}"#
+        for name in ["CLAUDE_CODE_SUBAGENT_MODEL", "ANTHROPIC_MODEL"] {
+            try "{\(hooks),\"env\":{\"\(name)\":\"v\"}}".write(
+                to: shared, atomically: true, encoding: .utf8)
+            let result = try pick(context)
+            #expect(result.label == "spare", "\(name)")
+        }
+        for name in ["ANTHROPIC_BASE_URL", "CLAUDE_SECURESTORAGE_CONFIG_DIR"] {
+            try "{\(hooks),\"env\":{\"\(name)\":\"v\"}}".write(
+                to: shared, atomically: true, encoding: .utf8)
+            let result = try pick(context)
+            #expect(result.label == nil, "\(name)")
+            let spare = result.candidates.first { $0.label == "spare" }
+            #expect(spare?.reason == "settings carry an API key or key helper", "\(name)")
+        }
+    }
+
     @Test func aFolderThatSharesNoSettingsIsNotHitByAHookChange() throws {
         let (t, context) = try setUp(settings: nil)
         defer { withExtendedLifetime(t) {} }
@@ -506,7 +536,7 @@ import Testing
 
     @Test func anAmbientConfigDirKeepsOnlyFolderAccountsForATypedCaller() throws {
         let login = Account(
-            label: "main", kind: Kind.login, role: Role.pool, email: "acct@example.com",
+            label: "main", kind: Kind.login, role: Role.pool, email: "main@example.com",
             expectedPlanTier: "max_20x")
         let (t, context) = try setUp(
             extra: [login], ambient: ["CLAUDE_CONFIG_DIR": "/somewhere/else"])
@@ -523,7 +553,7 @@ import Testing
 
     @Test func fullLoginOffersFolderAndLoginAccountsOnly() throws {
         let login = Account(
-            label: "main", kind: Kind.login, role: Role.pool, email: "acct@example.com",
+            label: "main", kind: Kind.login, role: Role.pool, email: "main@example.com",
             expectedPlanTier: "max_20x")
         let tok = Account(label: "tok", kind: Kind.token, role: Role.pool)
         let (t, context) = try setUp(extra: [login, tok])
@@ -553,7 +583,7 @@ import Testing
 
     func login(_ label: String = "main") -> Account {
         Account(
-            label: label, kind: Kind.login, role: Role.pool, email: "acct@example.com",
+            label: label, kind: Kind.login, role: Role.pool, email: "main@example.com",
             expectedPlanTier: "max_20x")
     }
 

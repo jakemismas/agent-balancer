@@ -308,17 +308,27 @@ every launched session names a launch file, its account is known exactly even th
 What `pick` accepts as caller settings. Anything else exits 1 with the reason, and no lease or
 file is written:
 
-- One JSON object of at most 16 KB.
-- Top-level keys only from `launch.settingsKeys` in config. The default is `["env"]`. A caller
-  cannot switch hooks off or change permissions through a file that is not visible in the typed
-  line.
+- One JSON object of at most 16 KB, with no `__proto__`, `constructor` or `prototype` key at any
+  depth and no nesting deeper than 8.
+- Top-level keys only from `launch.settingsKeys` in config. The default is `["env"]`. The list
+  may hold only `env` and `crossSessionInbound` (a string, such as `"accept"`), so a caller
+  cannot switch hooks off, run a command, set a key helper or change permissions through a file
+  that is not visible in the typed line, whatever else the config lists.
 - Inside `env`: string values only, and every name must be in `launch.envNames` in config and
   match `^[A-Z][A-Z0-9_]{0,63}$`. The default is `[]`, so a caller passes no `env` name until the
-  user lists some. These names are never allowed, whatever the list says: the protected group
-  (6.2) and its own extras, any `AGENT_BALANCER_*`, `PATH`, `HOME`, `NODE_OPTIONS`,
-  `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, and any name ending in `_PROXY` in either case. An `env`
-  entry sits in the same file as the token, so a caller-chosen proxy, certificate file or `PATH`
-  could read or run with it.
+  user lists some, such as `CLAUDE_ROLE` and `CLAUDE_CLIENT`. These names are never allowed,
+  whatever the list says: the protected group with its login locations (6.2), every
+  `CLAUDE_CODE_*` name (the chat marker included), `CLAUDE_JOB_DIR` and `CLAUDE_PID`, any
+  `AGENT_BALANCER_*`, `PATH`, `HOME`, `NODE_OPTIONS`, `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, the
+  other certificate, shell start-up, language load path, XDG folder, temporary folder, editor
+  and pager names that `CallerSettings` lists, any name that starts with a loader or
+  tool prefix (`DYLD_`, `LD_`, `GIT_`, `NODE_`, `BASH_`, `LC_`, `NPM_`, `BUN_`, `DENO_`, `SSH_`,
+  `AWS_`, `GOOGLE_`, `AZURE_`, `OTEL_`), and any name ending in `_PROXY` in either case. An `env`
+  entry sits in the same file as the token, so a caller-chosen proxy, certificate file, loader
+  or `PATH` could read or run with it.
+- One check holds both lists to these rules, when the config loads and again at pick time, so a
+  config that lists a refused key or name fails every command that loads it, with the list's
+  name and never a value.
 - A refused pick exits 1, writes nothing, and names the offending key, never its value, so a
   secret in a rejected value cannot reach the chat that typed it.
 
@@ -341,9 +351,10 @@ prompt text, and a value-taking option or a second double dash after it cannot r
 refuses, before it writes anything, a `--settings` in the person's arguments (`--settings` or
 `--settings=...`, because a recipe carries exactly one) and a first argument that is a `claude`
 command name such as `auth` or `mcp` (it would act on the default login, not start a session).
-`run --print-command` is a typing caller: it applies the ambient rule (4A.3) and the rule for an
-inherited token or key through the same predicate as a typed `pick`, and refuses for that label,
-writing nothing, when either applies.
+`run --print-command` is a typing caller: it applies the ambient rule (4A.3), the rule for an
+inherited credential name, and the two refusals of a typed line (a name that switches hooks off
+or that chooses the stored login) through the same predicates as a typed `pick`, and refuses for
+that label, writing nothing, when any of them applies.
 
 `pick` never launches and never prints a token. In schema version 1 a recipe is returned only for
 an account that passed its kind's checks at pick time (4A.5).
@@ -376,23 +387,54 @@ stored login in a foreground launch and does not reach a background worker. A to
    `<account folder>/jobs/<one segment>`, checked as text like rule b (absolute, no empty, `.` or
    `..` segment, no link resolved). A launcher caller and a shell that is not a chat with neither
    variable set are unchanged. The tool never sets `CLAUDE_CONFIG_DIR` to the default path.
-2. `pick --caller typed` with a token or key variable in its own environment (the Claude Code
-   token variable, `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`) answers with
+2. `pick --caller typed` with a credential name in its own environment answers with
    `backgroundOnly: true` for every kind, a folder pick included. The caller uses that recipe only
-   with `claude --bg`. Otherwise `backgroundOnly` is false.
-3. `pick --caller launcher` skips nothing and returns `unsetEnv`: `CLAUDE_CONFIG_DIR` (unless
-   `env` sets it), the Claude Code token variable, `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`,
-   `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`. The launcher removes
-   those from the child's environment.
+   with `claude --bg`. Otherwise `backgroundOnly` is false. A credential name is one that carries
+   a credential or chooses the account a session bills (`ProtectedEnv.carriesCredential`): the
+   Claude Code token variable, `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and the other API key
+   and token names, `ANTHROPIC_CUSTOM_HEADERS`, every `CLAUDE_CODE_OAUTH_*` name, the token file
+   descriptor names (`*_FILE_DESCRIPTOR`), the base URLs (`ANTHROPIC_*_BASE_URL`,
+   `CLAUDE_CODE_API_BASE_URL`, `CLAUDE_CODE_CUSTOM_OAUTH_URL`, `ANTHROPIC_UNIX_SOCKET`), the
+   profile and federation names (`ANTHROPIC_PROFILE`, `ANTHROPIC_CONFIG_DIR` and the
+   organization, workspace, identity and scope names), every `CLAUDE_CODE_USE_*` provider name,
+   the host credential names, and the login locations of 6.2. A name that is protected but
+   carries no credential, such as `CLAUDE_CODE_SUBAGENT_MODEL` or `ANTHROPIC_MODEL`, which a chat
+   shell carries, changes no answer.
+3. `pick --caller launcher` skips nothing and returns `unsetEnv`: a fixed list, less
+   `CLAUDE_CONFIG_DIR` when `env` sets it, plus every protected name (6.2), `CLAUDE_JOB_DIR`,
+   `CLAUDE_PID` and `CLAUDE_CODE_*` name the caller's environment holds. The fixed list is
+   `CLAUDE_CONFIG_DIR`, the Claude Code token variable, `ANTHROPIC_API_KEY`,
+   `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_USE_BEDROCK`,
+   `CLAUDE_CODE_USE_VERTEX`, `CLAUDE_CODE_USE_FOUNDRY`, `CLAUDE_CODE_USE_MANTLE`, the two
+   stored-login names of rule 5, the hooks-off names and settings sources of rule 6,
+   `CLAUDE_JOB_DIR` and `CLAUDE_PID`. The launcher removes those from the child's environment.
 4. The tool never suggests unsetting a variable in a typed line.
+5. `pick --caller typed` refuses, exits 1 and writes nothing when its own environment holds
+   `CLAUDE_SECURESTORAGE_CONFIG_DIR` (empty included) or `CLAUDE_CODE_CUSTOM_OAUTH_URL`. Claude
+   Code names the Keychain entry of the stored login from these ahead of `CLAUDE_CONFIG_DIR`, so
+   a folder prefix does not override them and no kind is safe on that line. The refusal names the
+   variable, never its value.
+6. `pick --caller typed` refuses, exits 1 and writes nothing when its own environment holds a
+   name that may switch hooks off: `CLAUDE_CODE_SIMPLE`, `CLAUDE_CODE_SAFE_MODE`,
+   `CLAUDE_CODE_PERSONAL_HOOKS_OFF`, `CLAUDE_CODE_RESTRICTED`,
+   `CLAUDE_CODE_RESTRICT_PERSONAL_CONFIG`, a settings source (`CLAUDE_CODE_MANAGED_SETTINGS_PATH`,
+   the policy folder; `CLAUDE_CODE_REMOTE_SETTINGS_PATH`, the remote settings override file;
+   `CLAUDE_CODE_MOCK_REMOTE_SETTINGS`), or any other `CLAUDE_CODE_*` name that holds `SIMPLE`,
+   `SAFE`, `RESTRICT` or `HOOKS`, so a name a later version adds is still refused. Policy
+   settings outrank the launch file, so a settings source can switch hooks off where the line
+   cannot be seen. No measurement says a background worker ignores such a name. A launcher
+   removes all of them (rule 3), and `run` drops them from the person's environment (6.2).
 
 | Case | `pick --caller typed` | `pick --caller launcher` |
 |---|---|---|
 | Nothing inherited | Every kind competes; `backgroundOnly` false | Same; `unsetEnv` is still returned |
 | `CLAUDE_CONFIG_DIR` inherited | Only `folder` accounts; `login` and `token` skipped with `ambient CLAUDE_CONFIG_DIR set` | Skips nothing; `unsetEnv` lists `CLAUDE_CONFIG_DIR` unless `env` sets it |
-| Token or key inherited | Every kind competes; `backgroundOnly` true for every kind | Skips nothing; `unsetEnv` removes the variables from the child |
+| Credential name inherited (rule 2) | Every kind competes; `backgroundOnly` true for every kind | Skips nothing; `unsetEnv` removes the variables from the child |
 | Both inherited | Only `folder` accounts; `backgroundOnly` true | Skips nothing; `unsetEnv` removes both |
-| `key_in_settings`: the default folder's `settings.json` carries `apiKeyHelper` or an `env` name among the API key and token names | `token` accounts skipped with `settings carry an API key or key helper` | Same |
+| A stored-login name inherited (rule 5) | Refused: exit 1, nothing written | Skips nothing; `unsetEnv` lists both names |
+| A hooks-off name or settings source inherited (rule 6) | Refused: exit 1, nothing written | Skips nothing; `unsetEnv` removes it |
+| `key_in_settings`: the default folder's `settings.json` carries `apiKeyHelper`, or a credential name of rule 2 or `CLAUDE_CONFIG_DIR` (which renames the stored login's Keychain entry) in its `env` | Every account skipped with `settings carry an API key or key helper`: `login` and `token` sessions run in the default folder, and a `folder` account is skipped too, since a linked folder shares that file | Same |
+| The default folder's `settings.json` carries a hooks-off name or a settings source of rule 6 in its `env`, by its exact spelling | Every account refused with `settings_changed`, as for `disableAllHooks` (4A.5) | Same |
 
 Recorded manual checks behind this rule (2026-11-10):
 
@@ -409,7 +451,18 @@ Recorded manual checks behind this rule (2026-11-10):
   token accounts become foreground-only for launches.
 
 `init` and `doctor` look for the settings case by name only, never by value, with the same parse
-as the hook record (5.7), and warn `key_in_settings` (section 9).
+as the hook record (5.7), and warn `key_in_settings` (section 9). The `env` scan checks only the
+credential names of rule 2, `CLAUDE_CONFIG_DIR`, and the exact hooks-off and settings source names
+of rule 6, never the whole protected group, so a harmless name such as
+`CLAUDE_CODE_SUBAGENT_MODEL`, or a timing name that only holds one of the words of rule 6, skips
+no account.
+
+What the read rule leaves unseen. The settings read takes only hook entries, `disableAllHooks`,
+whether `apiKeyHelper` is present and the names of `env` keys (rule 3 of the binding design
+rules). So `forceLoginMethod`, `forceLoginOrgUUID`, `awsAuthRefresh`, `awsCredentialExport` and
+`gcpAuthRefresh` in the default folder's settings are never seen, and a sign-in method or cloud
+credential command they choose is outside every check. The working folder's project and local
+settings are never read either (5.1).
 
 ### 4A.4 The token kind
 
@@ -440,10 +493,13 @@ and nothing is written: an account keeps one end marker (7.1).
    module checks that the token file is private and parses, and only a yes or no leaves it; the
    probe gets the path and never the token value. `tokenCreatedAt` is an optional ISO 8601 time on the account's
    config entry (7.1), set by every `login`; the config schema stays at version 1.
-4. Duplicate check: if, after that probe, the new account's weekly reset time and 5-hour reset
-   time both equal another account's, `login` warns `possible_duplicate` and names the other
-   label. It is a warning, not an error, because two accounts first used in the same hour could
-   match. `pick` still treats them as two accounts. The check runs in the reading cache's
+4. Duplicate check: if, after that probe, the new account's weekly reset time equals another
+   account's, both still ahead, and so does its 5-hour reset time when both accounts have one (an
+   idle account has none, so the weekly time alone decides then), `login` warns
+   `possible_duplicate` and names the other label. It is a warning, not an error, because two
+   accounts first used in the same hour could match. `pick` still treats them as two accounts and
+   skips neither for it, the main account included; like threat T16, the check is advisory
+   against code that runs as the user. The check runs in the reading cache's
    `afterProbe` hook, so it runs on every probe of a token account, at `login` and after it, and a
    token file swapped for another account's token shows as `possible_duplicate`. The status keeps
    what the last check found until the account's next probe checks again; the warning writes no
@@ -538,7 +594,12 @@ file lands in it.
 
 `init` always writes the hook record of the default folder, empty when there are no hooks. A
 `login` or `token` account is refused with `settings_changed` when a recorded hook is later gone
-or changed, or hooks are switched off. After `init`, a missing or unreadable record fails these
+or changed, or hooks are switched off: by the `disableAllHooks` flag, or by a hooks-off name or a
+settings source of 4A.3 rule 6 in the file's `env`, by its exact spelling. Every account, a
+`folder` account included, is refused with `key_in_settings` while the file carries
+`apiKeyHelper`, or a credential name of 4A.3 rule 2 or `CLAUDE_CONFIG_DIR` in its `env`. After
+`init`, a missing or
+unreadable record fails these
 accounts too, with `settings_changed` and the text "Hook record missing. Run
 `agent-balancer link --accept-source-change` in Terminal." A record that holds a fingerprint or
 command hash other than 64 lowercase hex digits counts as unreadable, so no other value of it is
@@ -546,7 +607,8 @@ ever printed.
 
 `run` runs the `login` and `token` checks above without the reading check, and it never opens the
 default folder's `settings.json`. It takes the settings checks from the verdict a reader saved
-(`state/settings-seen.json`): the hook entries, `disableAllHooks`, whether the settings carry a key,
+(`state/settings-seen.json`): the hook entries, whether hooks are off (the flag or such an `env`
+name), whether the settings carry a key,
 and the stamp of the file (device, inode, size, modification time and change time, for the path and
 for what it resolves to). `init`, `doctor`, `pick`, `verify` and `link --accept-source-change`
 save it, only when the stamp is the same before and after their read; they are the only readers of
@@ -559,7 +621,7 @@ that goes nowhere (a link to nothing, or a loop) refuses with "The default folde
 is a link that goes nowhere. Repair the link or remove it, then run `agent-balancer doctor` in
 Terminal.", and a folder or special file there with "The default folder's settings file is not a
 file. Replace it with a file or remove it, then run `agent-balancer doctor` in Terminal." A hook
-record that is missing or changed gives the texts above. A token account is refused with
+record that is missing or changed gives the texts above. Every account is refused with
 `key_in_settings` when the verdict says the settings carry a key. A change time cannot be put back
 by an ordinary call, so a same-size edit with the modification time restored still refuses. Every
 settings edit therefore makes `run` refuse until a reader records it again. This verdict is not the
@@ -719,6 +781,19 @@ IDE extensions do not set it, so it tells a nested session from a top-level `cla
 IDE-integrated terminal. `CLAUDECODE` alone is the wrong test, because IDE extensions set it in
 their integrated terminals. The refusal message is "Run this in your own terminal, outside a
 Claude Code session." Neither the tool nor its README ever suggests unsetting a variable.
+
+**Accepted residuals of the launch file.** A token account's setup-token sits in the launch
+file's `env`, so the launched session holds it and exports it to the subprocesses of its shell
+tools, hooks and status line commands (threat T26). A misbehaving session can print it into its
+own transcript, outside the tool's two homes. Whether Claude Code removes that variable from
+subprocess environments is not measured. The tool also writes `disableAllHooks: false` into every
+launch file, so a project or local settings file cannot switch hooks off for that session, but it
+does not read the working folder's settings (the sacred read rule), so a project `apiKeyHelper`
+or `env` entry there is out of scope. A person who works in a folder with project settings
+reviews them in `claude` itself. The same read rule leaves `forceLoginMethod`,
+`forceLoginOrgUUID`, `awsAuthRefresh`, `awsCredentialExport` and `gcpAuthRefresh` in the default
+folder's settings unseen (4A.3), and the profile base folders `HOME` and `XDG_CONFIG_HOME` stay
+in a person launch and a typed line (6.2).
 
 ### 5.2 The orchestrator launch line
 
@@ -962,10 +1037,27 @@ claude -p "Reply with the single word OK." --model haiku --tools "" --disallowed
   had seen, which only a probe that worked can store, puts the account back under the age rule,
   and the next status rebuild, such as the menu's `status --cached` each minute, ends the
   rejection. A 60 second timeout marks the row `check_failed`.
-- The protected group of environment names, named once here: `CLAUDE_CONFIG_DIR`, the Claude Code
-  token variable, every `ANTHROPIC_*` and every `CLAUDE_CODE_USE_*`. Code holds the group once
-  (`Sources/Core/Env/ProtectedEnv.swift`); every other site refers to it and adds only its own
-  extras.
+- The protected group of environment names, named once here: `CLAUDE_CONFIG_DIR`,
+  `CLAUDE_ENV_FILE`, every `ANTHROPIC_*`, every `CLAUDE_CODE_*` except the chat marker
+  `CLAUDE_CODE_CHILD_SESSION` (the Claude Code token variable, the `CLAUDE_CODE_USE_*` provider
+  names and the `CLAUDE_CODE_OAUTH_*` names among them), and the login locations. The login
+  locations are the names outside those prefixes that the installed `claude` (2.1.325, read from
+  the binary, never run) reads to find a stored login, a credential store, a token file or a
+  sign-in endpoint, or that hold one of its own credentials: `CLAUDE_SECURESTORAGE_CONFIG_DIR`
+  (it names the Keychain entry of the stored login, ahead of `CLAUDE_CONFIG_DIR`),
+  `CLAUDE_SESSION_INGRESS_TOKEN_FILE`, `CLAUDE_TRUSTED_DEVICE_TOKEN`,
+  `CLAUDE_REMOTE_TOOLS_BRIDGE_URL`, `USE_LOCAL_OAUTH`, `USE_STAGING_OAUTH` and
+  `AGENT_PROXY_AUTH_TOKEN`, with the families of its background, bridge, runner, remote and local
+  sign-in plumbing: every `CLAUDE_BG_*`, `CLAUDE_BRIDGE_*`, `CLAUDE_RUNNER_*`, `CCR_*` and
+  `CLAUDE_LOCAL_OAUTH_*` name. Code holds the group once (`Sources/Core/Env/ProtectedEnv.swift`);
+  every other site refers to it and adds only its own extras. The sites are the person and probe
+  environments below, `unsetEnv` (4A.3 rule 3), the never-allowed list of 4A.2, `doctor`'s
+  warning, and the typed checks of 4A.3, which use two subsets: the credential names of rule 2
+  and the stored-login names of rule 5. Two base folders stay out of the group: `HOME` and
+  `XDG_CONFIG_HOME`. When no `ANTHROPIC_CONFIG_DIR` is set, `claude` looks for a profile's
+  credentials under `$XDG_CONFIG_HOME/anthropic`, else `~/.config/anthropic`, but the person's own
+  tools need both names, so a person launch and a typed line keep them, while the probe gets
+  `HOME` as the tool sees it and no `XDG_CONFIG_HOME`. This is an accepted limit.
 - Two child environments. Probe and `auth status` children get an allowlist: `PATH` set to the
   folder that holds `claude` plus `/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`
   (a Finder-started app or a LaunchAgent has only a short `PATH`), `HOME`, `USER`, `LOGNAME`,
@@ -974,9 +1066,10 @@ claude -p "Reply with the single word OK." --model haiku --tools "" --disallowed
   key or token can never bill the wrong account or fool a check. Proxy variables (`HTTPS_PROXY`,
   `HTTP_PROXY`, `NO_PROXY`, `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`) pass only when
   `probe.passProxyEnv` is true (default false). Person launches (`login`, `run`) are interactive
-  sessions, so they get the user's own environment minus the protected group and an ambient
-  `CLAUDE_CONFIG_DIR`, with the terminal attached. `doctor` warns, by name only and never by
-  value, when such variables exist in the user's shell.
+  sessions, so they get the user's own environment minus the protected group (an ambient
+  `CLAUDE_CONFIG_DIR` and `CLAUDE_SECURESTORAGE_CONFIG_DIR` included), `CLAUDE_JOB_DIR` and
+  `CLAUDE_PID`, with the terminal attached. `doctor` warns, by name only and never by value, when
+  protected variables exist in the user's shell.
 - `--tools` does not cover MCP tools, so the probe also denies `mcp__*` tools and passes
   `--strict-mcp-config` with no `--mcp-config`.
 - The runner finds `claude` only in a fixed list (`~/.local/bin`, `/opt/homebrew/bin`,
@@ -1167,8 +1260,10 @@ day is over. The validator refuses `picker.limitedAtPercent` outside 1 to 100,
 `picker.minRoomPercent` and `picker.expectedRunPercent` outside 0 to 100,
 `picker.deadlineSeconds`, `picker.leaseMinutes` and `launch.keepDays` below 1,
 `picker.endingSoonAssumeDays` below 0, a `launch.envNames` entry that does not match
-`^[A-Z][A-Z0-9_]{0,63}$`, and a `launch.settingsKeys` entry that is not a plain name. A key missing
-from a section takes the default shown above.
+`^[A-Z][A-Z0-9_]{0,63}$`, a `launch.settingsKeys` entry that is not a plain name, and an entry of
+either list that 4A.2 never allows. A config may add `crossSessionInbound` to `settingsKeys` and
+names of its own, such as `CLAUDE_ROLE` and `CLAUDE_CLIENT`, to `envNames`. A key missing from a
+section takes the default shown above.
 
 `minRoomPercent` and every room figure are in percent of the weekly limit, except a Fable room
 read from a Fable reading, which `fable.minRoomPercentOfCap` compares in percent of the Fable cap
@@ -1326,7 +1421,7 @@ short scrubbed text the menu shows as is.
 | `token_missing` | a token account whose token file is absent, is not a regular 0600 file owned by the user, or does not parse | error | "No token saved. Run `agent-balancer login pool-a` in Terminal." |
 | `not_linked` | a folder account that was never linked (4A.5) | error | "Settings not shared. Run `agent-balancer link spare` in Terminal." |
 | `possible_duplicate` (warning) | a token account whose weekly and 5-hour reset times both equal another account's (4A.4) | ok | "Same reset times as pool-a. If this is the same account, remove one." |
-| `key_in_settings` (warning, no event) | the default folder's `settings.json` carries `apiKeyHelper` or an `env` name among the API key and token names, read by name only (4A.3) | ok | "Settings carry an API key or key helper. Token accounts are skipped." |
+| `key_in_settings` (warning, no event) | the default folder's `settings.json` carries `apiKeyHelper`, or a credential name of 4A.3 rule 2 or `CLAUDE_CONFIG_DIR` in its `env`, read by name only (4A.3) | ok | "Settings carry an API key or key helper. Every account is skipped." |
 | `stale` (warning) | reading older than twice the refresh interval | ok | "Last read 2 h ago." |
 | `launch_file_missing` (warning, no event) | a live session's records name a launch file that does not exist (section 8); the text carries a count only, never a session name or a path | unchanged | "1 live session names a launch file that is gone." |
 
@@ -1964,7 +2059,8 @@ empty lists, and the events record keeps only each label's newest line.
   their own and a first argument that is a `claude` command name. It writes one `state/picks.log`
   line, and drops the launch file and lease when `claude` cannot be started. The exit status of
   `claude` is the exit status of `run`. `--print-command` is a typing caller (4A.2): it applies the
-  ambient rule and the inherited token or key rule, prints the literal line (`claude`, `launchArgs`,
+  ambient rule, the inherited credential rule and the two typed refusals (4A.3 rules 5 and 6),
+  prints the literal line (`claude`, `launchArgs`,
   then the person's arguments quoted) and starts nothing; the line names the launch file and never
   holds a token. In a chat shell `run`, with or without `--print-command`, prints the line to type in
   your own terminal, `agent-balancer run <label> -- <arguments>` (arguments display-safe and shell
@@ -2323,9 +2419,9 @@ file deletion outside the no-follow writer.
 | T19 | A chat uses the Manage accounts window to add, remove, re-date or sign in an account: it starts the app itself, or drives the window by scripting the screen | The window runs six command shapes only and none that shares hooks or moves protection; it turns management off when its environment carries the chat-shell variable; the app has no scripting surface |
 | T20 | A stored token is read by another process that runs as the user, by a backup or by a sync tool, and stays usable for up to a year | 0600 files in 0700 folders; `tokens/` and `launch/` are marked as excluded from backups; `doctor` warns when the data folder sits inside a synced folder. Against code that runs as the user this is advisory, and it is the same exposure as Claude Code's own fallback credential file |
 | T21 | A token reaches output: `pick`'s JSON, an error text, a log line, the history, the app, a crash report | Only the `Tokens` and `Launch` modules read a token, and they return paths, never values. `pick` prints the launch file's path only. The scrubber runs on every captured buffer; `TokenCapture` reads the `claude setup-token` child's raw output first |
-| T22 | A caller's settings JSON carries a key that switches hooks off, changes permissions or chooses another account, into a launch file not visible in the typed line | `pick` accepts only allowlisted top-level keys (`env` by default) and only `env` names listed in `launch.envNames` (empty by default), never the protected names such as `CLAUDE_CONFIG_DIR`, `PATH`, `NODE_OPTIONS`, proxy and certificate variables, and refuses without writing anything (4A.2) |
+| T22 | A caller's settings JSON carries a key that switches hooks off, changes permissions or chooses another account, into a launch file not visible in the typed line | `pick` accepts only allowlisted top-level keys (`env` by default) and only `env` names listed in `launch.envNames` (empty by default), never the protected names such as `CLAUDE_CONFIG_DIR`, the login locations, any `CLAUDE_CODE_*` name, `PATH`, `NODE_OPTIONS`, loader, proxy and certificate variables, and refuses without writing anything (4A.2). The config lists may hold only those keys and names, checked when the config loads and at pick time |
 | T23 | Launch files pile up, each with a token, or one outlives its account | The upkeep rule in 4A.6; `remove` deletes every file of the label; a token replace rewrites them; `uninstall` removes both folders, or says what it left that may hold a token and exits 1; `doctor` prints the count and the oldest age, never a file's content |
-| T24 | Something in the caller's environment beats the recipe: a worker bills another account, or lands in a folder with no hooks | The ambient rule (4A.3): folder-only picks under an inherited `CLAUDE_CONFIG_DIR`, `backgroundOnly` under an inherited token, `unsetEnv` for launchers. The post-launch check in section 16 item 4 catches a launch that landed in the wrong folder |
+| T24 | Something in the caller's environment beats the recipe: a worker bills another account, or lands in a folder with no hooks | The ambient rule (4A.3): folder-only picks under an inherited `CLAUDE_CONFIG_DIR`, `backgroundOnly` under an inherited credential name, a refused typed line under a stored-login name or a hooks-off name, `unsetEnv` for launchers, and a person launch without the protected group. The post-launch check in section 16 item 4 catches a launch that landed in the wrong folder. The profile base folders `HOME` and `XDG_CONFIG_HOME` stay (6.2) |
 | T25 | A folder account with a missing link runs sessions with no hooks | `pick` runs `verify` on a folder account before every recipe and refuses on any broken or missing link, and a never-linked folder is always refused; `run` refuses the same way |
 | T26 | Any chat that can run `pick` learns the path of a file that holds a token, and can read it; a token session can print its own token | Not prevented by the tool, and said so. Same-user limit as T16 and T20: the user's own policy is the boundary. The README Limits section gives a deny-rule snippet for `~/.agent-balancer/tokens/` and `~/.agent-balancer/launch/` |
 

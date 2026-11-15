@@ -167,6 +167,34 @@ import Testing
         #expect(t.fakeRecord("args.log").isEmpty)
     }
 
+    @Test func anUnreadableLeaseFileFailsThePickInsteadOfReadingAsNoLeases() throws {
+        let (t, service) = try setUp([login()])
+        let leases = t.context.dataRoot.appendingPathComponent("state/leases.json")
+        try FileManager.default.createDirectory(
+            at: leases.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try "not json".write(to: leases, atomically: true, encoding: .utf8)
+        #expect(throws: ToolError.self) { try service.pick(PickRequest()) }
+        #expect(try String(contentsOf: leases, encoding: .utf8) == "not json")
+    }
+
+    @Test func anAmbientProviderVariableCountsAsAnAmbientKey() throws {
+        for name in ["CLAUDE_CODE_USE_FOUNDRY", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_OAUTH_REFRESH"] {
+            #expect(PickService.AmbientState([name: "x"]).key, "\(name)")
+        }
+        #expect(!PickService.AmbientState(["PATH": "/bin"]).key)
+    }
+
+    @Test func aLauncherUnsetsEveryProtectedNameTheCallerHolds() {
+        let names = Recipe.unsetNames(
+            env: [:], ambient: ["CLAUDE_CODE_USE_FOUNDRY": "1", "ANTHROPIC_CUSTOM_HEADERS": "x"])
+        #expect(names.contains("ANTHROPIC_CUSTOM_HEADERS"))
+        #expect(names.contains("CLAUDE_CODE_USE_FOUNDRY"))
+        #expect(names.contains("CLAUDE_CODE_SIMPLE"))
+        #expect(
+            !Recipe.unsetNames(env: [ProtectedEnv.configDirVariable: "/x"])
+                .contains(ProtectedEnv.configDirVariable))
+    }
+
     /// The rows of the environment case table (docs/ARCHITECTURE.md section 4A.3).
     static let keyRows: [[String: String]] = [
         [ProtectedEnv.tokenVariable: "x"], ["ANTHROPIC_API_KEY": "x"],
@@ -253,7 +281,7 @@ import Testing
         "\"env\":{\"ANTHROPIC_AUTH_TOKEN\":\"PLANTED\"}",
         "\"env\":{\"\(ProtectedEnv.tokenVariable)\":\"PLANTED\"}",
     ])
-    func keyNamesInSettingsSkipTokenAccountsOnly(member: String) throws {
+    func keyNamesInSettingsSkipEveryAccountKind(member: String) throws {
         let (t, service) = try setUp([login(), token("pool-a")])
         _ = try t.makeTokenFile(label: "pool-a", secret: Canaries.oauth())
         let planted = Canaries.apiKey()
@@ -262,10 +290,11 @@ import Testing
         try "{\(member.replacingOccurrences(of: "PLANTED", with: planted))}".write(
             to: claude.appendingPathComponent("settings.json"), atomically: true, encoding: .utf8)
         let result = try service.pick(PickRequest())
-        #expect(result.label == "main")
+        #expect(result.label == nil)
         let reasons = Dictionary(
             uniqueKeysWithValues: result.candidates.map { ($0.label, $0.reason) })
         #expect(reasons["pool-a"] == "settings carry an API key or key helper")
+        #expect(reasons["main"] == "settings carry an API key or key helper")
         let answer = String(decoding: try PickResult.encoder().encode(result), as: UTF8.self)
         #expect(!answer.contains(planted))
         let written = try launchFiles(t).map { try String(contentsOf: $0, encoding: .utf8) }
@@ -279,6 +308,143 @@ import Testing
             of: try String(contentsOf: claude.appendingPathComponent("settings.json")),
             with: "")
         #expect(!state.contains(planted))
+    }
+
+    func writeDefaultSettings(_ t: TestHome, _ body: String) throws {
+        let claude = t.home.appendingPathComponent(".claude")
+        try FileManager.default.createDirectory(at: claude, withIntermediateDirectories: true)
+        try body.write(
+            to: claude.appendingPathComponent("settings.json"), atomically: true, encoding: .utf8)
+    }
+
+    @Test(arguments: [
+        "ANTHROPIC_BASE_URL", "ANTHROPIC_PROFILE", "ANTHROPIC_CONFIG_DIR",
+        "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+        "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR", "CLAUDE_SECURESTORAGE_CONFIG_DIR",
+        "CLAUDE_SESSION_INGRESS_TOKEN_FILE", "CLAUDE_CONFIG_DIR",
+    ])
+    func aCredentialNameInSettingsEnvSkipsLoginAndTokenAccounts(name: String) throws {
+        let (t, service) = try setUp([login(), token("pool-a")])
+        _ = try t.makeTokenFile(label: "pool-a", secret: Canaries.oauth())
+        try writeDefaultSettings(t, "{\"env\":{\"\(name)\":\"v\"}}")
+        let result = try service.pick(PickRequest())
+        #expect(result.label == nil)
+        let reasons = Dictionary(
+            uniqueKeysWithValues: result.candidates.map { ($0.label, $0.reason) })
+        #expect(reasons["main"] == "settings carry an API key or key helper", "\(name)")
+        #expect(reasons["pool-a"] == "settings carry an API key or key helper", "\(name)")
+        #expect(launchFiles(t).isEmpty)
+    }
+
+    @Test(arguments: [
+        "CLAUDE_CODE_SUBAGENT_MODEL", "ANTHROPIC_MODEL", "CLAUDE_CODE_MAX_OUTPUT_TOKENS",
+        "CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS",
+    ])
+    func aHarmlessNameInSettingsEnvSkipsNoAccount(name: String) throws {
+        let (t, service) = try setUp([login(), token("pool-a")])
+        _ = try t.makeTokenFile(label: "pool-a", secret: Canaries.oauth())
+        try writeDefaultSettings(t, "{\"env\":{\"\(name)\":\"v\"}}")
+        let dry = try service.pick(PickRequest(dryRun: true))
+        #expect(dry.candidates.count == 2)
+        #expect(dry.candidates.allSatisfy { $0.eligible }, "\(name)")
+        let result = try service.pick(PickRequest())
+        #expect(result.label != nil, "\(name)")
+        #expect(!result.backgroundOnly)
+    }
+
+    @Test func aSettingsSourceNameInSettingsEnvSkipsEveryAccountAsHooksOff() throws {
+        let (t, service) = try setUp([login(), token("pool-a")])
+        _ = try t.makeTokenFile(label: "pool-a", secret: Canaries.oauth())
+        try writeDefaultSettings(t, "{\"env\":{\"CLAUDE_CODE_REMOTE_SETTINGS_PATH\":\"/x\"}}")
+        let result = try service.pick(PickRequest())
+        #expect(result.label == nil)
+        #expect(result.candidates.allSatisfy { $0.reason == Messages.settingsChanged })
+    }
+
+    @Test func harmlessNamesAChatShellCarriesChangeNoTypedAnswer() throws {
+        let ambient = [
+            "CLAUDE_CODE_SUBAGENT_MODEL": "sonnet", "ANTHROPIC_MODEL": "opus",
+            "CLAUDE_CODE_ENTRYPOINT": "cli", "CLAUDE_CODE_SESSION_ID": "s-1",
+            "CLAUDE_CODE_MESSAGING_SOCKET": "/tmp/m.sock", "CLAUDE_CODE_MESSAGING_TOKEN": "m",
+        ]
+        let (t, service) = try setUp([login()], ambient: ambient)
+        let typed = try service.pick(PickRequest())
+        #expect(typed.label == "main")
+        #expect(!typed.backgroundOnly)
+        #expect(!PickService.AmbientState(ambient).key)
+        withExtendedLifetime(t) {}
+    }
+
+    @Test(arguments: ProtectedEnv.storeNames)
+    func aNameThatChoosesTheStoredLoginRefusesATypedPickAndWritesNothing(name: String) throws {
+        let (t, service) = try setUp([login(), token("pool-a")], ambient: [name: ""])
+        _ = try t.makeTokenFile(label: "pool-a", secret: Canaries.oauth())
+        for request in [PickRequest(), PickRequest(dryRun: true)] {
+            do {
+                _ = try service.pick(request)
+                Issue.record("a typed pick was not refused under \(name)")
+            } catch let error as ToolError {
+                #expect(error.message.contains(name))
+            }
+        }
+        #expect(launchFiles(t).isEmpty)
+        let state = t.context.dataRoot.appendingPathComponent("state")
+        for file in ["leases.json", "picks.log"] {
+            let path = state.appendingPathComponent(file).path
+            #expect(!FileManager.default.fileExists(atPath: path))
+        }
+        // A launcher removes the name from the child, so its pick goes ahead.
+        let launcher = try service.pick(PickRequest(caller: .launcher))
+        #expect(launcher.label != nil)
+        #expect(launcher.unsetEnv?.contains(name) == true)
+    }
+
+    @Test(arguments: ProtectedEnv.settingsSourceNames)
+    func aSettingsSourceNameRefusesATypedPickAndALauncherUnsetsIt(name: String) throws {
+        let (t, service) = try setUp([login()], ambient: [name: "/elsewhere"])
+        #expect(throws: ToolError.self) { try service.pick(PickRequest()) }
+        #expect(launchFiles(t).isEmpty)
+        let launcher = try service.pick(PickRequest(caller: .launcher))
+        #expect(launcher.label == "main")
+        #expect(launcher.unsetEnv?.contains(name) == true)
+    }
+
+    @Test func theDesignsExampleLaunchListsLoadAndAPickWithThemReturnsARecipe() throws {
+        let (t, service) = try setUp([login()]) {
+            $0.launch.settingsKeys = ["env", "crossSessionInbound"]
+            $0.launch.envNames = ["CLAUDE_ROLE", "CLAUDE_CLIENT"]
+        }
+        let loaded = try ConfigStore(context: t.context).loadRequired()
+        #expect(loaded.launch.envNames == ["CLAUDE_ROLE", "CLAUDE_CLIENT"])
+        let settings =
+            #"{"crossSessionInbound":"accept","env":{"CLAUDE_ROLE":"build-worker","CLAUDE_CLIENT":"card-1"}}"#
+        let result = try service.pick(PickRequest(settings: settings))
+        #expect(result.label == "main")
+        #expect(result.launchArgs?.hasPrefix("--settings '") == true)
+        let file = try json(URL(fileURLWithPath: try #require(result.args).last ?? ""))
+        #expect(file["crossSessionInbound"] as? String == "accept")
+        let env = try #require(file["env"] as? [String: String])
+        #expect(
+            env == [
+                "AGENT_BALANCER_ACCOUNT": "main", "CLAUDE_ROLE": "build-worker",
+                "CLAUDE_CLIENT": "card-1",
+            ])
+    }
+
+    @Test func aTokenThatReadsLikeTheMainAccountIsStillOfferedAndOnlyWarned() throws {
+        let (t, service) = try setUp([login(role: Role.main), token("pool-a")])
+        _ = try t.makeTokenFile(label: "pool-a", secret: Canaries.oauth())
+        // The main account's reading is stored first, so the token's probe has one to match.
+        let config = try ConfigStore(context: t.context).loadRequired()
+        let main = try #require(config.account("main"))
+        _ = Refresher(context: t.context, config: config).refresh(account: main, force: true)
+        let result = try service.pick(PickRequest(model: "sonnet"))
+        let pool = try #require(result.candidates.first { $0.label == "pool-a" })
+        #expect(pool.eligible)
+        #expect(!pool.reason.contains("main account"))
+        let document = try #require(try StatusBuilder.rebuild(context: t.context))
+        let warnings = document.accounts.first { $0.label == "pool-a" }?.warnings ?? []
+        #expect(warnings.contains { $0.code == "possible_duplicate" })
     }
 
     @Test func aTokenFileThatIsOpenOrMissingIsRefused() throws {

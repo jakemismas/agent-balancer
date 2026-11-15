@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 
 @testable import Core
@@ -64,5 +65,20 @@ import Testing
         let secret = Canaries.oauth()
         #expect(secret.contains("sk-" + "ant-"))
         #expect(Scrubber.tokenPass(secret) != secret)
+    }
+
+    @Test func emailScanMatchesTheAddressForms() {
+        #expect(Scrubber.personalPass("mail a.b+c@mail.example.com now") == "mail [email] now")
+        #expect(Scrubber.personalPass("x@y z@w.example.com") == "x@y [email]")
+        #expect(Scrubber.personalPass("a@b@c.example.com") == "a@[email]")
+        #expect(Scrubber.personalPass("@x.example.com a@ a@b.") == "@x.example.com a@ a@b.")
+    }
+
+    @Test func aLongRunWithNoAtSignScrubsInLinearTime() {
+        let run = String(repeating: "a", count: 1_048_576)
+        let start = Date()
+        _ = Scrubber.personalPass(run)
+        _ = Scrubber.personalPass(String(repeating: "a@", count: 200_000))
+        #expect(Date().timeIntervalSince(start) < 5)
     }
 }

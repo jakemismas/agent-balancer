@@ -40,13 +40,62 @@ import Testing
     }
 
     @Test func detectsEachKeyNameByNameOnly() throws {
-        let names = ProtectedEnv.settingsEnvNames
-        #expect(names.count == 3)
+        let names = [
+            "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", ProtectedEnv.tokenVariable,
+            "ANTHROPIC_BASE_URL", "ANTHROPIC_CUSTOM_HEADERS", "CLAUDE_CODE_USE_FOUNDRY",
+            "CLAUDE_CODE_GATEWAY_TOKEN", "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+            "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR", "ANTHROPIC_PROFILE", "ANTHROPIC_CONFIG_DIR",
+            "CLAUDE_SECURESTORAGE_CONFIG_DIR", "CLAUDE_SESSION_INGRESS_TOKEN_FILE",
+            "CLAUDE_BRIDGE_OAUTH_TOKEN", "USE_LOCAL_OAUTH", ProtectedEnv.configDirVariable,
+        ]
         for name in names {
             let json = "{\"env\":{\"\(name)\":\"v\"}}"
-            #expect(try HookRecord.parse(Data(json.utf8)).keyEnvNames == [name])
+            let facts = try HookRecord.parse(Data(json.utf8))
+            #expect(facts.keyEnvNames == [name], "\(name)")
+            #expect(facts.carriesKey, "\(name)")
+            #expect(!facts.hooksOff, "\(name)")
         }
         #expect(try HookRecord.parse(Data("{\"env\":{\"PATH\":\"v\"}}".utf8)).carriesKey == false)
+    }
+
+    @Test func aHarmlessNameInEnvIsNoKeyAndSwitchesNoHooksOff() throws {
+        for name in [
+            "CLAUDE_CODE_SUBAGENT_MODEL", "ANTHROPIC_MODEL", "ANTHROPIC_SMALL_FAST_MODEL",
+            "CLAUDE_CODE_MAX_OUTPUT_TOKENS", "CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS",
+            "CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT", "CLAUDE_BG_AUTO_MEMORY_OFF",
+        ] {
+            let facts = try HookRecord.parse(Data("{\"env\":{\"\(name)\":\"v\"}}".utf8))
+            #expect(!facts.carriesKey, "\(name)")
+            #expect(!facts.hooksOff, "\(name)")
+            #expect(facts.keyEnvNames.isEmpty && facts.hooksOffEnvNames.isEmpty, "\(name)")
+        }
+    }
+
+    @Test func anEnvNameThatSwitchesHooksOffOrLoadsAnotherSourceReadsAsHooksOff() throws {
+        for name in ProtectedEnv.behaviorNames + ProtectedEnv.settingsSourceNames {
+            let facts = try HookRecord.parse(Data("{\"env\":{\"\(name)\":\"1\"}}".utf8))
+            #expect(facts.hooksOffEnvNames == [name], "\(name)")
+            #expect(facts.hooksOff && !facts.disableAllHooks, "\(name)")
+        }
+        let t = try TestHome()
+        let record = HookRecord(context: t.context)
+        try record.record(.empty)
+        try settings(t, "{\"env\":{\"CLAUDE_CODE_MANAGED_SETTINGS_PATH\":\"/x\"}}")
+        guard case .changed = record.status(current: try record.readSettings()) else {
+            Issue.record("a settings source in env must read as hooks off")
+            return
+        }
+    }
+
+    @Test func signInKeysOtherThanTheKeyHelperAreNeverRead() throws {
+        for key in [
+            "forceLoginMethod", "forceLoginOrgUUID", "awsAuthRefresh", "awsCredentialExport",
+            "gcpAuthRefresh",
+        ] {
+            let facts = try HookRecord.parse(Data("{\"\(key)\":\"v\"}".utf8))
+            #expect(facts == .empty, "\(key)")
+        }
+        #expect(try HookRecord.parse(Data("{\"apiKeyHelper\":\"v\"}".utf8)).carriesKey)
     }
 
     @Test func rejectsANonObject() {

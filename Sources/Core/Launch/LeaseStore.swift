@@ -32,12 +32,20 @@ public struct LeaseStore: Sendable {
         self.writer = NoFollowWriter(root: context.dataRoot)
     }
 
-    /// The open leases: those younger than `leaseMinutes`, with any dated in the future dropped.
-    /// A file that does not decode reads as no leases.
+    /// The open leases: those younger than `leaseMinutes`. One dated in the future is kept open
+    /// when it is within `leaseMinutes` ahead, so a clock set back does not drop it. A lease file
+    /// that is there but does not decode, or has another schema version, throws: reading it as no
+    /// leases would let picks pile onto one account.
     public func current(now: Date, leaseMinutes: Int) throws -> [Lease] {
-        guard let data = try reader.read(folders: Layout.stateFolders, name: Layout.leasesName),
-            let file = try? Reading.decoder().decode(LeaseFile.self, from: data)
+        guard let data = try reader.read(folders: Layout.stateFolders, name: Layout.leasesName)
         else { return [] }
+        guard let file = try? Reading.decoder().decode(LeaseFile.self, from: data),
+            file.schemaVersion == 1
+        else {
+            throw ToolError(
+                "state/leases.json cannot be read, so the open picks are unknown. Fix or remove it, then try again."
+            )
+        }
         return Self.openOnes(file.leases, now: now, leaseMinutes: leaseMinutes)
     }
 
@@ -61,8 +69,7 @@ public struct LeaseStore: Sendable {
     private static func openOnes(_ leases: [Lease], now: Date, leaseMinutes: Int) -> [Lease] {
         let span = Double(leaseMinutes) * 60
         return leases.filter {
-            $0.at <= now && now.timeIntervalSince($0.at) < span
-                && ConfigValidator.isValidLabel($0.label)
+            abs(now.timeIntervalSince($0.at)) < span && ConfigValidator.isValidLabel($0.label)
         }
     }
 

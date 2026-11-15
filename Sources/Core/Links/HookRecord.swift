@@ -36,13 +36,18 @@ public struct SettingsFacts: Equatable, Sendable {
     public var hooks: [HookEntry]
     public var disableAllHooks: Bool
     public var apiKeyHelperPresent: Bool
-    /// Names among `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and the Claude Code token variable.
+    /// `env` names that carry a credential or choose the account (`ProtectedEnv.isKeyInSettings`).
     public var keyEnvNames: [String]
+    /// `env` names that switch hooks off or bring in a settings source, by exact name.
+    public var hooksOffEnvNames: [String] = []
 
     public static let empty = SettingsFacts(
         hooks: [], disableAllHooks: false, apiKeyHelperPresent: false, keyEnvNames: [])
 
     public var carriesKey: Bool { apiKeyHelperPresent || !keyEnvNames.isEmpty }
+
+    /// Such an `env` name switches hooks off as surely as the flag does.
+    public var hooksOff: Bool { disableAllHooks || !hooksOffEnvNames.isEmpty }
 }
 
 public struct HookDiff: Equatable, Sendable {
@@ -127,8 +132,7 @@ public struct HookRecord: Sendable {
 
     // MARK: Parsing
 
-    /// Takes the hook entries, the `disableAllHooks` flag, whether `apiKeyHelper` is present and
-    /// which of the three key names `env` holds. Every other key and every value is dropped.
+    /// The read rule allows hook entries, the flag, `apiKeyHelper`'s presence and `env` names only.
     public static func parse(_ data: Data) throws -> SettingsFacts {
         guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw ToolError("settings.json is not a JSON object.")
@@ -181,12 +185,18 @@ public struct HookRecord: Sendable {
             }
         }
         var keyNames: [String] = []
+        var hooksOffNames: [String] = []
         if let env = object["env"] as? [String: Any] {
-            keyNames = ProtectedEnv.settingsEnvNames.filter { env[$0] != nil }.sorted()
+            let names = env.keys.filter {
+                $0.range(of: "^[A-Z][A-Z0-9_]{0,63}$", options: .regularExpression) != nil
+            }
+            keyNames = names.filter(ProtectedEnv.isKeyInSettings).sorted()
+            hooksOffNames = names.filter(ProtectedEnv.switchesHooksOff).sorted()
         }
         return SettingsFacts(
             hooks: entries.sorted(), disableAllHooks: (object["disableAllHooks"] as? Bool) == true,
-            apiKeyHelperPresent: object["apiKeyHelper"] != nil, keyEnvNames: keyNames)
+            apiKeyHelperPresent: object["apiKeyHelper"] != nil, keyEnvNames: keyNames,
+            hooksOffEnvNames: hooksOffNames)
     }
 
     static func sha256(_ text: String) -> String { sha256(Data(text.utf8)) }
@@ -234,7 +244,7 @@ public struct HookRecord: Sendable {
     func saveVerdict(stamp: SettingsStamp, facts: SettingsFacts?) {
         let file = VerdictFile(
             schemaVersion: 1, stamp: stamp, readable: facts != nil, hooks: facts?.hooks ?? [],
-            disableAllHooks: facts?.disableAllHooks ?? false, carriesKey: facts?.carriesKey ?? false
+            disableAllHooks: facts?.hooksOff ?? false, carriesKey: facts?.carriesKey ?? false
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
@@ -410,7 +420,7 @@ public struct HookRecord: Sendable {
                 HookRecordFile(
                     schemaVersion: 1,
                     defaultFolder: DefaultFolderRecord(
-                        disableAllHooks: facts.disableAllHooks, hooks: facts.hooks),
+                        disableAllHooks: facts.hooksOff, hooks: facts.hooks),
                     links: old.links, linkedLabels: old.linkedLabels))
         }
     }
@@ -559,7 +569,7 @@ public struct HookRecord: Sendable {
         let now = Set(facts.hooks)
         return HookDiff(
             added: now.subtracting(before).sorted(), removed: before.subtracting(now).sorted(),
-            disableAllHooks: facts.disableAllHooks, recordedDisableAllHooks: rec.disableAllHooks)
+            disableAllHooks: facts.hooksOff, recordedDisableAllHooks: rec.disableAllHooks)
     }
 
     public func status(current facts: SettingsFacts) -> HookRecordStatus {

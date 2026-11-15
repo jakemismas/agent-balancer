@@ -179,7 +179,7 @@ public struct FolderKind: AccountKindHandler {
                         .loginRejected, .error,
                         "Login rejected. Run `agent-balancer login \(Display.safe(account.label, limit: 32))` in Terminal."
                     )
-                ])
+                ], emailDigest: account.emailDigest)
         }
         var check = LoginKind.evaluate(status, account: account, now: now)
         guard let reported = status.configDirectory, reported.hasPrefix("/") else {

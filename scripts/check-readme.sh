@@ -6,8 +6,9 @@
 #   json block, with one leading "$ " or "% " prompt dropped. A fence must close before the list
 #   item that holds it ends: a line that is not blank and is indented less than the opening fence
 #   ends it, and a fence that ends there or at the end of the file without closing fails. A json
-#   block must parse as JSON, and each string in it, key or value, with any character outside
-#   printable ASCII read as a space, is read as a later part.
+#   block must parse as JSON, and each key and each string of the parsed value, with any character
+#   outside printable ASCII read as a space, is read as a later part, so a key that appears twice
+#   is read with its last value only.
 #   Each span or line is cut into parts at &&, ||, ;, & and | (a | before a flag is a choice in a
 #   usage line), each $(...) or `...` substitution is a part of its own, and quotes, backslashes
 #   and parentheses read as spaces. The first part must start with agent-balancer, claude, brew,
@@ -23,8 +24,8 @@
 #   ~user/ or $HOME/), address outside example.com, org id or token.
 # - Scene sources the pictures are drawn from: accounts named only by the five made-up labels,
 #   every word with a letter in their strings and comments (lowercased, ISO times aside) a label
-#   or on the word list below, and only those labels' example.com addresses and the fixture's
-#   paths.
+#   or on the word list below, and only those labels' example.com addresses (each with at most
+#   one leading hyphen) and the fixture's paths.
 # - When the local banned-string list is present, neither the metadata nor the scene sources hold
 #   a banned string.
 # Usage: check-readme.sh [path to the agent-balancer binary]
@@ -101,9 +102,10 @@ fi
 nonascii="$(grep -n $'[^\t -~]' README.md | cut -d: -f1 | tr '\n' ' ' | sed 's/ $//' || true)"
 [ -z "$nonascii" ] || bad "README.md has a character outside printable ASCII and tabs on lines $nonascii"
 
-# Prints "ok" and then each string of the JSON file named by its argument, key or value, one a
-# line, with every character outside printable ASCII as a space. It prints nothing when the file
-# does not parse as JSON. JavaScript for Automation ships with macOS, so it needs no install.
+# Prints "ok" and then each key and each string of the value the JSON file named by its argument
+# parses to, one a line, with every character outside printable ASCII as a space. It prints
+# nothing when the file does not parse as JSON. JavaScript for Automation ships with macOS, so it
+# needs no install.
 JSON_READER='function run(argv) {
   ObjC.import("Foundation");
   var text = $.NSString.stringWithContentsOfFileEncodingError(
@@ -192,8 +194,8 @@ code="$(AB_JSON_FILE="$JSON" AB_JSON_READER="$JSON_READER" awk -v q="'" '
     }
     return n
   }
-  # Closes the open fence. A json block must parse as JSON, and each string in it is read as a
-  # later part, so a command in it is checked.
+  # Closes the open fence. A json block must parse as JSON, and each key and each string of the
+  # parsed value is read as a later part, so a command in it is checked.
   function endfence(    file, cmd, s, ok) {
     if (data) {
       file = ENVIRON["AB_JSON_FILE"]
@@ -425,9 +427,10 @@ daysleft dec deleted design document documents drawn duplicate each email empty-
 empty-first-run empty-reading empty-update ended ending-soon endingsoon ends endsat error
 estimate every example expires expiring fable failed false file first fixed folder folders for
 found frame frames from full fulllogin generatedat getting guaranteedleftpercentofcap half has
-hides home homebrew hook html icon if in inuse is it its kind label labels last launchallowed
-least left lights limited linepercent link linked local logged login loginexpiresat
-loginexpiressource made-up manage manage-add-folder manage-add-token manage-folder manage-remove
+hides home homebrew hook html hyphen icon if in inuse is it its kind label labels last
+launchallowed least left lights limited linepercent link linked local logged login loginexpiresat
+loginexpiressource made-up manage manage-add-folder manage-add-token manage-email-note
+manage-folder manage-remove
 manage-states manage-token manage-token-run marginpercent max menu menu-refreshing menu-states
 menu-steps meter minute missing mock moment new next no none not nov null of ok on one only opt or
 other out over own path pictures place plan plantier pm poll pool possible
@@ -435,7 +438,8 @@ possibleleftpercentofcap probe produce ran read readingsage readme readme-manage
 readme-manage-tokens readme-menu reads real reason refresh rejected remove render reserve reset
 resets resetsat reuse right role room rounded row rows run s same scene schemaversion selected
 sessions set settings shared sheet show shows sign sign-in signed signed-in signincheck since so
-soon soonest source state statesince statesjson status stay stops terminal text the their them
+soon soonest source starts state statesince statesjson status stay stops terminal text the their
+them
 this three tier tile time timed times title to token tool traffic true tue two ultra under until
 updated used usedpercent users usr warnings was wed weekly when which whose will window with
 workers writer writes written wrong"
@@ -495,8 +499,9 @@ for src in $SCENES; do
       }
     }' | sort -nu | tr '\n' ' ' | sed 's/ $//')"
   [ -z "$unknown" ] || bad "$src has a word that is neither a fixture label nor in SCENE_WORDS, on lines $unknown"
+  # One leading hyphen is allowed, for the scene of an email that login will not pass on.
   addresses="$(grep -oE '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]+' "$src" || true)"
-  [ -z "$(outside "$addresses" "^($LABELS)@example\.com$")" ] \
+  [ -z "$(outside "$addresses" "^-?($LABELS)@example\.com$")" ] \
     || bad "$src holds an address other than a fixture label at example.com"
   [ -z "$(outside "$(paths_in "$src")" "$FIXTURE_PATHS")" ] || bad "$src source holds a path outside the fixture"
   if banned_in "$src"; then bad "$src source holds a banned string"; fi

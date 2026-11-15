@@ -4,11 +4,14 @@ import SwiftUI
 /// The Add sheet: the form, and after the account is added the steps still to do.
 struct AddSheetContent: View {
     @Binding var draft: AddDraft
+    /// Why the form cannot go; it keeps the Add button off.
     let problem: String?
     let steps: [AddStep]
     let busy: Bool
     let tokenMode: SignInMode
     let actions: AddSheetActions
+    /// The line under the form, from the view model's `addNote`.
+    var note: AddNote? = nil
 
     @Environment(\.colorScheme) private var scheme
     @Environment(\.flatMaterials) private var flat
@@ -27,11 +30,11 @@ struct AddSheetContent: View {
             .padding(.bottom, 9)
             form
             if !steps.isEmpty { stepList }
-            if let error = draft.error {
-                Text(error).font(.ui(11.5)).foregroundStyle(palette.crit)
+            if let note, note.isError {
+                Text(note.text).font(.ui(11.5)).foregroundStyle(palette.crit)
                     .fixedSize(horizontal: false, vertical: true).padding(.top, 8)
-            } else if let problem, !draft.label.isEmpty, !added {
-                Text(problem).font(.ui(11)).foregroundStyle(palette.text2).padding(.top, 6)
+            } else if let note {
+                Text(note.text).font(.ui(11)).foregroundStyle(palette.text2).padding(.top, 6)
             }
             buttons
         }
@@ -104,9 +107,11 @@ struct AddSheetContent: View {
 
     @ViewBuilder private func field(_ name: String, text: Binding<String>) -> some View {
         if flat {
+            // Drawn off as the live field is once the account is added or while a command runs.
             FieldBox {
                 Text(text.wrappedValue.isEmpty ? " " : text.wrappedValue)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .foregroundStyle(added || busy ? palette.text3 : palette.text1)
             }
         } else {
             FieldBox {
@@ -128,6 +133,10 @@ struct AddSheetContent: View {
                             Text(command).font(.ui(11, mono: true)).foregroundStyle(palette.text2)
                                 .fixedSize(horizontal: false, vertical: true)
                                 .textSelection(.enabled)
+                        }
+                        if let note = step.note {
+                            Text(note).font(.ui(11)).foregroundStyle(palette.text2)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
                     }
                     Spacer(minLength: 0)

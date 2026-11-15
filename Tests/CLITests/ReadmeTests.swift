@@ -756,6 +756,15 @@ import Testing
                 "an example.com address of no fixture label in a reused scene",
                 "holds an address other than", manageScenes, "spare-b@" + "example.com\"",
                 "account@" + "example.com\""),
+            // One leading hyphen before a fixture label passes; nothing wider does.
+            edit(
+                "a fixture address with two leading hyphens in a reused scene",
+                "holds an address other than", manageScenes, "\"-lab@" + "example.com\"",
+                "\"--lab@" + "example.com\""),
+            edit(
+                "a hyphen before no fixture label in a reused scene",
+                "holds an address other than", manageScenes, "\"-lab@" + "example.com\"",
+                "\"-x@" + "example.com\""),
             edit(
                 "a home path in the README fixture", "source holds a path outside", readmeScenes,
                 "~/.agent-balancer/accounts/lab/.claude", "/Users/" + "someone/.claude"),
@@ -823,6 +832,14 @@ import Testing
                 }
             ),
             ("the copy as it is", { _ in }),
+            (
+                "a fixture address with one leading hyphen",
+                {
+                    try Self.replace(
+                        "\"spare-b@" + "example.com\"", with: "\"-spare-b@" + "example.com\"",
+                        in: "Sources/AgentBalancerBar/Manage/ManageScenes.swift", under: $0)
+                }
+            ),
             (
                 "a link to a heading",
                 {
@@ -1025,13 +1042,21 @@ import Testing
         (row[window] as? [String: Any])?["usedPercent"] as? Double
     }
 
-    /// The rules the status writer keeps for one row.
+    /// The names of the README documents the Manage window draws.
+    static func windowDocuments() throws -> [String] {
+        let source = try read("Sources/AgentBalancerBar/ReadmeScenes.swift")
+        return source.matches(of: /ManageScenes\.window\([^)]*json: (\w+)\)/).map {
+            String($0.output.1)
+        }
+    }
+
+    /// The rules the status writer keeps for one row, as stated here for the document that the
+    /// writer check does not rebuild: the menu's.
     static func expectWritable(_ row: [String: Any], generated: Date, in name: String) throws {
         let label = try #require(row["label"] as? String)
         let kind = try #require(row["kind"] as? String)
         let state = try #require(row["state"] as? String)
         let at = "\(name) \(label)"
-        #expect(row["email"] as? String == "\(label)@example.com", "\(at)")
         #expect((code(row) != nil) == (state == "error" || state == "ended"), "\(at)")
 
         // A limited row has a reading at or above the limit, and only a limited row has one.
@@ -1081,6 +1106,8 @@ import Testing
     @Test func theReadmePicturesShowMadeUpAccountsInStatesTheWriterCanProduce() throws {
         let docs = try Self.fixture()
         #expect(docs.map { $0.name } == ["menu", "manageTokens", "manageFolders"])
+        let window = try Self.windowDocuments()
+        #expect(window == ["manageTokens", "manageFolders"])
         for (name, text) in docs {
             guard case .loaded = StatusSnapshot.parse(Data(text.utf8)) else {
                 #expect(Bool(false), "\(name) does not load in the app")
@@ -1091,13 +1118,23 @@ import Testing
                 (doc["generatedAt"] as? String).flatMap { ISO8601DateFormatter().date(from: $0) })
             let rows = try #require(doc["accounts"] as? [[String: Any]])
             #expect(rows.compactMap { $0["label"] as? String } == Self.labels, "\(name)")
-            // A pending settings change puts settings_changed on every login and token row.
-            if let banner = doc["banner"], !(banner is NSNull) {
-                for row in rows where row["kind"] as? String != "folder" {
-                    #expect(Self.code(row) == "settings_changed", "\(name)")
-                }
+            for row in rows {
+                let label = row["label"] as? String ?? ""
+                #expect(row["email"] as? String == "\(label)@example.com", "\(name) \(label)")
             }
-            for row in rows { try Self.expectWritable(row, generated: generated, in: name) }
+            if window.contains(name) {
+                // The status writer's own build makes each row the window draws again.
+                let problems = try ManageScenesWriterTests.problems(text, name: name)
+                #expect(problems == [], "\(name)")
+            } else {
+                // A pending settings change puts settings_changed on every login and token row.
+                if let banner = doc["banner"], !(banner is NSNull) {
+                    for row in rows where row["kind"] as? String != "folder" {
+                        #expect(Self.code(row) == "settings_changed", "\(name)")
+                    }
+                }
+                for row in rows { try Self.expectWritable(row, generated: generated, in: name) }
+            }
             let next = try #require(doc["next"] as? [String: Any])
             for key in ["all", "fable"] {
                 let choice = try #require(next[key] as? [String: Any])

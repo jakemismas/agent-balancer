@@ -13,18 +13,29 @@ public struct AccountCheck: Sendable {
     public var planTier: String?
     public var loginExpiresAt: Date?
     public var signedIn: Bool
+    /// `Account.emailDigest` of the account the check was made for, or nil when it read no status.
+    public var emailDigest: String?
 
     public init(
         issues: [Issue] = [], planTier: String? = nil, loginExpiresAt: Date? = nil,
-        signedIn: Bool = false
+        signedIn: Bool = false, emailDigest: String? = nil
     ) {
         self.issues = issues
         self.planTier = planTier
         self.loginExpiresAt = loginExpiresAt
         self.signedIn = signedIn
+        self.emailDigest = emailDigest
     }
 
     public var hasError: Bool { issues.contains { $0.severity == .error } }
+}
+
+extension Account {
+    /// What a sign-in check of this account is bound to: a digest of its account key and its
+    /// expected email, lowercased as the check compares it, so the email itself is never stored.
+    public var emailDigest: String {
+        HookRecord.sha256(accountKey + "\u{0}" + (email?.lowercased() ?? ""))
+    }
 }
 
 public enum AccountKinds {

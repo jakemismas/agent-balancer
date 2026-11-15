@@ -9,6 +9,10 @@ struct ManageActions {
     var openRemove: () -> Void = {}
     var signIn: () -> Void = {}
     var changeEnds: (EndChoice) -> Void = { _ in }
+    /// Each date the end date picker reports while it is edited; nothing runs yet.
+    var stepEndDate: (String) -> Void = { _ in }
+    /// The end of that edit, which runs one command for the last date.
+    var finishEndDate: () -> Void = {}
 }
 
 enum ChromeStyle { case normal, primary, danger }

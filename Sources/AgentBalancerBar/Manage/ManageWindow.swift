@@ -29,7 +29,8 @@ struct ManageWindowView: View {
                 actions: AddSheetActions(
                     copy: copy, close: { model.closeAdd() },
                     submit: { Task { await model.submitAdd() } },
-                    runStep: { step in Task { await model.runStep(step) } })
+                    runStep: { step in Task { await model.runStep(step) } }),
+                note: model.add.flatMap { model.addNote($0) }
             )
             // Esc stays off while a command runs, like the Cancel button.
             .interactiveDismissDisabled(model.busy)
@@ -56,13 +57,12 @@ struct ManageWindowView: View {
                 NSApp.windows.first { $0.title == "Manage accounts" }?.close()
                 return
             }
-            DockMode.show()
             model.windowOpened()
         }
         .onDisappear {
             ManageWindowGate.requested = false
+            Task { await model.finishEndDate() }
             model.windowClosed()
-            DockMode.hide()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) {
             note in
@@ -72,13 +72,27 @@ struct ManageWindowView: View {
                 model.statusMayHaveChanged()
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) {
+            note in
+            // Leaving the window ends an edit of the end date, as leaving the picker does.
+            guard let window = note.object as? NSWindow, window.title == "Manage accounts" else {
+                return
+            }
+            Task { await model.finishEndDate() }
+        }
     }
 
     private var removeEnabled: Bool { model.panel?.remove?.enabled ?? false }
 
     private var actions: ManageActions {
         ManageActions(
-            copy: copy, select: { model.selection = $0 }, openAdd: { model.openAdd() },
+            copy: copy,
+            select: { label in
+                // An end date edit under way is saved for the account it was made on.
+                Task { await model.finishEndDate() }
+                model.selection = label
+            },
+            openAdd: { model.openAdd() },
             openRemove: { model.openRemove() },
             signIn: {
                 if let label = model.selection { Task { await model.signIn(label) } }
@@ -87,20 +101,27 @@ struct ManageWindowView: View {
                 if let label = model.selection {
                     Task { await model.changeEnds(label: label, to: choice) }
                 }
-            })
+            },
+            stepEndDate: { date in
+                if let label = model.selection { model.stepEndDate(label: label, to: date) }
+            },
+            finishEndDate: { Task { await model.finishEndDate() } })
     }
 }
 
 /// While the window is open the app shows its icon in the Dock and the app switcher, and the
 /// title bar carries the same icon. Closing the window puts the app back in the menu bar only.
+/// The view model calls `apply` as the window opens and closes.
 @MainActor
 enum DockMode {
-    static func show() {
-        NSApp.setActivationPolicy(.regular)
-        NSApp.activate(ignoringOtherApps: true)
+    static func apply(shown: Bool) {
+        if shown {
+            NSApp.setActivationPolicy(.regular)
+            NSApp.activate(ignoringOtherApps: true)
+        } else {
+            NSApp.setActivationPolicy(.accessory)
+        }
     }
-
-    static func hide() { NSApp.setActivationPolicy(.accessory) }
 }
 
 /// Sets the window title and puts the tile icon in the title bar, once per window.

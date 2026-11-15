@@ -42,6 +42,9 @@ struct InitCommand: ParsableCommand {
         let hooks = HookRecord(context: context)
         let facts = try hooks.readSettings()
 
+        let registered = Account(
+            label: chosen, kind: Kind.login, role: Role.pool, email: status.email,
+            expectedPlanTier: status.planTier)
         // Checked again and saved under the pick lock, so an `add` or `config set` that saves at
         // the same moment is kept.
         try TokenAccounts.setUpConfig(context: context) { current in
@@ -52,19 +55,17 @@ struct InitCommand: ParsableCommand {
             if config.account(chosen) != nil {
                 throw ToolError("Label '\(Display.safe(chosen))' is already used.")
             }
-            config.accounts.append(
-                Account(
-                    label: chosen, kind: Kind.login, role: Role.pool, email: status.email,
-                    expectedPlanTier: status.planTier))
+            config.accounts.append(registered)
             if current == nil { config.probe.safeMode = true }
             return config
         }
         try hooks.record(facts)
         var observations = StatusObservations()
         observations.settings = SettingsObservation(issue: nil, carriesKey: facts.carriesKey)
+        // Bound to the email it read, so an email changed before the rebuild gets no plan from it.
         observations.auth[chosen] = AuthObservation(
             error: nil, planTier: status.planTier, loginExpiresAt: status.loginExpiresAt,
-            signedIn: true)
+            signedIn: true, emailDigest: registered.emailDigest)
         Shared.rebuildStatus(context, observations: observations)
 
         print("Registered '\(Display.safe(chosen))' as a login account in the pool.")

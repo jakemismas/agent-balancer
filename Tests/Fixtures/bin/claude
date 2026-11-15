@@ -12,6 +12,8 @@ printf '%s\n' "${CLAUDE_CONFIG_DIR-unset}" >> "$dir/config-dirs.log"
 # for `auth login`, the two ways a person signs in.
 sign_in() {
   if [ -f "$dir/auth-after-sign-in.json" ]; then cp "$dir/auth-after-sign-in.json" "$dir/auth.json"; fi
+  # A change the test staged to happen while the person signs in, such as an edit of the config.
+  if [ -f "$dir/during-sign-in.sh" ]; then sh "$dir/during-sign-in.sh"; fi
 }
 
 # A probe's start and end, appended in the order they happen, so a test can tell which probes
@@ -47,10 +49,18 @@ case "$1" in
     ;;
   auth)
     if [ "$2" = "login" ]; then
+      # A sign-in the test makes fail ends with that status and signs nothing in.
+      if [ -f "$dir/auth-login.exit" ]; then exit "$(cat "$dir/auth-login.exit")"; fi
       sign_in
       exit 0
     fi
-    if [ -f "$dir/auth.json" ]; then cat "$dir/auth.json"; fi
+    # A check of the default folder reads its own answer when a test staged one, so a login
+    # account and a folder account can each be signed in at once.
+    if [ -z "${CLAUDE_CONFIG_DIR+set}" ] && [ -f "$dir/auth-default.json" ]; then
+      cat "$dir/auth-default.json"
+    elif [ -f "$dir/auth.json" ]; then
+      cat "$dir/auth.json"
+    fi
     if [ -f "$dir/auth.exit" ]; then exit "$(cat "$dir/auth.exit")"; fi
     exit 0
     ;;
@@ -69,6 +79,13 @@ case "$1" in
     pwd >> "$dir/cwd.log"
     stat -f %Lp . >> "$dir/cwd-mode.log"
     printf '%s\n' "$model" >> "$dir/models.log"
+    # A probe of an account the test holds says so and waits until the test lets it go, at most
+    # five minutes, so the test can order another command around it.
+    if [ -n "$acct" ] && [ -f "$dir/hold-$acct" ]; then
+      : > "$dir/held-$acct"
+      n=0
+      while [ ! -f "$dir/go-$acct" ] && [ "$n" -lt 3000 ]; do sleep 0.1; n=$((n + 1)); done
+    fi
     # A probe with one model can take longer than the others.
     if [ -f "$dir/delay-$model" ]; then sleep "$(cat "$dir/delay-$model")"; fi
     if [ -f "$dir/unknown-option" ]; then

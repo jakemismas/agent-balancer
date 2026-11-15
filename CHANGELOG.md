@@ -66,7 +66,8 @@
   left. `login` writes no token file once a `remove` has dropped the account, `add` refuses a label
   whose token file outlived its account, and `login --paste` refuses to read when the terminal
   cannot hide the input.
-- `config set <label> label <new>` refuses on a token account and writes nothing.
+- `config set <label> label <new>` refuses on a token account, and on a folder account, whose
+  folder is named for the label, and writes nothing.
 - Add `run <label> [--print-command] [-- <claude arguments>]`: starts Claude Code on one account
   with a lease and one launch file, the checks of `pick` without the reading check, the terminal
   attached and the person's environment minus the protected group. `--settings <launch file>` comes
@@ -107,7 +108,8 @@
   the links listed in `links.json`.
 - Require an interactive terminal to apply `link`, `link --repair`, `link --accept-source-change`
   and `unlink`: standard input that is a pipe is refused before the prompt, nothing changes, and
-  `--dry-run` needs no terminal. These commands now refuse, writing nothing, when the account's
+  `--dry-run` needs no interactive terminal, though it still refuses inside a Claude Code chat
+  shell. These commands now refuse, writing nothing, when the account's
   links changed after the list was shown, and `link --accept-source-change` does the same for the
   hook record. Repair refusals and the broken-link text name the item to fix, the save-time error
   for an unusable folder names the fix, the links record refusal lists every step, and `login`
@@ -163,13 +165,16 @@
   out") and offers Sign in once it is linked and its expected email passes the plain-email rule
   `login --browser` applies (one rule for both; otherwise the panel says why), and the Add sheet's
   steps follow. A folder row with no `signInCheck` key, from a status written before the field,
-  reads "Sign-in not confirmed" with no Sign in while it shows a code that can hide a doubt. An
-  ended folder keeps its sign-in line, its list row says "ended" (with the date when it has one),
-  and its panel shows the row's `account_ended` error unless a sign-in problem takes that place. A
-  token or login account counts as signed in only while its row has no code: an ended one reads
-  "Account ended" and one with any other code but `login_rejected`, `token_missing` or
-  `wrong_account` reads "Sign-in not confirmed", each with a red dot and the row's own error as the
-  panel's reason. `login <label> --browser` on a folder that
+  that shows `check_failed` or a code that can hide a doubt reads "Sign-in not confirmed" with no
+  Sign in when it is linked, and "Not signed in" with its link step when it is not. An ended
+  folder keeps its sign-in line, its list row's line ends with "ended Nov 1" once its end date has
+  passed and with "ended" otherwise, and its panel shows the row's `account_ended` error along
+  with any sign-in problem it reads as. A token account counts as signed in only while its
+  row has no code, and a login account the same way or by its plan tier under `plan_changed` or
+  `duplicate_login`: an ended one reads "Ended Nov 1" in the list, or "Ended" when no end date has
+  passed, and one with any other code but `login_rejected`, `token_missing` or `wrong_account`
+  reads "Sign-in not confirmed", each with a red dot and the row's own error as the panel's
+  reason. `login <label> --browser` on a folder that
   is already signed in records that sign-in before it refuses, and the window's bar shows its error
   or "Signed in." line rather than its advice. Remove runs only for the kind and email its sheet
   named.
@@ -183,8 +188,9 @@
 - The menu and the window pass every text from `status.json` through the display-safe pass. The
   render flags `--render` and `--iconset` write only into a folder under the current folder's
   `build/`, written without `..`, with no link and no `.claude` or `.agent-balancer` folder (in any
-  case) on its path below the current folder, and outside the home's `.claude` and `.agent-balancer`
-  however HOME spells it; any other folder exits 1 and writes nothing. The home must be a folder and
+  case) on its path below the current folder, and outside the home's `.claude` and
+  `.agent-balancer`; any other folder exits 1 and writes nothing. A HOME that is set but empty,
+  is not an absolute path, or has a `..` segment stops every render. The home must be a folder and
   its `.claude` and `.agent-balancer` missing or a folder: a link to nothing (or a loop, a file, or
   a link to a file) there exits 1 before anything is made. The folder is opened once and every file
   is written relative to it after the home's tool folders are read again, so a folder swapped for a
@@ -204,8 +210,9 @@
   fenced code block except a `json` block, with a leading `$ ` or `% ` prompt dropped. A fence must
   close before the list item that holds it ends: a line that is not blank and is indented less than
   the opening fence ends it, and the check fails on a fence that ends there or at the end of the
-  file without closing. A `json` block must parse as JSON, and each string in it, key or value, is
-  read as a later part of a chain. It cuts each span or line into parts at `&&`, `||`, `;`, `&` and
+  file without closing. A `json` block must parse as JSON, and each key and each string of the
+  parsed value is read as a later part of a chain, so a key that appears twice is read with its
+  last value only. It cuts each span or line into parts at `&&`, `||`, `;`, `&` and
   `|` (a `|` before a flag is a choice in a usage line) and reads each `$(...)` or backtick
   substitution as a part of its own. The first part must start with `agent-balancer`, `claude`,
   `brew`, `gh` or `mkdir`, or be one word naming a path, file or key. In every part but a `claude`,
@@ -220,15 +227,78 @@
   The scene sources the pictures are drawn from must name accounts only by the labels `main`,
   `personal`, `lab`, `spare-a` and `spare-b`, every word with a letter in their strings and
   comments, lowercased and ISO times aside, must be a label or on the check's word list, and they
-  must hold only those labels' example.com addresses and the fixture's paths. When the local
-  banned-string list is present, the check also fails on a banned string in the pictures' metadata
-  or the scene sources. The leak test now also runs its shapes over every chunk of the README
-  pictures but their pixel data, compressed text inflated, and over those scene sources. The safety
-  scan now also reads the Markdown files at the top of the repository for addresses, org ids and
-  attribution phrases. The other render scenes now use the five labels too, and the Manage window
-  scenes date the link check by the status file's time, as the window does.
+  must hold only those labels' example.com addresses, each with at most one leading hyphen, and
+  the fixture's paths. When the local banned-string list is present, the check also fails on a
+  banned string in the pictures' metadata or the scene sources. The leak test now also runs its
+  shapes over every chunk of the README pictures but their pixel data, compressed text inflated,
+  and over those scene sources. The safety scan now also reads the Markdown files at the top of
+  the repository for addresses, org ids and attribution phrases. The other render scenes now use
+  the five labels too, and the Manage window scenes date the link check by the status file's time,
+  as the window does.
 - Refuse every save to `links.json`, writing nothing, when its `schemaVersion` is not 1, such as a
   file a newer version wrote: the message says to move `links.json` aside, record the hooks again
   with `agent-balancer link --accept-source-change` and run `agent-balancer link <label>` again for
   each folder account. `uninstall` still deletes such a file, and removes none of the links it
   lists, since it cannot read them.
+- A sign-in check counts only for the account and email it was made for. `state/current.json`
+  keeps a digest of the account key and the lowercased email of each check, never the email.
+  After the email changes, by `config set <label> email`, by an edit of `config.json` or by
+  `remove` and `add` of the label, the row has no plan tier, no expiry from a check and no
+  `signed_in` until a check of the new email, so the Manage accounts window shows no "Signed in"
+  and no finished Add step 3 for such a folder. `link <label>`, once its links are made, and
+  `config set <label> email <new>` check the folder or login account as `status` does, so
+  the window reads what the folder holds. Only a check that placed the expected account's
+  sign-in in its own folder, for its current email, records the expected plan (in `refresh`
+  and `login`), the expiry and the ending-soon plan drop. A probe's `login_rejected`, a Fable
+  probe's too, stays until a probe works with a reading newer than the latest one the status had
+  seen, or until `login` completes a new sign-in, and a check that sees only the old sign-in
+  leaves it: while it stands, `login <label>` and
+  `login <label> --browser` sign the folder in again instead of refusing it as already signed
+  in, and a run that cannot show a new sign-in exits 1 with `login_rejected`. While a probe's
+  `login_rejected` stands for a token account and the status has seen its latest reading (only
+  a probe that works stores a newer one), `pick` skips it as `login rejected` and `run <label>`
+  refuses it, even on a fresh reading. A `signInCheck` of another type in `status.json` reads as
+  no check, and the menu and the window still load the rest of the status.
+- In the Manage accounts window, ended token and login rows read "Ended Nov 1" in the list,
+  or "Ended" when no end date has passed, and an ended folder's line ends with "ended Nov 1"
+  once its end date has passed and with "ended" before then. A signed-in token with no end set
+  reads "N days left", "1 day left" or "Less than a day left" until its estimated end, then
+  "Signed in", never "Expired". An ended folder that its last check placed, with a doubt since,
+  says its sign-in may have been rejected and gives
+  `agent-balancer login <label> --browser`; one that reads as another account's, or that its
+  last check could not place, shows that problem and then that it has ended. A linked folder
+  row with no `signInCheck` key, as an earlier version wrote it, reads "Sign-in not
+  confirmed" under `check_failed` too, and one that is not linked, under `check_failed` or a
+  code that can hide a doubt, reads "Not signed in" with its link step and Sign in off. A login
+  row with `plan_changed` or `duplicate_login` counts its plan tier as sign-in evidence, as a
+  folder row does. A login account's `wrong_account` step,
+  in the menu and the window, and its `login_rejected` steps in the menu say to run `claude` and
+  sign in again, never to relabel a folder or to run `agent-balancer login`, which refuses a
+  login account, and its menu row has no Open Manage accounts action. A folder whose expected
+  email fails the
+  plain-email rule shows `agent-balancer config set <label> email <address>` with Copy, and
+  Add step 3 gives the same reason.
+- In the Manage accounts window, editing the end date runs one
+  `config set <label> ends <date>` when the edit ends (the date picker loses focus or goes away,
+  the window closes or stops being key, or another account is selected), for the date it ended
+  on, so a date part way through an edit, today included, is never saved. After a token
+  account's `login`, the bar shows how it ended (the saved token and its first check, or the
+  tool's `Error` line), not its opening line. The Remove sheet closes when `remove` fails,
+  such as when another `remove` got there first, and the bar shows the tool's text. Once
+  management is off, as when the CLI goes missing while the Add sheet is open, the sheet says
+  why Add is off in place of an earlier run's error. The shared-settings tip reads "Approve
+  linking in Terminal: agent-balancer link <label>".
+- The Manage window renders draw a finished folder Add sheet with its Label and Email fields
+  off, as the live sheet does, show no plan tier on the folder render's signed-out folder, and
+  add `manage-email-note`, the panel's note for an email `login --browser` will not pass to
+  `claude`. The README check lets a scene source hold a made-up account's address with one
+  leading hyphen, for that render. `scripts/build-app.sh` and `scripts/render-views.sh` take
+  the checkout's real path, so both run from a checkout opened through a link.
+- Every `refresh` checks the sign-in of each login and folder account whose probe did not fail
+  (the check spends no usage), and probes again an account whose sign-in a probe found
+  rejected, as the status records it, even when its reading is fresh; every other fresh
+  reading is kept without a plain probe unless you pass `--force`. So after you sign back in,
+  the next refresh, such as Refresh now in the menu or its timer, clears "Login rejected"
+  without waiting for the reading to age, unless its probe fails or another command records the
+  account's rejection after that probe. A plan already recorded for an account stays as it is,
+  and a check that sees another plan shows `plan_changed`, as `status` does.

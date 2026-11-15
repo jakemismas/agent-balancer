@@ -12,7 +12,8 @@ public struct IssueRecord: Codable, Equatable, Sendable {
 }
 
 /// What the tool last saw of one account: its state, since when, and what it needs to tell a
-/// change from a repeat. It holds labels, codes, times and scrubbed texts only.
+/// change from a repeat. It holds labels, codes, times, scrubbed texts and a digest
+/// (`emailDigest`), never an email.
 public struct CurrentEntry: Codable, Equatable, Sendable {
     public var accountKey: String
     public var state: String
@@ -39,6 +40,9 @@ public struct CurrentEntry: Codable, Equatable, Sendable {
     public var possibleDuplicateOf: String?
     /// What the last sign-in check that read a status saw (`SignInSeen`), or nil before one.
     public var signInCheck: String?
+    /// `Account.emailDigest` of the account that check was made for. While the account's own
+    /// digest differs, as after a change of its email, the check stands for nothing.
+    public var emailDigest: String?
 }
 
 /// What a sign-in check (`auth status`) saw of an account's sign-in.
@@ -92,12 +96,18 @@ public struct CurrentFile: Codable, Equatable, Sendable {
                 entry.expiringNotified.map(ConfigValidator.isValidDate) ?? true,
                 entry.possibleDuplicateOf.map(ConfigValidator.isValidLabel) ?? true,
                 entry.signInCheck.map({ SignInSeen(rawValue: $0) != nil }) ?? true,
+                entry.emailDigest.map(Self.isDigest) ?? true,
                 [entry.authError, entry.probeError].allSatisfy({
                     $0.map { StateCode(rawValue: $0.code) != nil } ?? true
                 })
             else { return false }
         }
         return true
+    }
+
+    /// 64 lowercase hex digits, the only digest shape the tool writes.
+    static func isDigest(_ text: String) -> Bool {
+        text.range(of: #"\A[0-9a-f]{64}\z"#, options: .regularExpression) != nil
     }
 }
 
@@ -107,18 +117,29 @@ public struct AuthObservation: Sendable {
     public var planTier: String?
     public var loginExpiresAt: Date?
     public var signedIn: Bool
+    /// `Account.emailDigest` of the account the check was made for. Nil counts as made for the
+    /// account the rebuild folds it into.
+    public var emailDigest: String?
+    /// True for the check `login` makes once it completed a new sign-in of the folder.
+    public var newSignIn: Bool
 
-    public init(error: Issue?, planTier: String?, loginExpiresAt: Date?, signedIn: Bool) {
+    public init(
+        error: Issue?, planTier: String?, loginExpiresAt: Date?, signedIn: Bool,
+        emailDigest: String? = nil, newSignIn: Bool = false
+    ) {
         self.error = error
         self.planTier = planTier
         self.loginExpiresAt = loginExpiresAt
         self.signedIn = signedIn
+        self.emailDigest = emailDigest
+        self.newSignIn = newSignIn
     }
 
     public init(_ check: AccountCheck) {
         self.init(
             error: check.issues.first { $0.severity == .error }, planTier: check.planTier,
-            loginExpiresAt: check.loginExpiresAt, signedIn: check.signedIn)
+            loginExpiresAt: check.loginExpiresAt, signedIn: check.signedIn,
+            emailDigest: check.emailDigest)
     }
 
     /// What the check saw of the sign-in, or nil when it read no status (it could not run, or
@@ -137,9 +158,33 @@ public struct AuthObservation: Sendable {
 /// The result of a probe of one account. A nil error means the probe worked.
 public struct ProbeObservation: Sendable {
     public var error: Issue?
+    /// For a probe that worked, how new the reading it stored is. It is kept in memory only.
+    public var readAt: ReadTime?
 
-    public init(error: Issue?) {
+    /// How new the reading of a probe that worked is.
+    public enum ReadTime: Equatable, Sendable {
+        /// The probe stored a reading of this time.
+        case at(Date)
+        /// A Fable probe stored a reading after the fresh one of this time it ran over; the
+        /// refresh result does not carry the time of its own.
+        case after(Date)
+    }
+
+    public init(error: Issue?, readAt: ReadTime? = nil) {
         self.error = error
+        self.readAt = readAt
+    }
+
+    /// True when the probe worked and its reading is newer than a stored reading of `seen`, or
+    /// than none when `seen` is nil. A probe whose reading time is not known never is.
+    func worked(after seen: Date?) -> Bool {
+        guard error == nil, let readAt else { return false }
+        guard let seen else { return true }
+        switch readAt {
+        case .at(let time): return time > seen
+        // The Fable reading may share this time's second, so only a newer time shows it newer.
+        case .after(let time): return time > seen
+        }
     }
 }
 
@@ -180,8 +225,16 @@ public struct StatusObservations: Sendable {
             // began, leaves it unobserved.
             switch result.status {
             case .failed(let issue): probe[result.label] = ProbeObservation(error: issue)
-            case .probed: probe[result.label] = ProbeObservation(error: nil)
+            case .probed(let reading):
+                probe[result.label] = ProbeObservation(error: nil, readAt: .at(reading.readAt))
             case .fresh, .usedStored, .notStarted: break
+            }
+            // A Fable probe runs last, so its rejection, or its working where no plain probe ran,
+            // is the account's last probe; any other Fable failure says nothing on the sign-in.
+            if case .failed(let issue) = result.fable, issue.code == .loginRejected {
+                probe[result.label] = ProbeObservation(error: issue)
+            } else if case .fresh(let reading) = result.status, result.fable == .probed {
+                probe[result.label] = ProbeObservation(error: nil, readAt: .after(reading.readAt))
             }
             if result.duplicate != .notRun { duplicates[result.label] = result.duplicate }
         }
@@ -248,9 +301,11 @@ enum Transitions {
     }
 
     /// The entry with this run's observations folded in. The state fields are not touched.
+    /// `storedReadAt` is the time of the account's stored reading as this rebuild read it.
     static func observed(
         _ previous: CurrentEntry?, account: Account, auth: AuthObservation?,
-        probe: ProbeObservation?, duplicate: DuplicateCheck = .notRun, now: Date
+        probe: ProbeObservation?, duplicate: DuplicateCheck = .notRun, storedReadAt: Date? = nil,
+        now: Date
     ) -> CurrentEntry {
         var entry =
             previous
@@ -258,17 +313,24 @@ enum Transitions {
                 accountKey: account.accountKey, state: "ok", code: nil, since: now,
                 endedByPlan: false)
         entry.accountKey = account.accountKey
+        let digest = account.emailDigest
         if let auth {
             entry.authError = auth.error.map {
                 IssueRecord(Issue($0.code, $0.severity, clean($0.text)))
             }
             // The tier is the evidence of the expected sign-in, so only a check that placed that
-            // sign-in here keeps it; another account's tier never stands for this one.
-            entry.planTier = auth.seen == .signedIn ? auth.planTier : nil
-            if let seen = auth.seen { entry.signInCheck = seen.rawValue }
-            if auth.signedIn {
+            // sign-in here, for the email the account has now, keeps it or feeds the plan and
+            // expiry; another account's tier never stands for this one.
+            let placed = auth.seen == .signedIn && (auth.emailDigest ?? digest) == digest
+            entry.planTier = placed ? auth.planTier : nil
+            if let seen = auth.seen {
+                entry.signInCheck = seen.rawValue
+                entry.emailDigest = auth.emailDigest ?? digest
+            }
+            if placed {
                 entry.loginExpiresAt = auth.loginExpiresAt
-                if entry.probeError?.code == StateCode.loginRejected.rawValue {
+                // A check that saw only the old sign-in leaves a probe's rejection standing.
+                if auth.newSignIn, entry.probeError?.code == StateCode.loginRejected.rawValue {
                     entry.probeError = nil
                 }
                 if account.endingSoon == true, let expected = account.expectedPlanTier,
@@ -278,13 +340,36 @@ enum Transitions {
                 }
             }
         }
+        // Only a probe that works stores a reading, so a stored one newer than the latest the
+        // status had seen ends a probe's rejection, whichever rebuild reads it first.
+        if let storedReadAt, entry.probeError?.code == StateCode.loginRejected.rawValue,
+            storedReadAt > (entry.lastReadingAt ?? .distantPast)
+        {
+            entry.probeError = nil
+        }
         if let probe {
-            entry.probeError = probe.error.map {
-                IssueRecord(Issue($0.code, $0.severity, clean($0.text)))
+            // A probe that fails for another reason says nothing new about the sign-in, and one
+            // whose reading the status had already seen may be older than the rejection, so only
+            // a probe that works with a newer reading ends a probe's rejection.
+            let stands =
+                entry.probeError?.code == StateCode.loginRejected.rawValue
+                && !probe.worked(after: entry.lastReadingAt)
+            if !stands {
+                entry.probeError = probe.error.map {
+                    IssueRecord(Issue($0.code, $0.severity, clean($0.text)))
+                }
             }
             if probe.error == nil && entry.authError?.code == StateCode.loginRejected.rawValue {
                 entry.authError = nil
             }
+        }
+        // A check counts only for the email it was made for, so a changed email, by any means,
+        // leaves no tier, expiry or `signed_in` until a check of the new one.
+        if entry.emailDigest != digest {
+            entry.planTier = nil
+            entry.loginExpiresAt = nil
+            if entry.signInCheck == SignInSeen.signedIn.rawValue { entry.signInCheck = nil }
+            entry.emailDigest = nil
         }
         switch duplicate {
         case .notRun: break

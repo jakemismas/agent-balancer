@@ -8,6 +8,43 @@ private func text(_ data: Data) -> String { String(decoding: data, as: UTF8.self
 /// Every sign-in here takes a token in the shape recorded for a real one.
 private func oauth() -> String { Canary.realShapeToken() }
 
+/// A command run as a child process from a thread of its own, so the test can act while it runs
+/// and never waits on the shared dispatch pool for it.
+private final class Started: @unchecked Sendable {
+    private let lock = NSLock()
+    private let ended = DispatchSemaphore(value: 0)
+    private var output: Support.Output?
+    private var finished = false
+
+    init(_ cli: CLIHome, _ args: [String]) {
+        let thread = Thread { [self] in
+            let out = try? cli.run(args)
+            lock.lock()
+            output = out
+            finished = true
+            lock.unlock()
+            ended.signal()
+        }
+        thread.stackSize = 1 << 20
+        thread.start()
+    }
+
+    /// True once the command has ended.
+    var hasEnded: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return finished
+    }
+
+    /// The command's output once it has ended, or nil when it still runs after five minutes.
+    func wait() -> Support.Output? {
+        guard ended.wait(timeout: .now() + 300) == .success else { return nil }
+        lock.lock()
+        defer { lock.unlock() }
+        return output
+    }
+}
+
 /// add, login, remove and the token checks end to end against the fake `claude`.
 @Suite struct TokenAccountsCLITests {
     func setUp() throws -> CLIHome {
@@ -820,6 +857,923 @@ private func oauth() -> String { Canary.realShapeToken() }
         #expect(lab["reason"] as? String == "login rejected")
     }
 
+    /// How many probes the fake `claude` has run under the token file of `label`.
+    func tokenProbeRuns(_ cli: CLIHome, _ label: String) throws -> Int {
+        let file = try tokenFile(cli, label)
+        return cli.fakeRecord("args.log").split(separator: "\n").filter {
+            $0.hasPrefix("-p ") && $0.contains("--settings \(file.path)")
+        }.count
+    }
+
+    /// `lab` signed in with a fresh reading, then a forced probe that finds its token rejected.
+    /// The reading is two minutes old, so a probe after the rejection stores a newer one.
+    func rejectedLab(_ cli: CLIHome) throws {
+        try addLab(cli)
+        try loginLab(cli)
+        try ageReading(cli, "lab", by: 120)
+        try cli.fakeProbe("auth_error.jsonl")
+        #expect(try cli.run(["refresh", "--label", "lab", "--force"]).status == 1)
+        #expect(try tokenError(cli)?["code"] as? String == "login_rejected")
+    }
+
+    /// `lab` in a pick that leaves `main` out: whether it is eligible, why, and the label picked.
+    func labInPick(_ cli: CLIHome, _ flags: [String] = []) throws
+        -> (eligible: Bool?, reason: String?, picked: String?)
+    {
+        let answer = try object(try cli.run(["pick", "--json", "--exclude", "main"] + flags))
+        let candidates = try #require(answer["candidates"] as? [[String: Any]])
+        let lab = try #require(candidates.first { $0["label"] as? String == "lab" })
+        return (lab["eligible"] as? Bool, lab["reason"] as? String, answer["label"] as? String)
+    }
+
+    @Test func pickSkipsATokenAccountWhoseProbesRejectionStandsWhileItsReadingIsFresh() throws {
+        let cli = try setUp()
+        defer { cli.cleanup() }
+        try rejectedLab(cli)
+        // The reading `login` stored is still fresh, so no probe of the pick would see the
+        // rejection.
+        let probes = try tokenProbeRuns(cli, "lab")
+        for flags in [["--caller", "launcher"], []] {
+            let lab = try labInPick(cli, flags)
+            #expect(lab.eligible == false && lab.reason == "login rejected", "\(flags)")
+            #expect(lab.picked == nil, "\(flags)")
+        }
+        #expect(try tokenProbeRuns(cli, "lab") == probes)
+    }
+
+    @Test func pickAndRunSkipATokenAccountWhoseFirstCheckWasRejected() throws {
+        let cli = try setUp()
+        defer { cli.cleanup() }
+        try addLab(cli)
+        try cli.fakeProbe("auth_error.jsonl")
+        try cli.fake("setup-token.out", oauth() + "\n")
+        #expect(try cli.run(["login", "lab"]).status == 1)
+        #expect(try tokenError(cli)?["code"] as? String == "login_rejected")
+        // The rejected first check stored no reading.
+        #expect(cli.read("state/readings/lab.json").isEmpty)
+        let probes = try tokenProbeRuns(cli, "lab")
+        let lab = try labInPick(cli)
+        #expect(lab.eligible == false && lab.reason == "login rejected")
+        #expect(try tokenProbeRuns(cli, "lab") == probes)
+        for args in [["run", "lab"], ["run", "lab", "--print-command"]] {
+            let out = try cli.run(args)
+            #expect(out.status == 1, "\(args)")
+            #expect(text(out.stderr).contains(Messages.probeLoginRejected), "\(args)")
+        }
+    }
+
+    @Test func pickAndRunSkipATokenAccountWhoseRejectionStandsOnAStaleReading() throws {
+        let cli = try setUp()
+        defer { cli.cleanup() }
+        try addLab(cli)
+        try loginLab(cli)
+        // The rejection has stood past the reading age: the stored reading is an hour old.
+        let store = ReadingStore(context: ToolContext(home: cli.home, ambient: [:]))
+        var reading = try #require(try store.load(label: "lab"))
+        reading.readAt = Date().addingTimeInterval(-3600)
+        try store.save(reading, label: "lab")
+        try cli.fakeProbe("auth_error.jsonl")
+        #expect(try cli.run(["refresh", "--label", "lab", "--force"]).status == 1)
+        #expect(try tokenError(cli)?["code"] as? String == "login_rejected")
+        let probes = try tokenProbeRuns(cli, "lab")
+        let lab = try labInPick(cli)
+        #expect(lab.eligible == false && lab.reason == "login rejected")
+        #expect(try tokenProbeRuns(cli, "lab") == probes)
+        for args in [["run", "lab"], ["run", "lab", "--print-command"]] {
+            let out = try cli.run(args)
+            #expect(out.status == 1, "\(args)")
+            #expect(text(out.stderr).contains(Messages.probeLoginRejected), "\(args)")
+        }
+    }
+
+    @Test func pickAndRunSkipATokenAccountWhoseRejectionStandsOnAReadingTheyCannotRead() throws {
+        let cli = try setUp()
+        defer { cli.cleanup() }
+        try rejectedLab(cli)
+        // The stored reading is there but cannot be read.
+        let file = cli.dataRoot.appendingPathComponent("state/readings/lab.json").path
+        try #require(chmod(file, 0) == 0)
+        defer { chmod(file, 0o600) }
+        let probes = try tokenProbeRuns(cli, "lab")
+        // The pick saves the settings verdict that `run` relies on, so it runs first.
+        let lab = try labInPick(cli, ["--caller", "launcher"])
+        #expect(lab.eligible == false && lab.reason == "login rejected")
+        #expect(lab.picked == nil)
+        for args in [["run", "lab"], ["run", "lab", "--print-command"]] {
+            let out = try cli.run(args)
+            #expect(out.status == 1, "\(args)")
+            #expect(text(out.stderr).contains(Messages.probeLoginRejected), "\(args)")
+        }
+        #expect(try tokenProbeRuns(cli, "lab") == probes)
+    }
+
+    @Test func aTokenAccountCompetesAgainOnceAReadingNewerThanItsRejectionIsStored() throws {
+        let cli = try setUp()
+        defer { cli.cleanup() }
+        try addLab(cli)
+        try loginLab(cli)
+        let store = ReadingStore(context: ToolContext(home: cli.home, ambient: [:]))
+        var reading = try #require(try store.load(label: "lab"))
+        reading.readAt = Date().addingTimeInterval(-120)
+        try store.save(reading, label: "lab")
+        try cli.fakeProbe("auth_error.jsonl")
+        #expect(try cli.run(["refresh", "--label", "lab", "--force"]).status == 1)
+        #expect(try labInPick(cli).reason == "login rejected")
+
+        // Another command's probe worked and stored a newer reading before it rebuilt the status.
+        reading.readAt = Date().addingTimeInterval(-60)
+        try store.save(reading, label: "lab")
+        let lab = try labInPick(cli)
+        #expect(lab.eligible == true && lab.picked == "lab")
+    }
+
+    @Test func runStartsATokenOnceAReadingNewerThanItsRejectionIsStored() throws {
+        // Each form in a home of its own, since a run that starts rebuilds the status.
+        for flags in [["--print-command"], []] {
+            let cli = try setUp()
+            defer { cli.cleanup() }
+            try cli.fake("default.exit", "0")
+            try addLab(cli)
+            try loginLab(cli)
+            try ageReading(cli, "lab", by: 120)
+            try cli.fakeProbe("auth_error.jsonl")
+            #expect(try cli.run(["refresh", "--label", "lab", "--force"]).status == 1, "\(flags)")
+            // A reader saves the verdict that `run` relies on.
+            _ = try HookRecord(context: ToolContext(home: cli.home, ambient: [:])).readSettings()
+            #expect(try cli.run(["run", "lab"] + flags).status == 1, "\(flags)")
+
+            // Another command's probe worked and stored a newer reading before it rebuilt the
+            // status, so `run` starts lab, as `pick` offers it.
+            try ageReading(cli, "lab", by: 60)
+            let out = try cli.run(["run", "lab"] + flags)
+            #expect(out.status == 0, "\(flags)")
+            if flags.isEmpty {
+                let args = cli.fakeRecord("args.log").split(separator: "\n")
+                #expect(args.contains { $0.hasPrefix("--settings ") })
+            } else {
+                #expect(text(out.stdout).hasPrefix("claude --settings '"))
+            }
+        }
+    }
+
+    @Test func aTokenAccountCompetesAgainOnceARefreshProbesItAndTheProbeWorks() throws {
+        let cli = try setUp()
+        defer { cli.cleanup() }
+        try rejectedLab(cli)
+        #expect(try labInPick(cli).reason == "login rejected")
+        try cli.fakeProbe("ok.jsonl")
+        #expect(try cli.run(["refresh"]).status == 0)
+        let lab = try labInPick(cli)
+        #expect(lab.eligible == true && lab.picked == "lab")
+    }
+
+    @Test func pickJudgesALoginAccountWhoseProbesRejectionStandsByItsSignInCheck() throws {
+        let cli = try setUp()
+        defer { cli.cleanup() }
+        #expect(try cli.run(["refresh"]).status == 0)
+        try cli.fakeProbe("auth_error.jsonl")
+        #expect(try cli.run(["refresh", "--label", "main", "--force"]).status == 1)
+        #expect(try tokenError(cli, "main")?["code"] as? String == "login_rejected")
+        // A login account is judged at pick time by `auth status`, which still lists the sign-in.
+        let answer = try object(try cli.run(["pick", "--json"]))
+        #expect(answer["label"] as? String == "main")
+    }
+
+    // MARK: the Fable probe and the sign-in
+
+    /// Turns the Fable probe on, with the fake `claude` answering it from `fixture`.
+    func fableAnswers(_ cli: CLIHome, _ fixture: String, capPercentOfWeekly: Int? = nil) throws {
+        let store = ConfigStore(context: ToolContext(home: cli.home, ambient: [:]))
+        var config = try store.loadRequired()
+        config.fable.probe = true
+        if let capPercentOfWeekly { config.fable.capPercentOfWeekly = capPercentOfWeekly }
+        try store.save(config)
+        let now = Int(Date().timeIntervalSince1970)
+        let reply = try String(
+            contentsOf: cli.fixtures.appendingPathComponent("probe/\(fixture)"), encoding: .utf8
+        )
+        .replacingOccurrences(of: "@RESET_5H@", with: "\(now + 10_000)")
+        .replacingOccurrences(of: "@RESET_7D@", with: "\(now + 400_000)")
+        try cli.fake("probe-fable.jsonl", reply)
+    }
+
+    /// How many probes with `model` the fake `claude` has run under the token file of `label`.
+    func tokenProbeRuns(_ cli: CLIHome, _ label: String, model: String) throws -> Int {
+        let file = try tokenFile(cli, label)
+        return cli.fakeRecord("args.log").split(separator: "\n").filter {
+            $0.hasPrefix("-p ") && $0.contains("--model \(model) ")
+                && $0.contains("--settings \(file.path)")
+        }.count
+    }
+
+    /// How many probes with `model` the fake `claude` has run, for any account.
+    func probeRuns(_ cli: CLIHome, model: String) -> Int {
+        cli.fakeRecord("models.log").split(separator: "\n").filter { String($0) == model }.count
+    }
+
+    /// `main` with a fresh reading, then a forced probe that finds its sign-in rejected. The
+    /// reading is two minutes old, so a probe after the rejection stores a newer one.
+    func rejectedMain(_ cli: CLIHome) throws {
+        #expect(try cli.run(["refresh"]).status == 0)
+        try ageReading(cli, "main", by: 120)
+        try cli.fakeProbe("auth_error.jsonl")
+        #expect(try cli.run(["refresh", "--label", "main", "--force"]).status == 1)
+        #expect(try tokenError(cli, "main")?["code"] as? String == "login_rejected")
+    }
+
+    @Test func aFablePickWhoseFableProbeIsRejectedSkipsTheTokenAndRecordsTheRejection() throws {
+        // Each caller form in a home of its own, so the pick's own Fable probe is the one judged.
+        for flags in [["--caller", "launcher"], []] {
+            let cli = try setUp()
+            defer { cli.cleanup() }
+            try addLab(cli)
+            try loginLab(cli)
+            // With the whole week as Fable room, only the sign-in can keep lab out.
+            try fableAnswers(cli, "auth_error.jsonl", capPercentOfWeekly: 100)
+            let plain = try tokenProbeRuns(cli, "lab", model: "haiku")
+            let lab = try labInPick(cli, ["--model", "fable"] + flags)
+            #expect(lab.eligible == false && lab.reason == "login rejected", "\(flags)")
+            #expect(lab.picked == nil, "\(flags)")
+            // The reading `login` stored is fresh, so the Fable probe was the pick's only probe.
+            #expect(try tokenProbeRuns(cli, "lab", model: "fable") == 1, "\(flags)")
+            #expect(try tokenProbeRuns(cli, "lab", model: "haiku") == plain, "\(flags)")
+            #expect(try tokenError(cli)?["code"] as? String == "login_rejected", "\(flags)")
+        }
+    }
+
+    @Test func aFablePickSkipsATokenWhosePlainProbeWorkedAndFableProbeWasRejected() throws {
+        let cli = try setUp()
+        defer { cli.cleanup() }
+        try addLab(cli)
+        try loginLab(cli)
+        try ageReading(cli, "lab")
+        try fableAnswers(cli, "auth_error.jsonl", capPercentOfWeekly: 100)
+        let plain = try tokenProbeRuns(cli, "lab", model: "haiku")
+        let lab = try labInPick(cli, ["--model", "fable", "--caller", "launcher"])
+        // The aged reading made the pick probe lab plainly, and that probe worked.
+        #expect(try tokenProbeRuns(cli, "lab", model: "haiku") == plain + 1)
+        #expect(try tokenProbeRuns(cli, "lab", model: "fable") == 1)
+        #expect(lab.eligible == false && lab.reason == "login rejected")
+        #expect(lab.picked == nil)
+        #expect(try tokenError(cli)?["code"] as? String == "login_rejected")
+    }
+
+    @Test func aFablePickSkipsALoginAccountWhoseFableProbeIsRejected() throws {
+        let cli = try setUp()
+        defer { cli.cleanup() }
+        #expect(try cli.run(["refresh"]).status == 0)
+        try fableAnswers(cli, "auth_error.jsonl", capPercentOfWeekly: 100)
+        let answer = try object(
+            try cli.run(["pick", "--json", "--model", "fable", "--caller", "launcher"]))
+        let main = try candidate(answer, "main")
+        #expect(probeRuns(cli, model: "fable") == 1)
+        #expect(main["eligible"] as? Bool == false)
+        #expect(main["reason"] as? String == "login rejected")
+        #expect(answer["label"] as? String == nil)
+    }
+
+    @Test func aRefreshWhoseFableProbeIsRejectedKeepsTheTokenOutUntilAProbeWorks() throws {
+        let cli = try setUp()
+        defer { cli.cleanup() }
+        try addLab(cli)
+        try loginLab(cli)
+        // Still fresh, and older than the reading of the probe that ends the rejection.
+        try ageReading(cli, "lab", by: 120)
+        try fableAnswers(cli, "auth_error.jsonl")
+        let plain = try tokenProbeRuns(cli, "lab", model: "haiku")
+        let out = try cli.run(["refresh", "--label", "lab"])
+        #expect(out.status == 1)
+        #expect(text(out.stdout).contains("lab: fable Error login_rejected"))
+        #expect(try tokenProbeRuns(cli, "lab", model: "fable") == 1)
+        #expect(try tokenProbeRuns(cli, "lab", model: "haiku") == plain)
+        let error = try #require(try tokenError(cli))
+        #expect(error["code"] as? String == "login_rejected")
+        let shown = try #require(error["text"] as? String)
+
+        for flags in [["--caller", "launcher"], []] {
+            let lab = try labInPick(cli, flags)
+            #expect(lab.eligible == false && lab.reason == "login rejected", "\(flags)")
+            #expect(lab.picked == nil, "\(flags)")
+        }
+        // A reader saves the verdict that `run` relies on.
+        _ = try HookRecord(context: ToolContext(home: cli.home, ambient: [:])).readSettings()
+        let run = try cli.run(["run", "lab", "--print-command"])
+        #expect(run.status == 1)
+        #expect(text(run.stderr).contains(shown))
+        #expect(try tokenProbeRuns(cli, "lab", model: "haiku") == plain)
+
+        // The rejection stands, so the next refresh probes the fresh reading again.
+        #expect(try cli.run(["refresh", "--label", "lab"]).status == 0)
+        #expect(try tokenProbeRuns(cli, "lab", model: "haiku") == plain + 1)
+        #expect(try tokenError(cli) == nil)
+    }
+
+    @Test func aFableProbeThatWorksOverAFreshReadingEndsAStandingRejection() throws {
+        let cli = try setUp()
+        defer { cli.cleanup() }
+        try rejectedMain(cli)
+        try fableAnswers(cli, "fable.jsonl")
+        let plain = probeRuns(cli, model: "haiku")
+        // `auth status` judges `main` at pick time, so a Fable pick probes its fresh reading with
+        // the Fable model alone.
+        _ = try cli.run(["pick", "--json", "--model", "fable"])
+        #expect(probeRuns(cli, model: "fable") == 1)
+        #expect(probeRuns(cli, model: "haiku") == plain)
+        #expect(try tokenError(cli, "main") == nil)
+    }
+
+    @Test func aFableProbeThatFailsForAnotherReasonLeavesAStandingRejection() throws {
+        let cli = try setUp()
+        defer { cli.cleanup() }
+        try rejectedMain(cli)
+        try fableAnswers(cli, "no_event.jsonl")
+        let answer = try object(try cli.run(["pick", "--json", "--model", "fable"]))
+        #expect(probeRuns(cli, model: "fable") == 1)
+        // Such a failure says nothing on the sign-in, so that pick does not call it a rejection.
+        #expect(try candidate(answer, "main")["reason"] as? String != "login rejected")
+        #expect(try tokenError(cli, "main")?["code"] as? String == "login_rejected")
+    }
+
+    // MARK: a rejection recorded while a pick runs
+
+    /// The candidate entry of `label` in a pick's JSON answer.
+    func candidate(_ answer: [String: Any], _ label: String) throws -> [String: Any] {
+        let candidates = try #require(answer["candidates"] as? [[String: Any]])
+        return try #require(candidates.first { $0["label"] as? String == label })
+    }
+
+    /// Dates the stored reading of `label` back, by default an hour, so a pick probes it.
+    func ageReading(_ cli: CLIHome, _ label: String, by seconds: TimeInterval = 3600) throws {
+        let store = ReadingStore(context: ToolContext(home: cli.home, ambient: [:]))
+        var reading = try #require(try store.load(label: label))
+        reading.readAt = Date().addingTimeInterval(-seconds)
+        try store.save(reading, label: label)
+    }
+
+    /// The text of a probe fixture as the fake `claude` answers with it.
+    func probeAnswer(_ cli: CLIHome, _ fixture: String) throws -> String {
+        try String(
+            contentsOf: cli.fixtures.appendingPathComponent("probe/\(fixture)"), encoding: .utf8)
+    }
+
+    /// `lab` and `spare-a` signed in with fresh readings of their own, and room for a held probe:
+    /// no probe timeout or pick deadline ends one before the test lets it go.
+    func labAndASpare(_ cli: CLIHome) throws {
+        try addLab(cli)
+        try loginLab(cli)
+        try addLab(cli, "spare-a")
+        try cli.fake("probe-for-spare-a.jsonl", try probeText(cli, week: 350_000, five: 5_000))
+        try cli.fake("setup-token.out", oauth() + "\n")
+        #expect(try cli.run(["login", "spare-a"]).status == 0)
+        let store = ConfigStore(context: ToolContext(home: cli.home, ambient: [:]))
+        var config = try store.loadRequired()
+        config.probe.timeoutSeconds = 600
+        config.fable.probeTimeoutSeconds = 600
+        config.picker.deadlineSeconds = 600
+        try store.save(config)
+    }
+
+    /// Waits, at most five minutes, until the fake `claude` holds a probe of `label`.
+    func heldProbe(_ cli: CLIHome, _ label: String) -> Bool {
+        let marker = cli.home.appendingPathComponent(".ab-fake/held-\(label)")
+        for _ in 0..<6000 {
+            if FileManager.default.fileExists(atPath: marker.path) { return true }
+            usleep(50_000)
+        }
+        return false
+    }
+
+    /// A pick that has made its checks before the probes waits on spare-a's held probe while
+    /// `refresh` runs `refreshArgs`; then the test lets the probe go. Returns the refresh's exit
+    /// code, the row's error code right after it, and the pick's answer.
+    func pickAroundARefresh(_ cli: CLIHome, pick pickArgs: [String], refresh refreshArgs: [String])
+        throws -> (refresh: Int32, code: String?, answer: [String: Any])
+    {
+        try cli.fake("hold-spare-a", "")
+        defer { try? cli.fake("go-spare-a", "") }
+        let pick = Started(cli, pickArgs)
+        try #require(heldProbe(cli, "spare-a"))
+        let refresh = try cli.run(refreshArgs).status
+        let code = try tokenError(cli)?["code"] as? String
+        try cli.fake("go-spare-a", "")
+        let out = try #require(pick.wait())
+        return (refresh, code, try object(out))
+    }
+
+    @Test func aPickSkipsATokenWhoseFableProbeARefreshFoundRejectedWhileThePickRan() throws {
+        let cli = try setUp()
+        defer { cli.cleanup() }
+        try labAndASpare(cli)
+        // spare-a's aged reading makes the pick probe it; that probe fails, so only lab can win.
+        try ageReading(cli, "spare-a")
+        try cli.fake("probe-for-spare-a.jsonl", try probeAnswer(cli, "no_event.jsonl"))
+        try fableAnswers(cli, "auth_error.jsonl")
+        let plain = try tokenProbeRuns(cli, "lab", model: "haiku")
+        // lab's daily Fable probe runs in the refresh, finds the token rejected and is recorded.
+        let seen = try pickAroundARefresh(
+            cli, pick: ["pick", "--json", "--exclude", "main", "--caller", "launcher"],
+            refresh: ["refresh", "--label", "lab"])
+        #expect(seen.refresh == 1)
+        #expect(seen.code == "login_rejected")
+        let lab = try candidate(seen.answer, "lab")
+        #expect(lab["eligible"] as? Bool == false)
+        #expect(lab["reason"] as? String == "login rejected")
+        #expect(seen.answer["label"] as? String == nil)
+        #expect(try tokenProbeRuns(cli, "lab", model: "fable") == 1)
+        #expect(try tokenProbeRuns(cli, "lab", model: "haiku") == plain)
+    }
+
+    @Test func aPickSkipsATokenWhosePlainProbeARefreshFoundRejectedWhileThePickRan() throws {
+        let cli = try setUp()
+        defer { cli.cleanup() }
+        try labAndASpare(cli)
+        // lab's Fable probe is not due; spare-a's is, in this Fable pick, and it is rejected.
+        let store = ReadingStore(context: ToolContext(home: cli.home, ambient: [:]))
+        var reading = try #require(try store.load(label: "lab"))
+        reading.fableProbedAt = Date()
+        try store.save(reading, label: "lab")
+        try fableAnswers(cli, "fable.jsonl", capPercentOfWeekly: 100)
+        try cli.fake("probe-for-spare-a.jsonl", try probeAnswer(cli, "auth_error.jsonl"))
+        try cli.fake("probe-for-lab.jsonl", try probeAnswer(cli, "auth_error.jsonl"))
+        let plain = try tokenProbeRuns(cli, "lab", model: "haiku")
+        // A forced refresh probes lab's fresh reading, finds the token rejected and records it.
+        let seen = try pickAroundARefresh(
+            cli,
+            pick: [
+                "pick", "--json", "--exclude", "main", "--model", "fable", "--caller", "launcher",
+            ],
+            refresh: ["refresh", "--label", "lab", "--force"])
+        #expect(seen.refresh == 1)
+        #expect(seen.code == "login_rejected")
+        let lab = try candidate(seen.answer, "lab")
+        #expect(lab["eligible"] as? Bool == false)
+        #expect(lab["reason"] as? String == "login rejected")
+        #expect(seen.answer["label"] as? String == nil)
+        // The refresh made the only probe of lab.
+        #expect(try tokenProbeRuns(cli, "lab", model: "haiku") == plain + 1)
+        #expect(try tokenProbeRuns(cli, "lab", model: "fable") == 0)
+    }
+
+    @Test func aPickInFlightStillReturnsATokenWhenNoRejectionIsRecordedMeanwhile() throws {
+        let cli = try setUp()
+        defer { cli.cleanup() }
+        try labAndASpare(cli)
+        try ageReading(cli, "spare-a")
+        try cli.fake("probe-for-spare-a.jsonl", try probeAnswer(cli, "no_event.jsonl"))
+        try fableAnswers(cli, "fable.jsonl")
+        // The same order, but lab's Fable probe in the refresh works.
+        let seen = try pickAroundARefresh(
+            cli, pick: ["pick", "--json", "--exclude", "main", "--caller", "launcher"],
+            refresh: ["refresh", "--label", "lab"])
+        #expect(seen.refresh == 0)
+        #expect(seen.code == nil)
+        #expect(try candidate(seen.answer, "lab")["eligible"] as? Bool == true)
+        #expect(seen.answer["label"] as? String == "lab")
+    }
+
+    @Test func aFablePickThatEndsBusyRecordsItsProbesRejectionSoTheNextPickSkipsTheToken() throws {
+        let cli = try setUp()
+        defer { cli.cleanup() }
+        try addLab(cli)
+        try loginLab(cli)
+        try fableAnswers(cli, "auth_error.jsonl", capPercentOfWeekly: 100)
+        let plain = try tokenProbeRuns(cli, "lab", model: "haiku")
+        // Another command holds the pick lock for longer than a pick waits for it.
+        let writer = NoFollowWriter(root: ToolContext(home: cli.home, ambient: [:]).dataRoot)
+        let held = try #require(
+            try writer.acquireLock(
+                folders: Layout.locksFolders, name: Layout.pickLockName, wait: 0))
+        let busy = try cli.run([
+            "pick", "--json", "--exclude", "main", "--model", "fable", "--caller", "launcher",
+        ])
+        held.release()
+        #expect(busy.status == 1)
+        #expect(text(busy.stderr).contains("pick busy"))
+        #expect(try tokenProbeRuns(cli, "lab", model: "fable") == 1)
+        #expect(try tokenError(cli)?["code"] as? String == "login_rejected")
+        // The Fable probe is not due again today, so only the record keeps lab out.
+        let lab = try labInPick(cli, ["--caller", "launcher"])
+        #expect(lab.eligible == false && lab.reason == "login rejected")
+        #expect(lab.picked == nil)
+        #expect(try tokenProbeRuns(cli, "lab", model: "fable") == 1)
+        #expect(try tokenProbeRuns(cli, "lab", model: "haiku") == plain)
+    }
+
+    @Test func aPickThatFailsToWriteItsLaunchFileRecordsItsProbesRejection() throws {
+        let cli = try setUp()
+        defer { cli.cleanup() }
+        try labAndASpare(cli)
+        try fableAnswers(cli, "fable.jsonl", capPercentOfWeekly: 100)
+        try cli.fake("probe-for-spare-a.jsonl", try probeAnswer(cli, "auth_error.jsonl"))
+        // A file in the place of lab's launch folder fails the pick once it has chosen lab.
+        let root = LaunchFiles.rootURL(context: ToolContext(home: cli.home, ambient: [:]))
+        try FileManager.default.createDirectory(
+            at: root, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        let blocker = root.appendingPathComponent("lab")
+        try? FileManager.default.removeItem(at: blocker)
+        try Data().write(to: blocker)
+        let failed = try cli.run([
+            "pick", "--json", "--exclude", "main", "--model", "fable", "--caller", "launcher",
+        ])
+        #expect(failed.status == 1)
+        #expect(try tokenProbeRuns(cli, "spare-a", model: "fable") == 1)
+        #expect(try tokenError(cli, "spare-a")?["code"] as? String == "login_rejected")
+        // The next pick skips spare-a before any probe.
+        let next = try object(
+            try cli.run([
+                "pick", "--json", "--exclude", "main", "--dry-run", "--caller", "launcher",
+            ]))
+        let spare = try candidate(next, "spare-a")
+        #expect(spare["eligible"] as? Bool == false)
+        #expect(spare["reason"] as? String == "login rejected")
+        #expect(try tokenProbeRuns(cli, "spare-a", model: "fable") == 1)
+    }
+
+    // MARK: a refresh that ends in an error
+
+    @Test func aRefreshThatCannotSaveAPlanStillRecordsItsProbesRejection() throws {
+        // lab's plain probe in a forced refresh, then its daily Fable probe over a fresh reading.
+        for forced in [true, false] {
+            let cli = try setUp()
+            defer { cli.cleanup() }
+            try addLab(cli)
+            try loginLab(cli)
+            try cli.fake("probe-for-lab.jsonl", try probeAnswer(cli, "auth_error.jsonl"))
+            if !forced { try fableAnswers(cli, "fable.jsonl") }
+            // main's first placed check gives a plan to save, and the data folder takes no new file.
+            let store = ConfigStore(context: ToolContext(home: cli.home, ambient: [:]))
+            var config = try store.loadRequired()
+            let main = try #require(config.accounts.firstIndex { $0.label == "main" })
+            config.accounts[main].expectedPlanTier = nil
+            try store.save(config)
+            let root = cli.dataRoot.path
+            func mode(_ value: Int) throws {
+                try FileManager.default.setAttributes(
+                    [.posixPermissions: value], ofItemAtPath: root)
+            }
+            let model = forced ? "haiku" : "fable"
+            let probes = try tokenProbeRuns(cli, "lab", model: model)
+            try mode(0o500)
+            defer { try? mode(0o700) }
+            let out = try cli.run(["refresh"] + (forced ? ["--force"] : []))
+            try mode(0o700)
+            #expect(out.status == 1, "\(forced)")
+            #expect(text(out.stderr).contains("Could not write config.json."), "\(forced)")
+            #expect(try tokenProbeRuns(cli, "lab", model: model) == probes + 1, "\(forced)")
+            #expect(try tokenError(cli)?["code"] as? String == "login_rejected", "\(forced)")
+            let lab = try labInPick(cli, ["--caller", "launcher"])
+            #expect(lab.eligible == false && lab.reason == "login rejected", "\(forced)")
+            #expect(lab.picked == nil, "\(forced)")
+        }
+    }
+
+    // MARK: a working probe recorded after a newer rejection
+
+    /// The pick lock, held by the test until it lets it go.
+    func holdPickLock(_ cli: CLIHome) throws -> FileLock {
+        let writer = NoFollowWriter(root: ToolContext(home: cli.home, ambient: [:]).dataRoot)
+        return try #require(
+            try writer.acquireLock(
+                folders: Layout.locksFolders, name: Layout.pickLockName, wait: 0))
+    }
+
+    /// True while `state/current.json` records a probe's rejection of lab, read with no rebuild.
+    func labRejectionRecorded(_ cli: CLIHome) throws -> Bool {
+        let context = ToolContext(home: cli.home, ambient: [:])
+        let lab = try #require(try ConfigStore(context: context).loadRequired().account("lab"))
+        return StatusBuilder.probeRejection(context: context, account: lab) != nil
+    }
+
+    /// The time of lab's stored reading.
+    func labReadAt(_ cli: CLIHome) throws -> Date {
+        let store = ReadingStore(context: ToolContext(home: cli.home, ambient: [:]))
+        return try #require(try store.load(label: "lab")).readAt
+    }
+
+    /// Waits, at most five minutes, until lab's stored reading is newer than `time`.
+    func labReadingStored(_ cli: CLIHome, after time: Date) -> Bool {
+        let store = ReadingStore(context: ToolContext(home: cli.home, ambient: [:]))
+        for _ in 0..<6000 {
+            if let reading = try? store.load(label: "lab"), reading.readAt > time { return true }
+            usleep(50_000)
+        }
+        return false
+    }
+
+    /// A launcher pick probes lab's aged reading, the probe works, and the pick then waits for
+    /// the pick lock the test holds; meanwhile a forced refresh finds lab's token rejected and
+    /// records it. Then the test lets the lock go, or with `busy` the pick waits it out. Returns
+    /// the refresh's exit code, whether the rejection was recorded while the pick still ran, and
+    /// the pick's output.
+    func rejectionWhileAPickWaits(_ cli: CLIHome, busy: Bool) throws
+        -> (refresh: Int32, recorded: Bool, pick: Support.Output)
+    {
+        try addLab(cli)
+        try loginLab(cli)
+        try ageReading(cli, "lab")
+        let aged = try labReadAt(cli)
+        let lock = try holdPickLock(cli)
+        var held = true
+        defer { if held { lock.release() } }
+        let pick = Started(cli, ["pick", "--json", "--exclude", "main", "--caller", "launcher"])
+        // The pick's own probe of lab stored its reading, so the rejection's status sees it.
+        try #require(labReadingStored(cli, after: aged))
+        try cli.fakeProbe("auth_error.jsonl")
+        let refresh = try cli.run(["refresh", "--label", "lab", "--force"]).status
+        let recorded = try labRejectionRecorded(cli) && !pick.hasEnded
+        if !busy {
+            lock.release()
+            held = false
+        }
+        return (refresh, recorded, try #require(pick.wait()))
+    }
+
+    /// lab's row keeps `login_rejected`, and the next launcher pick skips lab before any probe.
+    func expectLabRejectionStands(_ cli: CLIHome) throws {
+        #expect(try labRejectionRecorded(cli))
+        let probes = try tokenProbeRuns(cli, "lab")
+        #expect(try tokenError(cli)?["code"] as? String == "login_rejected")
+        let lab = try labInPick(cli, ["--caller", "launcher"])
+        #expect(lab.eligible == false && lab.reason == "login rejected")
+        #expect(lab.picked == nil)
+        #expect(try tokenProbeRuns(cli, "lab") == probes)
+    }
+
+    @Test func aPicksOlderWorkingProbeLeavesARejectionRecordedWhileItWaitedForTheLock() throws {
+        let cli = try setUp()
+        defer { cli.cleanup() }
+        let seen = try rejectionWhileAPickWaits(cli, busy: false)
+        #expect(seen.refresh == 1)
+        #expect(seen.recorded)
+        // Under the lock the pick reads the rejection again and skips lab.
+        #expect(seen.pick.status == 2)
+        let answer = try object(seen.pick)
+        #expect(try candidate(answer, "lab")["reason"] as? String == "login rejected")
+        #expect(answer["label"] as? String == nil)
+        try expectLabRejectionStands(cli)
+    }
+
+    @Test func aPickThatEndsBusyLeavesARejectionNewerThanItsWorkingProbe() throws {
+        let cli = try setUp()
+        defer { cli.cleanup() }
+        let seen = try rejectionWhileAPickWaits(cli, busy: true)
+        #expect(seen.refresh == 1)
+        #expect(seen.recorded)
+        #expect(seen.pick.status == 1)
+        #expect(text(seen.pick.stderr).contains("pick busy"))
+        try expectLabRejectionStands(cli)
+    }
+
+    @Test func aPicksWorkingProbeNewerThanARejectionEndsItAfterWaitingForTheLock() throws {
+        let cli = try setUp()
+        defer { cli.cleanup() }
+        try addLab(cli)
+        try loginLab(cli)
+        // The rejection's status sees a reading two hours old.
+        try ageReading(cli, "lab", by: 7200)
+        try cli.fakeProbe("auth_error.jsonl")
+        #expect(try cli.run(["refresh", "--label", "lab", "--force"]).status == 1)
+        // Another command's probe worked and stored a newer reading, an hour old, before it
+        // rebuilt the status, so lab competes again and the pick probes it.
+        try ageReading(cli, "lab")
+        let older = try labReadAt(cli)
+        try cli.fakeProbe("ok.jsonl")
+        let lock = try holdPickLock(cli)
+        var held = true
+        defer { if held { lock.release() } }
+        let pick = Started(cli, ["pick", "--json", "--exclude", "main", "--caller", "launcher"])
+        try #require(labReadingStored(cli, after: older))
+        #expect(try labRejectionRecorded(cli) && !pick.hasEnded)
+        lock.release()
+        held = false
+        let out = try #require(pick.wait())
+        #expect(out.status == 0)
+        #expect(try object(out)["label"] as? String == "lab")
+        #expect(try labRejectionRecorded(cli) == false)
+        #expect(try tokenError(cli) == nil)
+    }
+
+    @Test func aWorkingProbesReadingEndsARejectionWhenAnotherRebuildSeesItFirst() throws {
+        let cli = try setUp()
+        defer { cli.cleanup() }
+        try labAndASpare(cli)
+        // The rejection's status sees a reading two minutes old.
+        try ageReading(cli, "lab", by: 120)
+        let seen = try labReadAt(cli)
+        try cli.fake("probe-for-lab.jsonl", try probeAnswer(cli, "auth_error.jsonl"))
+        #expect(try cli.run(["refresh", "--label", "lab", "--force"]).status == 1)
+        try #require(try labRejectionRecorded(cli))
+        // lab is signed in again. The next refresh stores its probe's reading, then waits on
+        // spare-a's held probe before it rebuilds the status.
+        try cli.fake("probe-for-lab.jsonl", try probeText(cli, week: 450_000, five: 15_000))
+        try ageReading(cli, "spare-a")
+        try cli.fake("hold-spare-a", "")
+        defer { try? cli.fake("go-spare-a", "") }
+        let refresh = Started(cli, ["refresh"])
+        try #require(labReadingStored(cli, after: seen))
+        try #require(heldProbe(cli, "spare-a"))
+        #expect(try labRejectionRecorded(cli))
+        // The menu's rebuild each minute lands first and sees lab's new reading.
+        #expect(try cli.run(["status", "--cached", "--json"]).status == 0)
+        #expect(try labRejectionRecorded(cli) == false)
+        #expect(!refresh.hasEnded)
+        try cli.fake("go-spare-a", "")
+        let out = try #require(refresh.wait())
+        #expect(out.status == 0)
+        #expect(try labRejectionRecorded(cli) == false)
+        #expect(try tokenError(cli) == nil)
+        let lab = try labInPick(cli, ["--exclude", "spare-a"])
+        #expect(lab.eligible == true && lab.picked == "lab")
+    }
+
+    @Test func aPlainRefreshStartsNoProbeOnceAnotherRebuildSawAWorkingProbesNewerReading() throws {
+        let cli = try setUp()
+        defer { cli.cleanup() }
+        try labAndASpare(cli)
+        // The rejection's status sees a reading two minutes old.
+        try ageReading(cli, "lab", by: 120)
+        let seen = try labReadAt(cli)
+        try cli.fake("probe-for-lab.jsonl", try probeAnswer(cli, "auth_error.jsonl"))
+        #expect(try cli.run(["refresh", "--label", "lab", "--force"]).status == 1)
+        try #require(try labRejectionRecorded(cli))
+        // A refresh's probe of lab works and stores a newer reading, and the menu's rebuild sees
+        // it while that refresh waits on spare-a's held probe.
+        try cli.fake("probe-for-lab.jsonl", try probeText(cli, week: 450_000, five: 15_000))
+        try ageReading(cli, "spare-a")
+        try cli.fake("hold-spare-a", "")
+        defer { try? cli.fake("go-spare-a", "") }
+        let refresh = Started(cli, ["refresh"])
+        try #require(labReadingStored(cli, after: seen))
+        try #require(heldProbe(cli, "spare-a"))
+        #expect(try cli.run(["status", "--cached", "--json"]).status == 0)
+        try cli.fake("go-spare-a", "")
+        #expect(try #require(refresh.wait()).status == 0)
+        // Every reading is fresh, so a plain refresh starts no probe, lab's included.
+        let probes = probeRuns(cli, model: "haiku")
+        #expect(try cli.run(["refresh"]).status == 0)
+        #expect(probeRuns(cli, model: "haiku") == probes)
+        #expect(try labRejectionRecorded(cli) == false)
+    }
+
+    // MARK: a stored reading the rejection's rebuild cannot read
+
+    /// The time `state/current.json` keeps with lab's standing probe rejection, read with no
+    /// rebuild.
+    func labRejectionTime(_ cli: CLIHome) throws -> Date? {
+        let context = ToolContext(home: cli.home, ambient: [:])
+        let lab = try #require(try ConfigStore(context: context).loadRequired().account("lab"))
+        return StatusBuilder.probeRejection(context: context, account: lab)
+    }
+
+    @Test func aRejectionStandsOverAStoredReadingItsRebuildCouldNotRead() throws {
+        let cli = try setUp()
+        defer { cli.cleanup() }
+        try labAndASpare(cli)
+        // An hour old, so the first refresh probes lab; the status sees that reading.
+        try ageReading(cli, "lab")
+        try ageReading(cli, "spare-a")
+        #expect(try cli.run(["status", "--cached", "--json"]).status == 0)
+        let seen = try labReadAt(cli)
+        // The first refresh's probe of lab works and stores a newer reading, then the refresh
+        // waits on spare-a's held probe before it rebuilds the status.
+        try cli.fake("probe-for-lab.jsonl", try probeText(cli, week: 450_000, five: 15_000))
+        try cli.fake("hold-spare-a", "")
+        defer { try? cli.fake("go-spare-a", "") }
+        let first = Started(cli, ["refresh"])
+        try #require(labReadingStored(cli, after: seen))
+        try #require(heldProbe(cli, "spare-a"))
+        let stored = try labReadAt(cli)
+        // A forced refresh reads that reading and its probe is held; the reading then cannot be
+        // read until the probe's rejection is recorded.
+        try cli.fake("probe-for-lab.jsonl", try probeAnswer(cli, "auth_error.jsonl"))
+        try cli.fake("hold-lab", "")
+        defer { try? cli.fake("go-lab", "") }
+        let second = Started(cli, ["refresh", "--label", "lab", "--force"])
+        try #require(heldProbe(cli, "lab"))
+        let file = cli.dataRoot.appendingPathComponent("state/readings/lab.json").path
+        try #require(chmod(file, 0) == 0)
+        defer { chmod(file, 0o600) }
+        try cli.fake("go-lab", "")
+        #expect(try #require(second.wait()).status == 1)
+        #expect(chmod(file, 0o600) == 0)
+        // The rejection is dated no earlier than the reading stored before it.
+        let rejectedAt = try #require(try labRejectionTime(cli))
+        #expect(rejectedAt >= stored)
+        // The menu's rebuild reads that reading, then the first refresh folds its older working
+        // probe, and the rejection stands through both.
+        #expect(try cli.run(["status", "--cached", "--json"]).status == 0)
+        #expect(try labRejectionRecorded(cli))
+        try cli.fake("go-spare-a", "")
+        #expect(try #require(first.wait()).status == 0)
+        #expect(try labRejectionRecorded(cli))
+        let probes = try tokenProbeRuns(cli, "lab")
+        let skipped = try labInPick(cli, ["--caller", "launcher", "--exclude", "spare-a"])
+        #expect(skipped.eligible == false && skipped.reason == "login rejected")
+        #expect(skipped.picked == nil)
+        #expect(try tokenProbeRuns(cli, "lab") == probes)
+
+        // lab is signed in again. Its reading is dated two minutes back and the menu's rebuild
+        // sees it, so the next probe's reading is newer; that probe works and ends the rejection.
+        try ageReading(cli, "lab", by: 120)
+        #expect(try cli.run(["status", "--cached", "--json"]).status == 0)
+        #expect(try labRejectionRecorded(cli))
+        try cli.fake("probe-for-lab.jsonl", try probeText(cli, week: 450_000, five: 15_000))
+        #expect(try cli.run(["refresh", "--label", "lab"]).status == 0)
+        #expect(try tokenProbeRuns(cli, "lab") == probes + 1)
+        #expect(try labRejectionRecorded(cli) == false)
+        let back = try labInPick(cli, ["--caller", "launcher", "--exclude", "spare-a"])
+        #expect(back.eligible == true && back.picked == "lab")
+    }
+
+    /// How lab's stored reading is kept from the rejection's rebuild: the file is moved out of
+    /// its folder, the readings folder is moved, or the file is replaced by one that does not
+    /// decode. Each is undone by moving the original back.
+    enum ReadingGone: String, CaseIterable, Sendable, CustomTestStringConvertible {
+        case moveAway, folderMoveAway, garbage
+        var testDescription: String { rawValue }
+    }
+
+    @Test(arguments: ReadingGone.allCases)
+    func aRejectionStandsOverAStoredReadingGoneOrUndecodableAtItsRebuild(form: ReadingGone)
+        throws
+    {
+        let cli = try setUp()
+        defer { cli.cleanup() }
+        try labAndASpare(cli)
+        // An hour old, so the first refresh probes lab; the status sees that reading.
+        try ageReading(cli, "lab")
+        try ageReading(cli, "spare-a")
+        #expect(try cli.run(["status", "--cached", "--json"]).status == 0)
+        let seen = try labReadAt(cli)
+        // The first refresh's probe of lab works and stores a newer reading, then the refresh
+        // waits on spare-a's held probe before it rebuilds the status.
+        try cli.fake("probe-for-lab.jsonl", try probeText(cli, week: 450_000, five: 15_000))
+        try cli.fake("hold-spare-a", "")
+        defer { try? cli.fake("go-spare-a", "") }
+        let first = Started(cli, ["refresh"])
+        try #require(labReadingStored(cli, after: seen))
+        try #require(heldProbe(cli, "spare-a"))
+        let stored = try labReadAt(cli)
+        // A forced refresh reads that reading and its probe is held; the reading is then gone, or
+        // does not decode, until the probe's rejection is recorded.
+        try cli.fake("probe-for-lab.jsonl", try probeAnswer(cli, "auth_error.jsonl"))
+        try cli.fake("hold-lab", "")
+        defer { try? cli.fake("go-lab", "") }
+        let second = Started(cli, ["refresh", "--label", "lab", "--force"])
+        try #require(heldProbe(cli, "lab"))
+        let readings = cli.dataRoot.appendingPathComponent("state/readings")
+        let file = readings.appendingPathComponent("lab.json")
+        let moved = form == .folderMoveAway ? readings : file
+        let aside = cli.home.appendingPathComponent("away-" + moved.lastPathComponent)
+        try #require(rename(moved.path, aside.path) == 0)
+        var away = true
+        defer { if away { rename(aside.path, moved.path) } }
+        if form == .garbage {
+            try #require(
+                FileManager.default.createFile(
+                    atPath: file.path, contents: Data("not a reading\n".utf8),
+                    attributes: [.posixPermissions: 0o600]))
+        }
+        try cli.fake("go-lab", "")
+        #expect(try #require(second.wait()).status == 1)
+        try #require(rename(aside.path, moved.path) == 0)
+        away = false
+        #expect(try labReadAt(cli) == stored)
+        // The rejection is dated no earlier than the reading stored before it.
+        let rejectedAt = try #require(try labRejectionTime(cli))
+        #expect(rejectedAt >= stored)
+        // The menu's rebuild reads that reading again, then the first refresh folds its older
+        // working probe, and the rejection stands through both.
+        #expect(try cli.run(["status", "--cached", "--json"]).status == 0)
+        #expect(try labRejectionRecorded(cli))
+        try cli.fake("go-spare-a", "")
+        #expect(try #require(first.wait()).status == 0)
+        #expect(try labRejectionRecorded(cli))
+        // The launcher pick and the typed pick skip lab before any probe, and `run` refuses it.
+        let probes = try tokenProbeRuns(cli, "lab")
+        for flags in [["--caller", "launcher"], []] {
+            let lab = try labInPick(cli, flags + ["--exclude", "spare-a"])
+            #expect(lab.eligible == false && lab.reason == "login rejected", "\(flags)")
+            #expect(lab.picked == nil, "\(flags)")
+        }
+        let run = try cli.run(["run", "lab", "--print-command"])
+        #expect(run.status == 1)
+        #expect(text(run.stderr).contains(Messages.probeLoginRejected))
+        #expect(try tokenProbeRuns(cli, "lab") == probes)
+
+        // lab is signed in again. Its reading is dated two minutes back and the menu's rebuild
+        // sees it, so the next probe's reading is newer; that probe works and ends the rejection.
+        try ageReading(cli, "lab", by: 120)
+        #expect(try cli.run(["status", "--cached", "--json"]).status == 0)
+        #expect(try labRejectionRecorded(cli))
+        try cli.fake("probe-for-lab.jsonl", try probeText(cli, week: 450_000, five: 15_000))
+        #expect(try cli.run(["refresh", "--label", "lab"]).status == 0)
+        #expect(try tokenProbeRuns(cli, "lab") == probes + 1)
+        #expect(try labRejectionRecorded(cli) == false)
+        let back = try labInPick(cli, ["--caller", "launcher", "--exclude", "spare-a"])
+        #expect(back.eligible == true && back.picked == "lab")
+    }
+
     @Test func aDeletedOrWidenedTokenFileIsTokenMissing() throws {
         let cli = try setUp()
         defer { cli.cleanup() }
@@ -990,6 +1944,43 @@ private func oauth() -> String { Canary.realShapeToken() }
                     == "No token saved. Run `agent-balancer login lab` in Terminal.",
                 "content: \(content)")
         }
+    }
+
+    @Test func refreshProbesAgainATokenAccountWhoseLastProbeFoundItsSignInRejected() throws {
+        let cli = try setUp()
+        defer { cli.cleanup() }
+        try addLab(cli)
+        try loginLab(cli)
+        // Still fresh, and older than the reading of the probe that ends the rejection.
+        try ageReading(cli, "lab", by: 120)
+        let file = try tokenFile(cli, "lab")
+        func probes() -> Int {
+            cli.fakeRecord("args.log").split(separator: "\n").filter {
+                $0.hasPrefix("-p ") && $0.contains("--settings \(file.path)")
+            }.count
+        }
+        try cli.fakeProbe("auth_error.jsonl")
+        #expect(try cli.run(["refresh", "--label", "lab", "--force"]).status == 1)
+        #expect(try tokenError(cli)?["code"] as? String == "login_rejected")
+
+        // The reading `login` stored is still fresh, so only the rejection starts this probe.
+        try cli.fakeProbe("ok.jsonl")
+        let before = probes()
+        #expect(try cli.run(["refresh"]).status == 0)
+        #expect(probes() == before + 1)
+        #expect(try row(cli, "lab")["error"] is NSNull)
+    }
+
+    @Test func aTokenAccountsProbeRejectionStandsWhenTheNextProbeFailsForAnotherReason() throws {
+        let cli = try setUp()
+        defer { cli.cleanup() }
+        try addLab(cli)
+        try loginLab(cli)
+        try cli.fakeProbe("auth_error.jsonl")
+        #expect(try cli.run(["refresh", "--label", "lab", "--force"]).status == 1)
+        try cli.fakeProbe("no_event.jsonl")
+        #expect(try cli.run(["refresh", "--label", "lab", "--force"]).status == 1)
+        #expect(try tokenError(cli)?["code"] as? String == "login_rejected")
     }
 
     // MARK: the paste prompt on a terminal

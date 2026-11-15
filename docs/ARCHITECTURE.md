@@ -133,12 +133,14 @@ agent-balancer/
                              `build/` that is written without `..`, has no link on its path,
                              has no folder named `.claude` or `.agent-balancer` (in any case)
                              below the current folder, and is not inside the home's `.claude`
-                             or `.agent-balancer`, however HOME spells the home; any other
-                             folder exits 1 and writes nothing. Each home must be a folder,
-                             and its `.claude` and `.agent-balancer` missing or a folder (a
-                             link to one included): a link to nothing, a link loop, a link to
-                             a file or a file there exits 1 before anything is made, since a
-                             run could make the folder such a link names. The folder is
+                             or `.agent-balancer`; any other folder exits 1 and writes nothing.
+                             A HOME that is set but empty, is not an absolute path, or has a
+                             `..` segment stops every render.
+                             Each home must be a folder, and its `.claude` and
+                             `.agent-balancer` missing or a folder (a link to one included): a
+                             link to nothing, a link loop, a link to a file or a file there
+                             exits 1 before anything is made, since a run could make the
+                             folder such a link names. The folder is
                              opened once, one name at a time with no link followed, and each
                              file is written relative to that handle after a check that every
                              name still names the folder opened and that neither it nor a
@@ -148,8 +150,11 @@ agent-balancer/
                              hold made-up data only: `RenderScenes.swift` and
                              `Manage/ManageScenes.swift` draw the frames of design/render.html,
                              and `ReadmeScenes.swift` holds the three status documents the
-                             README pictures are drawn from; every state they show is one the
-                             status writer can produce
+                             README pictures are drawn from. Tests rebuild each row of
+                             `Manage/ManageScenes.swift` and of the two documents the Manage window
+                             draws through the status writer's own build, and the README test
+                             checks the menu document's rows against the writer's rules as it
+                             states them
   skill/agent-balancer/SKILL.md   the skill file for a user's Claude (4A.7)
   scripts/check.sh           the test command: typecheck, format lint, tests, the safety scan
                              (`scripts/check-safety.sh`), the README check, the secret scan
@@ -169,8 +174,9 @@ agent-balancer/
                              less than the opening fence ends it, and a fence that ends there or
                              at the end of the file without closing fails. A json block parses as
                              JSON (read by `osascript` with JavaScript, which ships with macOS),
-                             and each string in it, key or value, is read as a later part of a
-                             chain. Each span or line is cut into parts at &&, ||, ;, & and |
+                             and each key and each string of the parsed value is read as a later
+                             part of a chain, so a key that appears twice is read with its last
+                             value only. Each span or line is cut into parts at &&, ||, ;, & and |
                              (a | before a flag is a choice in a usage line), each $(...) or
                              backtick substitution is a part of its own, and quotes, backslashes
                              and parentheses read as spaces. The first part starts with
@@ -192,7 +198,8 @@ agent-balancer/
                              personal, lab, spare-a and spare-b; every word with a letter in
                              their strings and comments, lowercased and ISO times aside, is a
                              label or on the check's word list; and they hold only those labels'
-                             example.com addresses and the fixture's paths. When the local
+                             example.com addresses, each with at most one leading hyphen, and the
+                             fixture's paths. When the local
                              banned-string list is present, neither the metadata nor the scene
                              sources may hold a banned string. With no binary given, it builds
                              the CLI when the CLI is missing
@@ -235,9 +242,14 @@ that read it (`init`, `doctor`, `pick`, `verify` and `link --accept-source-chang
 `doctor` pass what they saw, the hook record status and whether keys are present, to the rebuild,
 and `link <label>` passes what the saved verdict says; the rebuild keeps it in
 `state/current.json` and carries it over for every rebuild that did not read the file. In the same way a sign-in check
-(`status` runs `auth status` for the `login` account) and a probe (`refresh`, `pick`) each pass
-their result, and a rebuild that observed nothing carries the last error over unchanged, so
-`status --cached` never invents a recovery. A successful probe clears a carried `login_rejected`.
+(`status` and `refresh` run `auth status` for each login and folder account) and a probe
+(`refresh`, `pick`) each pass their result, and a rebuild that observed nothing carries the last
+error over unchanged, so `status --cached` never invents a recovery. A probe that works with a
+reading newer than the latest one the status had seen clears a carried `login_rejected`, a
+rebuild that sees that reading clears a probe's, and `refresh` probes again an account whose
+sign-in a probe found rejected, as the status records it, even when its reading is fresh (6.2).
+If the rebuild that records a probe's rejection has no stored reading it can read and decode,
+the latest one the status had seen counts as that rebuild's time.
 The app reads `status.json`, checks whether `config.json` exists (to choose the "no config yet"
 state), writes no file itself, and calls the CLI for actions.
 
@@ -499,7 +511,9 @@ writes nothing when it does not, so a `login` that a `remove` overtook leaves no
 
 Renaming: `config set <label> label <new>` refuses on a token account, exits 1 and writes nothing,
 because its token file and launch files carry the label; remove the account and add it again under
-the new label.
+the new label. It refuses on a folder account the same way, because the account's folder is named
+for the label: "A folder account cannot be renamed: its folder is named for the label. Nothing was
+changed."
 
 Where a token may be: the token file, the launch files of that label, and nowhere else, except a
 writer's temporary file that a write killed before its rename leaves in `tokens/` or
@@ -519,7 +533,7 @@ file lands in it.
 | Kind | `pick` returns a recipe only when |
 |---|---|
 | `login` | `auth status` shows the default folder logged in as the configured email and plan |
-| `token` | The token file exists, is a regular file owned by the user with mode 0600, holds a token that parses, and its last probe did not end in an auth error |
+| `token` | The token file exists, is a regular file owned by the user with mode 0600, holds a token that parses, and its last probe did not end in an auth error. While its probe's `login_rejected` stands and the status has seen its latest reading (only a probe that works stores a newer one), it is skipped as `login rejected` before any probe, even on a fresh reading. `pick` and `run` read the rejection again under the pick lock right before they decide. A rejection whose command has not finished its status rebuild by then is not seen, nor is a Fable probe still running at the pick's deadline (6.4). The rejection ends once the status sees a stored reading newer than the latest one it had seen (section 4), or records a probe that works with a newer reading (a `refresh` probes it again, 6.2, and so does `login` when it saves a new token); the order of probes is judged by reading times, so a wall clock set back inside one command's probe-to-rebuild window can make an older working probe look newer. A `state/current.json` that cannot be read, is of another schema version or is unsound counts as no rejection |
 | `folder` | `verify` passes (5.7): every link in the manifest is intact and no hook entry recorded at link time is gone. A folder account must be linked, always: a never-linked folder is refused with the reason `not linked`, because a folder without the shared settings runs with no hooks. A user with nothing to share still runs `link` once; it records an empty manifest |
 
 `init` always writes the hook record of the default folder, empty when there are no hooks. A
@@ -662,8 +676,8 @@ folder is also refused when it is a link or is not owned by the user. `remove` o
 deletes the registry entry, the label's launch files (a recent pick's file included, because none
 holds a token) and its leases, forgets the label's manifest entries, and never touches the folder.
 
-Consent commands (`link`, `unlink`, `link --repair`, `link --accept-source-change`,
-`schedule install`, `uninstall`, `config set-main`, `config set`, `remove`) refuse to run in a chat
+Consent commands (`link`, `unlink`, `link --repair`, `link --accept-source-change`, `uninstall`,
+`config set-main`, `config clear-main`, `config set`, `remove`) refuse to run in a chat
 shell, so a chat cannot type the label through a pseudo terminal. `run` and `login` never start
 `claude` in a chat shell either. `run` there prints the command to type in your own terminal,
 `agent-balancer run <label> -- <arguments>`, and writes nothing. The Manage accounts window (section 11) runs `add`, `remove`
@@ -682,9 +696,10 @@ terminal it refuses before it changes anything and says to run `agent-balancer r
 Terminal (4A.4). The menu app runs the tool with a pipe as standard input, so the window cannot
 remove a main account through the tool, including a role or label change saved at the same moment
 (4A.4); only a process that edits `config.json` directly is outside that. A pool account's
-`remove` needs no terminal. `--dry-run`
-changes nothing and needs no terminal, and an editor's integrated terminal (only `CLAUDECODE`
-set) passes. `init` and `uninstall` ask through the same prompt helper and are unchanged: `init`
+`remove` needs no interactive terminal, and `--dry-run` changes nothing and needs none either, but
+both still refuse in a chat shell, since `remove` and `link` check for one before they act on a
+flag or read a file. An editor's integrated terminal (only `CLAUDECODE` set) passes. `init` and
+`uninstall` ask through the same prompt helper and are unchanged: `init`
 checks for a terminal itself when it must ask for a label, and `uninstall` keeps its typed word
 without this check.
 
@@ -858,8 +873,8 @@ strings only, so editing the script a command points to is not seen.
 
 | Source | Gives | Cost | When |
 |---|---|---|---|
-| `claude auth status --json` | Logged in or not, email, `planTier`, `subscriptionType`, `loginExpiresAt`, `configDirectory` | Free (no model call) | Every refresh, every folder |
-| One-turn probe | `rate_limit_event.rate_limit_info`: status, `unifiedWindows.five_hour` and `seven_day` utilization (0 to 1 on the wire; a value outside that range, in any window with a valid name, is `check_failed`, 6.2) and `resetsAt` | About $0.008 API-equivalent | Only when the stored reading is older than `picker.maxReadingAgeMinutes`, or on `refresh --force` |
+| `claude auth status --json` | Logged in or not, email, `planTier`, `subscriptionType`, `loginExpiresAt`, `configDirectory` | Free (no model call) | Every refresh, every login and folder account |
+| One-turn probe | `rate_limit_event.rate_limit_info`: status, `unifiedWindows.five_hour` and `seven_day` utilization (0 to 1 on the wire; a value outside that range, in any window with a valid name, is `check_failed`, 6.2) and `resetsAt` | About $0.008 API-equivalent | When the stored reading is older than `picker.maxReadingAgeMinutes`, or a stored five-hour or weekly reset time has passed (`pick`); on `refresh --force` and a token account's `login` (its first check); and on `refresh` for an account whose sign-in a probe found rejected, as the status records it |
 
 The probe reports utilization as a fraction from 0 to 1. The reader converts it once, at parse
 time, to percent from 0 to 100 with one decimal (0.456 becomes 45.6). Every stored reading, every
@@ -883,7 +898,9 @@ claude -p "Reply with the single word OK." --model haiku --tools "" --disallowed
 
 - A Fable probe (4A.6) is this form with `--model` set to a Fable model, using
   `fable.probeBudgetUsd` and `fable.probeTimeoutSeconds` in place of the 0.05 cap and the 60
-  second timeout.
+  second timeout. It runs after the plain step. The status records its auth error as the
+  probe's `login_rejected`, and its working, where no plain probe ran, as a probe that works; any
+  other failure of it, or one still running at a pick's deadline (6.4), records nothing.
 - The tool reads only `type == "rate_limit_event"` lines and the final `result` line's error
   fields. Everything else is discarded unread. Captured stderr goes through the scrubber before
   any log line.
@@ -938,8 +955,13 @@ claude -p "Reply with the single word OK." --model haiku --tools "" --disallowed
   cap applies, so a bad value in a name past the cap still gives `check_failed`.
 - A lock file per account folder stops two probes of one account at once. A caller that finds the
   lock held waits up to its deadline and then uses the stored reading. `refresh` and `pick` skip a
-  probe when the stored reading is younger than `picker.maxReadingAgeMinutes`, unless
-  `refresh --force`. A 60 second timeout marks the row `check_failed`.
+  plain probe when the stored reading is younger than `picker.maxReadingAgeMinutes`, except in
+  the cases 6.1 lists. `refresh` also probes again an account whose sign-in a probe found
+  rejected, even when its reading is fresh, because only a probe that works or a new sign-in by
+  `login` clears that `login_rejected` (10.1); a reading newer than the latest one the status
+  had seen, which only a probe that worked can store, puts the account back under the age rule,
+  and the next status rebuild, such as the menu's `status --cached` each minute, ends the
+  rejection. A 60 second timeout marks the row `check_failed`.
 - The protected group of environment names, named once here: `CLAUDE_CONFIG_DIR`, the Claude Code
   token variable, every `ANTHROPIC_*` and every `CLAUDE_CODE_USE_*`. Code holds the group once
   (`Sources/Core/Env/ProtectedEnv.swift`); every other site refers to it and adds only its own
@@ -1043,8 +1065,10 @@ reading's own `readAt` or the file format.
 
 ### 6.4 Refresh cadence and daily cost
 
-A probe costs about $0.008 API-equivalent. A probe is skipped while the stored reading is younger
-than `picker.maxReadingAgeMinutes`, so real cost can be lower than the table.
+A probe costs about $0.008 API-equivalent. A plain probe is skipped while the stored reading is
+younger than `picker.maxReadingAgeMinutes`, except in the cases 6.1 lists, so real cost can be
+lower than the table. The table leaves out the Fable probe, which runs even on a fresh reading, as
+4A.6 says.
 
 | Background cadence (5 idle accounts) | Probes per day | API-equivalent per day |
 |---|---|---|
@@ -1076,11 +1100,9 @@ reads is saved by the usual rules only if the probe ends before that process doe
 The menu app runs `agent-balancer refresh` at launch when `status.json` is missing or older than
 `refresh.backgroundMinutes`, then on its own timer at that interval, and runs
 `agent-balancer status --cached` every 60 seconds so new readings show up. Every `refresh` ends by
-rebuilding `status.json` (section 4). People who use only the CLI run
-`agent-balancer schedule install`, which shows a user LaunchAgent plist in a dry run, writes it to
-`~/Library/LaunchAgents/` only after a typed yes, and prints the `launchctl bootstrap` line for the
-user to run, because the tool starts no child process other than `claude` and itself.
-`schedule remove` prints the matching `launchctl bootout` line and deletes the plist.
+rebuilding `status.json` (section 4). This version has no command that schedules `refresh` for
+people who use only the CLI: `schedule install` and `schedule remove`, which would manage a user
+LaunchAgent, are parked for a later release.
 
 ## 7. The picker
 
@@ -1132,7 +1154,9 @@ A token account also carries `tokenCreatedAt`, an ISO 8601 time that `login` set
 saves a token (4A.4). It is optional, so a config from before it stays valid at schema version 1.
 
 Every account also carries `expectedPlanTier` and `accountKey`. `init` records the tier
-`auth status` shows; for an added account the first refresh after its sign-in records it.
+`auth status` shows; for an added account the first `refresh`, or folder `login`, whose sign-in
+check placed the expected account's sign-in in its own folder, for the email the account has when
+the plan is saved, records it (10.1).
 `accountKey` is a random id that `init` and `add` make. It is no secret, and it goes on every
 history and events line and into `status`, so a label removed and added again for another account
 is never mixed with the old one.
@@ -1294,7 +1318,7 @@ short scrubbed text the menu shows as is.
 | `duplicate_login` | two configured accounts report one email | error | "Logged in as the same account as pool-a. Log one folder into its own account." |
 | `settings_changed` | a link of a folder account is broken, or a hook entry recorded at link time is gone or changed (5.7); or, after `init`, the hook record is missing or unreadable (4A.5); or, for `run`, the saved verdict is missing or older than the file, or the settings path is a link that goes nowhere or is not a file | error on every affected account, shown as one banner | "Settings changed. Run `agent-balancer link --accept-source-change` in Terminal." For `run`, with no verdict that matches the file's stamp: "Settings changed since the last check. Run `agent-balancer doctor` in Terminal." For a settings path that no reader can fix, the texts of 4A.5 that name the repair |
 | `plan_changed` | `planTier` differs from `expectedPlanTier` | error | "Plan is max_5x, expected max_20x." |
-| `account_ended` | `endsAt` passed; or, for an account marked `endingSoon`, the first reading where `planTier` differs from `expectedPlanTier` or is missing. Once ended that way it stays ended until the flag is cleared (`config set <label> ending-soon false`, `ends <date>` or `ends none`) | ended | "Account ended." |
+| `account_ended` | `endsAt` passed; or, for an account marked `endingSoon`, the first sign-in check that placed the expected account's sign-in, for its current email (10.1), where `planTier` differs from `expectedPlanTier` or is missing. Once ended that way it stays ended until the flag is cleared (`config set <label> ending-soon false`, `ends <date>` or `ends none`) | ended | "Account ended." |
 | `check_failed` | a sign-in that reports no email for an account with an expected email (5.7), probe timeout, no `rate_limit_event`, unparsable output, `claude` missing, a reply with no weekly use (or no 5-hour use when one is named or stored), a bad value in any window with a valid name | error | "Check failed: probe timed out after 60 s." |
 | `limited` | probe status not `allowed`, or weekly or 5-hour use at or above `limitedAtPercent`; a full Fable sub-cap alone is the warning below | limited | "Limited until Wed 4:00 PM." |
 | `fable_limited` (warning) | Fable use is readable and at or above `limitedAtPercent` of the Fable cap; only Fable picks skip the account | ok | "Fable limited until Thu 9:00 AM." |
@@ -1379,8 +1403,10 @@ Field rules:
   for `settings_changed`, with the text "Settings changed. Run `agent-balancer link
   --accept-source-change` in Terminal.", or the "Hook record missing" text of 4A.5.
 - `readingsAge` is the age of the account's reading in seconds, or null with no reading.
-  `loginExpiresSource` is `estimate` for a token account, `auth` for a `login` account (from
-  `auth status`), and null when no expiry is known. `inUse` is `{ "count", "sessions" }`, or with
+  `loginExpiresSource` is `estimate` for a token account, `auth` for a `login` or `folder` account
+  (from the last sign-in check that placed the expected sign-in, for the current email), and null
+  when no expiry is known.
+  `inUse` is `{ "count", "sessions" }`, or with
   an unreadable record `{ "count": null, "sessions": [], "unknown": true }` (section 8).
 - `state` is one of `ok | limited | error | ended`. `error` is null or
   `{ "code": ..., "text": ... }`. `source` is one of `probe | estimate | none`.
@@ -1405,8 +1431,21 @@ Field rules:
   same as a missing one, so it is never stored or printed. It comes from the last sign-in check,
   kept only when that check placed the expected account's sign-in (a folder account in its own
   folder); a check that found another account (`wrong_account`), could not confirm the folder,
-  saw the account logged out or could not run keeps none. The row leaves it null while the
-  account's last check or probe says `login_rejected`, `check_failed` or `wrong_account`.
+  saw the account logged out or could not run keeps none. A check also counts only for the
+  account and email it was made for: `state/current.json` keeps, with each check's result, the
+  digest of the account key and lowercased email it was made for (section 13), and while the
+  account's own digest differs, after `config set <label> email`, an edit of `config.json`, or
+  `remove` and `add` of the same label, the row has no `planTier`, no `loginExpiresAt` from a
+  check and no `signed_in` until a check of the new email. An entry with no digest, as an
+  earlier version wrote it, reads the same way. These commands record a check: `status` (not
+  `--cached`), `pick`, `run` (once it has written its launch file), `verify`, `refresh` (for each
+  `login` and `folder` account whose reading did not fail, every time it runs), `init`,
+  `login` for a folder account (the check of a folder it refuses as signed in already, and the
+  one after its sign-in), `link <label>` (once its links are made) and
+  `config set <label> email`. Only a check that placed the expected sign-in, for the current
+  email, feeds `expectedPlanTier` (7.1), `loginExpiresAt` and the ending-soon plan drop
+  (section 9). The row leaves it null while the account's last check or probe says
+  `login_rejected`, `check_failed` or `wrong_account`.
 - `signInCheck` is on `folder` rows only (login and token rows have no such key): the result of
   the last sign-in check of the folder that read an answer from `auth status`. `signed_in` is the
   expected account (any account when none is expected) signed in in the account's own folder;
@@ -1414,9 +1453,12 @@ Field rules:
   folder; `not_confirmed` is an account signed in that the check could not place in that folder,
   or could not confirm as the expected account because the sign-in reported no email.
   It is null before the first such check. A check that could not run or whose answer could not
-  be read leaves it as it was. A status written before this field has no key; its writer kept
-  the plan tier through a doubt, so the window reads such a folder row by its tier only while
-  the row shows no code that can hide one (section 11).
+  be read leaves it as it was. A `signed_in` from a check made for another account or email
+  reads null (`planTier` above). A status written before this field has no key; its writer kept
+  the plan tier through a doubt, so the window reads such a linked folder row by its tier only
+  while the row shows no code that can hide one and is not `check_failed` (section 11). The
+  window reads a `signInCheck` that is not a string as no key, and still loads the rest of the
+  status.
 - Each account also carries `accountKey` (7.1), `endingSoon` and `linked` (true or false for a
   `folder` account; null for `login` and `token` accounts).
 - The document carries a top-level `next` object (`label` is null when nothing fits),
@@ -1465,8 +1507,10 @@ The same pick landing on a folder account differs in two fields:
 `settings carry an API key or key helper`, `token sessions have no connectors`, `no token saved`,
 `login rejected`, `no weekly reading`, `window reset, refresh failed`,
 `stale reading, refresh failed` and `Fable reading is stale, refresh failed`; their text is
-informational and not stable. The `pick busy` refusal (lock not taken within 30 seconds) and every
-refused flag or caller settings exit 1 with a message on stderr and write nothing.
+informational and not stable. Every refused flag or caller settings exit 1 with a message on
+stderr and write nothing. The `pick busy` refusal (lock not taken within 30 seconds) exits 1 with a
+message on stderr and writes no lease, launch file or pick log line; the status records what its
+probes found.
 
 `label: null` with `reason` when nothing fits (exit 2); then `env`, `args`, `launchPrefix`,
 `launchArgs` and `unsetEnv` are null, `backgroundOnly` is false and no launch file is written.
@@ -1575,15 +1619,17 @@ The record of state changes. It answers "what changed since I last looked": the 
   `error` for one that recovered) until the label's next event, and when the events step itself
   failed, the change gets no event at all. So after a failed save a label's last event and
   `status --json` can disagree, and either can be behind until the label's next event; `pick`
-  decides from live checks either way.
+  decides from live checks and, for a token account, from the probe rejection
+  `state/current.json` records.
 - Each answer carries `recordId`, a random id made when `events.jsonl` is created: `r-` and six
   lowercase hex digits. A caller that sees a `recordId` it does not know treats that as a gap too:
   the record was started over.
 - `--label` must match the label pattern of 5.2 and is never used to build a path otherwise;
   `--limit` is 1 to 1000. The same holds for `history` (10.4).
 - `at` is when the tool first saw the change. `notBefore` is the time of the last reading that
-  still showed the old state, or null. The real change lies between the two, so "limited since" is
-  only as exact as the readings are frequent.
+  still showed the old state (or of the rebuild that recorded a rejection without one, section 4),
+  or null. The real change lies between the two, so "limited since" is only as exact as the
+  readings are frequent.
 - `window` and `resetsAt` are set on `limited` and `limit_cleared` only. `login_expiring` is
   written once per expiry date.
 - Events come oldest first, at most `--limit` (default 200). `text` is scrubbed like every status
@@ -1675,7 +1721,8 @@ empty lists, and the events record keeps only each label's newest line.
   - *Folder panel:* sign-in state and "Sign in again" (runs `login <label> --browser`, which runs
     the documented `claude auth login --email <expected email>` in that folder and then checks the
     email with `auth status`; a folder `auth status` finds signed in already is refused, and that
-    answer is recorded as a sign-in check before the command exits), the folder path with Copy,
+    answer is recorded as a sign-in check before the command exits, unless a probe's
+    `login_rejected` stands, when it signs the folder in again), the folder path with Copy,
     shared-settings state, Ends, Remove. The email line adds the plan tier when the status has
     one.
   - The `login` account shows its sign-in state and role and has nothing to change here.
@@ -1693,7 +1740,9 @@ empty lists, and the events record keeps only each label's newest line.
     exactly `pool`, its kind is `token` or `folder`, and its kind and email are the ones the
     sheet was opened for (its consent text names what that kind loses). Otherwise it runs nothing,
     closes the sheet, and shows the Terminal command with a Copy button for a main account, or
-    says the account is no longer listed or is another account now. Every other change reads the
+    says the account is no longer listed or is another account now. A `remove` that runs and
+    fails, such as one another `remove` got to first, also closes the sheet, and the bar shows
+    the CLI's text. Every other change reads the
     status again before it runs: the
     end choice runs only for an account still listed whose kind is not `login`, Sign in and the
     Add sheet's step buttons check the kind, the link and the sign-in state, and `add` and `login`
@@ -1705,7 +1754,10 @@ empty lists, and the events record keeps only each label's newest line.
     scrubbed and through the display-safe pass. For `login <label> --browser`, which prints
     its one-account-per-folder advice first, the bar shows the first line that starts with
     "Error " when the command failed, or the "Signed in." line when it worked, and the first line
-    when there is no such line.
+    when there is no such line. For a token account's `login <label>`, which prints its opening
+    line first, the bar shows the line that says the token was saved and the last first-check
+    line, or, when it failed before those, the first line of its error output, then of its
+    output, that starts with "Error", and the first line when there is no such line.
   - **The same account, never another:** "Sign in again" appears only on a folder that is logged
     out, names the expected email and passes it as the pre-fill; the window has no field that
     changes an account's email.
@@ -1714,66 +1766,120 @@ empty lists, and the events record keeps only each label's newest line.
     only a date you know, because launches stop after that day. Each change runs one command from
     any state: the tool keeps one end marker per account, so that one save sets the new marker and
     clears the other (7.1). A failed change leaves the markers as they were; the window reads the
-    status again and the bar names the command that failed.
+    status again and the bar names the command that failed. The steps the date picker reports
+    while its date is edited run nothing, and the panel shows the date being edited; the edit
+    runs one `config set <label> ends <date>`, for the date it ended on, when it ends: the picker
+    loses focus or goes away, the window closes or stops being key, or another account is
+    selected. So a date part way through an edit, today included, is never saved. An edit that
+    ends while another command runs waits for the next end, and an end choice clicked during an
+    edit replaces it.
   - **Sign-in state:** a folder account counts as signed in only with evidence: it is linked, and
     its status row carries the plan tier. The tool records the tier only from a sign-in check
-    (`auth status`, as `login <label> --browser` runs it after the browser sign-in or when it
-    finds the folder already signed in, or as `status`, `pick`, `verify` or `refresh` runs it)
-    that placed the expected account's sign-in in the folder itself; any other result of that
-    check (another account, logged out, signed in from another folder, no folder reported, or no
-    answer) clears it, so another account's plan tier never shows on this account's line. The row
-    leaves the tier out while the account's last check or probe says `login_rejected`,
-    `check_failed` or `wrong_account`, so a doubt that the row's own code hides (under
-    `account_ended`, or under a code ranked above it) still counts. The row's one code can also
-    hide what the last check saw, so the window reads a folder row's `signInCheck` (10.1) first:
+    (`auth status`) that placed the expected account's sign-in in the folder itself, and a check
+    counts only for the account and email it was made for: after `config set <label> email`, an
+    edit of `config.json`, or `remove` and `add` of the same label, the row has no tier and no
+    `signed_in` until a check of the new email (10.1), so the window shows no "Signed in" and no
+    finished Add step 3 for such a folder, which `run <label>` refuses until a check of the new
+    email places it. These commands record a check: `status` (not `--cached`), `pick`, `run`
+    (once it has written its launch file), `verify`, `refresh` (for each `login` and `folder`
+    account whose reading did not fail, every time it runs), `init`, `login <label>` and
+    `login <label> --browser` for a folder (after the sign-in, or when they find the folder
+    already signed in), `link <label>` (once its links are made, so
+    the window reads what the folder holds before it offers Sign in) and
+    `config set <label> email`. Any other result of a check (another account, logged out, signed
+    in from another folder, no folder reported, or no answer) clears the tier, so another
+    account's plan tier never shows on this account's line. The row leaves the tier out while the
+    account's last check or probe says `login_rejected`, `check_failed` or `wrong_account`, so a
+    doubt that the row's own code hides (under `account_ended`, or under a code ranked above it)
+    still counts. A probe's `login_rejected` stays until the status sees a stored reading newer
+    than the latest one it had seen (section 4) or records a probe that works with a newer
+    reading, which `refresh` keeps trying even while the reading is fresh (6.2), or until `login`
+    completes a new sign-in (the folder was signed out before the run, or `claude auth login`
+    exited 0); a check that sees only the old sign-in, such as the one a refused
+    `login <label> --browser` records, leaves it, so the folder does not read "Signed in" in
+    between, and while it stands `login <label>` and `login <label> --browser` sign the folder in
+    again instead of refusing it as signed in already. The row's one code can also hide what the
+    last check saw, so the window reads a folder row's `signInCheck` (10.1) first:
     `other_account` shows "Signed in as another account" with a red dot in the list and the panel
     alike, whatever code the row shows, with the `wrong_account` problem and its step ("Sign the
     expected account back in to this folder. Do not relabel the folder.") instead of Sign in;
     `not_confirmed`, or a value the window does not know, shows "Sign-in not confirmed" with no
-    Sign in, since `auth status` lists a sign-in there and `login --browser` would refuse it.
+    Sign in, since `auth status` lists a sign-in there and `login --browser` would refuse it
+    unless a probe's `login_rejected` stands.
     Otherwise the window counts the tier only on a row that is `ok`, `limited` or `ended`, or an
     error that says nothing against the sign-in (`settings_changed`, `duplicate_login`,
     `plan_changed`), and never when `signInCheck` is `signed_out`. A linked folder the last check
     placed whose tier a probe or check has doubted since (a visible `login_rejected` aside) shows
-    "Sign-in not confirmed" with no Sign in, for the same reason. A folder with no evidence (a new
+    "Sign-in not confirmed" with no Sign in, for the same reason, except an ended folder, whose
+    hidden doubt may be a probe's rejection (below). A folder with no evidence (a new
     folder after `add --kind folder` or `link`, one the last check saw logged out, or one whose
     checks could not run) shows "Not signed in", or "Signed out" while its row shows
     `login_rejected`, with a red dot, and offers Sign in once it is linked, unless its expected
     email fails the plain-email rule `login --browser` applies (one rule, in
     `ConfigValidator.isPlainEmail`): then the panel shows that refusal's text in the button's
-    place. A row whose `signInCheck` is null (a folder no check has read yet) reads by the tier
-    rule alone. A row with no `signInCheck` key comes from a writer that kept the tier through a
-    doubt, so it reads by the tier rule only while it shows no code that can hide one; with
-    `account_ended`, `settings_changed`, `not_linked`, `duplicate_login` or `plan_changed` (each
-    can stand over `check_failed`) it reads "Sign-in not confirmed" with no Sign in. A plan tier that is not the plain shape counts as none. An ended folder keeps its
-    sign-in line, and its list row says it has ended ("Signed in · ended Nov 1", or "ended"
-    alone for a plan that dropped, and ", ended" for VoiceOver). A token or login
-    account has no such evidence (a token row carries no tier, and the window does not count the
-    login account's tier), and any code on its row could hide one that says it is signed out or
-    unconfirmed: `account_ended` hides every other code, and every other code the tool writes
-    ranks above `check_failed`. A token or login account therefore counts as signed in only while
-    its row is `ok` or `limited` with no code. Otherwise the list and the panel read "Account
-    ended" for an ended row, "Signed out" for `login_rejected` or `token_missing`, "Signed in as
-    another account" for `wrong_account`, and "Sign-in not confirmed" for any other code,
-    `check_failed` and any code the window does not know included, each with a red dot. On every
-    "Sign-in not confirmed" and "Account ended" panel, the row's own error, through the
-    display-safe pass, is the problem that says why, with no steps, except a folder whose
-    `signInCheck` is `not_confirmed`: its problem is "Check failed" with "The last sign-in check
-    could not confirm the sign-in in this folder.", whatever code the row shows, or the row's own
-    error when that is the one for a sign-in that reported no email. An ended folder
-    that reads as signed in or not signed in shows its own `account_ended` error as the problem;
-    one that reads as another account's, or as not confirmed, keeps that problem, and its list
-    row still says it has ended. The `wrong_account` problem
-    lists the menu's steps for that code less "Choose Refresh now.", which only the menu has. The
-    token panel offers Sign in again in every state, and the Add sheet's token sign-in step reads
-    done only while the account counts as signed in.
+    place, with the command that changes the email,
+    `agent-balancer config set <label> email <address>`, and a Copy button. A row whose
+    `signInCheck` is null (a folder no check has read yet) reads by the tier rule alone. A linked
+    row with no `signInCheck` key (the window reads a value that is not a string the same way)
+    comes from a writer that kept the tier through a doubt, so it reads by the tier rule only
+    while it shows no code that can hide one: with `check_failed`, or with `account_ended`,
+    `settings_changed`, `not_linked`, `duplicate_login` or `plan_changed` (each can stand over
+    `check_failed`), it reads "Sign-in not confirmed" with no Sign in. Such a row that is not
+    linked reads "Not signed in" with its link step and Sign in off. A plan tier that is not the
+    plain shape counts as none. An ended folder keeps its sign-in line, and its list row says it
+    has ended ("Signed in · ended Nov 1" once its end date has passed, "ended" with no date
+    before then, as for a plan that dropped, and ", ended" for VoiceOver). A token account has no
+    such evidence (its row carries no tier), and any code on its row could hide one that says it
+    is signed out or unconfirmed: `account_ended` hides every other code, and every other code
+    the tool writes ranks above `check_failed`. A token account therefore counts as signed in
+    only while its row is `ok` or `limited` with no code. A login account counts the same way,
+    and also by its plan tier, as a folder row does, while its row shows `plan_changed` or
+    `duplicate_login`, which say nothing against the sign-in; that tier follows the email rule
+    above. Otherwise the panel reads "Account ended" for an ended row, whose list row reads
+    "Ended Nov 1" once its end date has passed and "Ended" before then, and the list and the
+    panel read "Signed out" for `login_rejected` or `token_missing`, "Signed in as another
+    account" for `wrong_account`, and "Sign-in not confirmed" for any other code, `check_failed`
+    and any code the window does not know included, each with a red dot. A signed-in token with
+    no end set reads "N days left", "1 day left" or "Less than a day left" in the list until its
+    estimated end, and "Signed in" after it, never "Expired": a token whose probe still works is
+    signed in whatever the estimate says. On every "Sign-in not confirmed" and "Account ended"
+    panel, the row's own error, through the display-safe pass, is the problem that says why,
+    with no steps, except an ended folder its last check placed (below) and a folder whose
+    `signInCheck` is `not_confirmed`: the latter's problem is "Check failed" with "The last
+    sign-in check could not confirm the sign-in in this folder.", whatever
+    code the row shows, or the row's own error when that is the one for a sign-in that reported
+    no email. An ended folder that reads as signed in or not signed in shows its own
+    `account_ended` error as the problem; one that reads as another account's, or as not
+    confirmed because its last check could not place the sign-in, shows that problem followed by
+    its own `account_ended` text, and its list row still says it has ended. An ended folder its
+    last check placed, with a doubt since that the end hides, gives its own `account_ended` text
+    followed by "Its sign-in has not been confirmed since the last check and may have been
+    rejected. If so, sign in again.", with the steps "Open Terminal." and "Run the command below
+    and sign in." and `agent-balancer login <label> --browser`. The `wrong_account` problem lists
+    the menu's steps for that code less "Choose Refresh now.", which only the menu has. A login
+    account signs in in the default folder, and `agent-balancer login` refuses it, so its
+    `wrong_account` step in the menu and the window is "Run claude and sign the expected account
+    back in.", its `login_rejected` steps in the menu say to run `claude` and sign in again, and
+    its menu row has no Open Manage accounts action. The token panel offers Sign in again in
+    every state, and the Add sheet's token sign-in step reads done only while the account counts
+    as signed in.
   - **Add sheet:** the folder steps follow the status: Share settings reads done once the folder
     is linked, and Sign in stays off until then, while the folder reads as another account's or
-    as not confirmed, and while its expected email fails the plain-email rule, and reads done only
-    while the window counts the folder as signed in.
+    as not confirmed, and while its expected email fails the plain-email rule, when the step gives
+    the panel's reason, and reads done only while the window counts the folder as signed in. The
+    sheet shows why Add is off once management is off, in place of an earlier run's error, as
+    when the CLI goes missing while the sheet is open.
     Cancel and Esc are off on both sheets while their command runs, and the view model refuses to
     close a sheet then; a sheet replaced while a command runs keeps the new form and starts no
     sign-in.
+  - **Renders and the design frame:** the render scenes draw the window as design/render.html
+    does, with these forms kept. The login account's list row reads "Your login" in every frame,
+    as the token frame has it, where the folder frame reads "Signed in". Once an account is
+    added, the Add sheet dims its Kind and Ends choices and draws its Label and Email fields off,
+    as the live sheet disables all four, where the frame draws them on. Every scene row is one
+    the status writer can produce, so the folder frame's signed-out folder shows no plan tier on
+    its email line, where the frame adds "Ultra": the writer keeps no tier while a check or probe
+    says the sign-in is gone. The shared-settings tip reads as the frame's.
   - **Display-safe text:** every string from `status.json` that the menu or the window shows
     (labels, emails, end dates, error and warning codes and texts, the banner, the next-launch
     labels and reasons) passes the display-safe pass, so a control or bidi character shows as an
@@ -1827,12 +1933,15 @@ empty lists, and the events record keeps only each label's newest line.
   changes one field with a dated backup. The tool never logs in for the user.
 - **One account per folder, for good.** A folder is signed into one account and stays on it,
   because saved thinking from a model works only in the account that produced it, and a chat that
-  meets a second sign-in loses it. `login <label>` runs only while the folder is logged out and
-  checks the email afterwards. It exits 1, and says so, when `auth status` cannot be read, when
-  the folder is not signed in, when the check fails at error level (`check_failed`, such as when the
-  folder cannot be confirmed as its own or the sign-in reports no email for an account with an
-  expected one), or when the folder holds a different account (`wrong_account`, a wrong email). A
-  plan other than the expected one is reported as `plan_changed` and leaves the exit status at 0.
+  meets a second sign-in loses it. `login <label>` runs only while the folder is logged out, or
+  while a probe's `login_rejected` stands, and checks the email afterwards. It exits 1,
+  and says so, when `auth status` cannot be read, when the folder is not signed in, when the
+  check fails at error level (`check_failed`, such as when the folder cannot be confirmed as its
+  own or the sign-in reports no email for an account with an expected one), when the folder
+  holds a different account (`wrong_account`, a wrong email), or, over a sign-in the probe found
+  rejected, when the run cannot show a new sign-in (a run without `--browser`, or a
+  `claude auth login` that did not exit 0): the probe's `login_rejected` then stands. A plan
+  other than the expected one is reported as `plan_changed` and leaves the exit status at 0.
   `add`, `login` and the README print "Never sign a different account
   into a folder that already has chats. Add a new folder for the new account instead." A folder
   found on another account shows `wrong_account`, drops out of `pick`, and its fix text says to
@@ -1846,7 +1955,8 @@ empty lists, and the events record keeps only each label's newest line.
   on the named account, for a person. It runs the kind's checks of 4A.5 without the reading check
   (a new account starts before its first reading), refuses when they fail even for an explicit
   label (`token_missing` for a missing or widened token file, `login_rejected` for a logged-out
-  login), takes a lease and writes one launch file under the pick lock as `pick` does, and starts
+  login or a token whose probe's `login_rejected` stands), takes a lease and writes one launch
+  file under the pick lock as `pick` does, and starts
   `claude` with the terminal attached and the environment of 6.2 for a person: the user's own minus
   the protected group. The settings checks come from the verdict a reader saved, and `run` refuses
   when it is missing or older than the file (4A.5); it opens no settings file. The argument array is
@@ -2055,9 +2165,13 @@ empty lists, and the events record keeps only each label's newest line.
   state/events.jsonl               0600   a header line with the record id, then state changes, one
                                           numbered JSON line each (10.3)
   state/current.json               0600   each label's current state, error code and since times, the
-                                          last sign-in and probe errors, the label the last duplicate
+                                          last sign-in and probe errors, what the last sign-in check
+                                          saw and the digest of the account and email it was made
+                                          for (SHA-256 of the account key, a NUL and the lowercased
+                                          email; never the email), the label the last duplicate
                                           check matched (4A.4), and what the settings file last showed
-                                          (10.1; labels, codes, times and scrubbed text only)
+                                          (10.1; labels, codes, times, scrubbed text and that digest
+                                          only)
   state/settings-seen.json         0600   the verdict a reader saved for `run`: hook entries,
                                           `disableAllHooks`, a key flag and the settings file's
                                           stamp (4A.5); no env name and no value
@@ -2124,8 +2238,9 @@ is skipped by readers. A rewrite of a history file (to cut its last line, or to 
 every such line and logs how many it dropped, never their text: such a line has no time that
 retention could age out, and its content is unknown. A prune of the events record that drops a
 last line that does not parse logs it the same way. A `state/current.json` that does not parse,
-or holds a label, state, code, window, plan tier or date the tool never writes, is logged and
-started over. Lines older than `history.retentionDays` (default 35) are dropped by rewriting the
+or holds a label, state, code, window, plan tier, date, sign-in check result or digest the tool
+never writes, is logged and started over. Lines older than `history.retentionDays` (default 35)
+are dropped by rewriting the
 file through the same no-follow writer, at most once a day; the newest events line of each label
 is always kept. Retention counts back from the earlier of the clock and the newest stored reading
 of a configured account that has a `five_hour` or `seven_day` reset time at most 270 seconds
@@ -2202,9 +2317,9 @@ file deletion outside the no-follow writer.
 | T12 | An inherited key, token or ambient `CLAUDE_CONFIG_DIR` reaches a child | Allowlisted child environment (6.2); `pick` skips the default-folder candidate under an ambient variable, unless the caller is a launcher that sets the child's environment itself (5.2) |
 | T13 | A chat forges consent through a pseudo terminal | Consent commands, `run` and `login` refuse in a chat shell (5.1); the user's own policy can also refuse those commands in chats |
 | T15 | Public docs or history leak private labels, paths or tooling details | This document is public-safe; issue bodies, PR text and release notes pass a local banned-string list before they are posted |
-| T16 | A same-user process, a chat included, edits files under `~/.agent-balancer/` to skip consent, pass `verify`, move the main role, drop the reserve, forge a reading, or make the tool run a program of its choosing | No executable path is read from any file in the data folder; the `verify` cache lives in process memory only; config changes that move protection (`set-main`, `set`, `remove`) refuse in a chat shell. Against code that runs as the user this is advisory |
+| T16 | A same-user process, a chat included, edits files under `~/.agent-balancer/` to skip consent, pass `verify`, move the main role, drop the reserve, forge a reading, or make the tool run a program of its choosing | No executable path is read from any file in the data folder; the `verify` cache lives in process memory only; config changes that move protection (`set-main`, `set`, `remove`) refuse in a chat shell. Against code that runs as the user this is advisory, and these bounds are left: the probe starts `claude` in its probe folder by path, so a process that swaps that folder for a link in between chooses where it starts; a render that a change of a home's tool folder stops leaves the output folder it made, empty when the change came before the first file; and `remove` takes a label only, so an account removed and added again with the same label, kind and email between the window's read and the run is the one removed |
 | T17 | A planted symlink redirects one of the tool's writes or deletes | No-follow, handle-relative writes and symlink-only removal (section 13) |
-| T18 | The history and events files expose usage patterns, or a same-user process forges or deletes lines to mislead a caller | 0600 files that hold labels, percentages, times and scrubbed texts only; a retention cap; the leak test reads both files. The files are information, never authority: `pick` and `verify` decide from live checks and never read the history |
+| T18 | The history and events files expose usage patterns, or a same-user process forges or deletes lines to mislead a caller | 0600 files that hold labels, percentages, times and scrubbed texts only; a retention cap; the leak test reads both files. The files are information, never authority: `pick` and `verify` decide from live checks (for a token account, `pick` also from the probe rejection `state/current.json` records) and never read the history |
 | T19 | A chat uses the Manage accounts window to add, remove, re-date or sign in an account: it starts the app itself, or drives the window by scripting the screen | The window runs six command shapes only and none that shares hooks or moves protection; it turns management off when its environment carries the chat-shell variable; the app has no scripting surface |
 | T20 | A stored token is read by another process that runs as the user, by a backup or by a sync tool, and stays usable for up to a year | 0600 files in 0700 folders; `tokens/` and `launch/` are marked as excluded from backups; `doctor` warns when the data folder sits inside a synced folder. Against code that runs as the user this is advisory, and it is the same exposure as Claude Code's own fallback credential file |
 | T21 | A token reaches output: `pick`'s JSON, an error text, a log line, the history, the app, a crash report | Only the `Tokens` and `Launch` modules read a token, and they return paths, never values. `pick` prints the launch file's path only. The scrubber runs on every captured buffer; `TokenCapture` reads the `claude setup-token` child's raw output first |
@@ -2241,7 +2356,8 @@ Threat numbers are not reused or renumbered.
   across two 4 KB reads is still caught. A positive control proves the detector fires. Planted
   tokens and planted safety violations are assembled at runtime from split strings, never stored
   whole in a file. The same file runs the leak shapes as patterns (a token or token-like run, an
-  org id or org field, an address other than a made-up account's at example.com, a path the
+  org id or org field, an address other than a made-up account's at example.com (one leading
+  hyphen allowed, as in the README check), a path the
   fixture does not own, a named session) over every chunk of the README pictures but their pixel
   data, compressed text inflated, and over the scene sources the pictures are drawn from.
 - **Safety script tests:** `scripts/check-safety.sh` is tested with planted violations for each
@@ -2337,7 +2453,8 @@ public copy.
    (10.3): read each event as the state it reports for its label, never as a count, so a repeat
    changes nothing. After a failed save an event can also be missing, and a label's last event
    and `status --json` can disagree; either can be behind until the label's next event, and
-   `pick` decides from live checks either way. `status --json` carries `stateSince` and `limited`
+   `pick` decides from live checks and, for a token account, from the probe rejection
+   `state/current.json` records. `status --json` carries `stateSince` and `limited`
    (`since`, `until`, `window`), and `agent-balancer history --json --label <label>` gives the
    readings over time.
 9. **Information is not authority:** decide a launch from `pick`, never from `events`, `history`

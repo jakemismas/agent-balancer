@@ -15,7 +15,7 @@ final class AppModel {
     init() {
         let context = ToolContext.current()
         controller = MenuController(context: context)
-        manage = ManageViewModel(context: context)
+        manage = ManageViewModel(context: context, dock: { DockMode.apply(shown: $0) })
         controller.afterFileRead = { [manage] in manage.statusMayHaveChanged() }
         refreshLoginItem()
         controller.start()

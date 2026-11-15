@@ -8,12 +8,24 @@ import Testing
 /// in either refuses with nothing made and nothing written, or renders with nothing in any tool
 /// folder.
 extension RenderOutputTests {
-    /// How the tool folder a case varies is set up. The last two spell the home through a folder
-    /// the run would make, so the tool folder names the output only once the run has made it.
+    /// How the tool folder a case varies is set up. `homeThroughMissingFolder` and
+    /// `homeThroughDanglingLink` spell the home through a folder the run would make, so the tool
+    /// folder names the output only once the run has made it. The two `dotDot` states spell the
+    /// home `<root>/real/lnk/../h` with `lnk` a link to `<root>/other/inner`: the system reads it
+    /// as `<root>/other/h`, a join of the path as `<root>/real/h`. `emptyHome` sets HOME but
+    /// leaves it empty, and `homeAtMode0600` is a home whose tool folder cannot be looked up. The
+    /// three `relative` states (HOME `lnk/../h`, `../hh` and `hh`) and `emptyHomeNoToolFolder`
+    /// (HOME empty) check only that `homes(environment:)` refuses a HOME that is not an absolute
+    /// path before any path is made: a path made from a relative HOME would be joined to the test
+    /// process's own folder, not to the folders a case arranges. The CLI table and
+    /// `aHomeThatIsNotAnAbsolutePathOrHasADotDotSegmentIsRefusedAsWritten` pin the rule itself.
     enum ToolFolderState: String, CaseIterable, Sendable {
         case missing, folder, linkToFolder, linkToOutput, danglingAbsolute, danglingRelative
         case danglingChain, chainToFolder, linkToFile, file, loop
         case homeThroughMissingFolder, homeThroughDanglingLink
+        case dotDotHomeAboveCurrentFolder, dotDotHomeDangling, emptyHome, homeAtMode0600
+        case relativeDotDotHomeAboveCurrentFolder, relativeDotDotHome, relativeHome
+        case emptyHomeNoToolFolder
 
         /// Whether a render goes ahead with the tool folder in this state.
         var renders: Bool {
@@ -22,6 +34,15 @@ extension RenderOutputTests {
             default: return false
             }
         }
+    }
+
+    /// What a case runs against. The homes are read when the case runs, as the app reads them,
+    /// so an empty HOME refuses there.
+    struct Arranged {
+        let homes: () throws -> [URL]
+        let cwd: URL
+        /// A home kept at mode 0600 while the case runs.
+        let locked: URL?
     }
 
     /// A temporary place by its real path: the current folder `repo` with `build/x`, two homes
@@ -47,18 +68,44 @@ extension RenderOutputTests {
             manager.createFile(atPath: root.appendingPathComponent("afile").path, contents: Data())
         }
 
-        deinit { try? FileManager.default.removeItem(at: root) }
+        deinit {
+            // A home left at mode 0600 cannot be emptied.
+            for home in homes {
+                try? FileManager.default.setAttributes(
+                    [.posixPermissions: 0o700], ofItemAtPath: home.path)
+            }
+            try? FileManager.default.removeItem(at: root)
+        }
 
         func link(_ at: URL, to target: String) throws {
             try FileManager.default.createSymbolicLink(atPath: at.path, withDestinationPath: target)
         }
 
-        /// Sets up `name` in home `index` for `output`, and returns the homes the rule is given.
+        /// Runs `body` with `home` at mode 0600, so no name inside it can be looked up, and gives
+        /// it 0700 back afterwards, pass or fail.
+        func whileLocked(_ home: URL?, name: String, _ body: () throws -> Void) throws {
+            guard let home else { return try body() }
+            let manager = FileManager.default
+            try manager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: home.path)
+            defer {
+                try? manager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: home.path)
+            }
+            var st = stat()
+            let failed = lstat(home.path + "/" + name, &st) != 0
+            let code = errno
+            try #require(failed && code == EACCES, "the tool folder can still be looked up")
+            try body()
+        }
+
+        /// Sets up `name` in home `index` for `output`, and returns what the case runs against.
         func arrange(_ state: ToolFolderState, home index: Int, name: String, output: String)
-            throws -> [URL]
+            throws -> Arranged
         {
             let manager = FileManager.default
             var homes = self.homes
+            var cwd = self.cwd
+            var locked: URL?
+            var read: (() throws -> [URL])?
             let spot = homes[index].appendingPathComponent(name)
             let target = cwd.appendingPathComponent(output)
             let hop = root.appendingPathComponent("hop")
@@ -101,8 +148,53 @@ extension RenderOutputTests {
                     try link(root.appendingPathComponent("hl"), to: target.path + "/..")
                     homes[index] = root.appendingPathComponent("hl/hh")
                 }
+            case .dotDotHomeAboveCurrentFolder, .dotDotHomeDangling:
+                let joined = root.appendingPathComponent("real/h")
+                for folder in ["real/h", "other/inner", "other/h"] {
+                    try manager.createDirectory(
+                        at: root.appendingPathComponent(folder), withIntermediateDirectories: true)
+                }
+                try link(
+                    root.appendingPathComponent("real/lnk"),
+                    to: root.appendingPathComponent("other/inner").path)
+                homes[index] = URL(fileURLWithPath: root.path + "/real/lnk/../h")
+                if state == .dotDotHomeAboveCurrentFolder {
+                    cwd = joined.appendingPathComponent(name + "/repo")
+                    try manager.createDirectory(
+                        at: cwd.appendingPathComponent("build/x"),
+                        withIntermediateDirectories: true)
+                } else {
+                    try link(joined.appendingPathComponent(name), to: target.path)
+                }
+            case .emptyHome:
+                try link(cwd.appendingPathComponent(name), to: target.path)
+                read = { try RenderOutput.homes(environment: ["HOME": ""]) }
+            case .homeAtMode0600:
+                try link(spot, to: target.path)
+                locked = homes[index]
+            case .relativeDotDotHomeAboveCurrentFolder:
+                cwd = root.appendingPathComponent("X/h/" + name + "/repo")
+                for folder in ["build/x", "h"] {
+                    try manager.createDirectory(
+                        at: cwd.appendingPathComponent(folder), withIntermediateDirectories: true)
+                }
+                let inner = root.appendingPathComponent("X/inner")
+                try manager.createDirectory(at: inner, withIntermediateDirectories: true)
+                try link(cwd.appendingPathComponent("lnk"), to: inner.path)
+                read = { try RenderOutput.homes(environment: ["HOME": "lnk/../h"]) }
+            case .relativeDotDotHome:
+                try manager.createDirectory(
+                    at: root.appendingPathComponent("hh"), withIntermediateDirectories: false)
+                read = { try RenderOutput.homes(environment: ["HOME": "../hh"]) }
+            case .relativeHome:
+                try manager.createDirectory(
+                    at: cwd.appendingPathComponent("hh"), withIntermediateDirectories: false)
+                read = { try RenderOutput.homes(environment: ["HOME": "hh"]) }
+            case .emptyHomeNoToolFolder:
+                read = { try RenderOutput.homes(environment: ["HOME": ""]) }
             }
-            return homes
+            let given = homes
+            return Arranged(homes: read ?? { given }, cwd: cwd, locked: locked)
         }
 
         /// Every entry under the place, so a refusal can be seen to make nothing.
@@ -119,25 +211,30 @@ extension RenderOutputTests {
                 for state in ToolFolderState.allCases {
                     for output in ["build/t", "build/x/t"] {
                         let place = try LinkPlace()
-                        let homes = try place.arrange(
+                        let arranged = try place.arrange(
                             state, home: index, name: name, output: output)
                         let label = "home\(index) \(name) \(state.rawValue) \(output)"
-                        let cwd = place.cwd.path
+                        let cwd = arranged.cwd.path
                         guard state.renders else {
                             let before = place.entries()
-                            #expect(throws: ToolError.self, "\(label)") {
-                                try RenderOutput.folder(
-                                    output, currentDirectoryPath: cwd, homes: homes)
-                            }
-                            #expect(throws: ToolError.self, "\(label)") {
-                                let held = try RenderOutput.hold(
-                                    output, currentDirectoryPath: cwd, homes: homes)
-                                try held.put(Data("a".utf8), name: "a.png")
+                            try place.whileLocked(arranged.locked, name: name) {
+                                #expect(throws: ToolError.self, "\(label)") {
+                                    try RenderOutput.folder(
+                                        output, currentDirectoryPath: cwd,
+                                        homes: try arranged.homes())
+                                }
+                                #expect(throws: ToolError.self, "\(label)") {
+                                    let held = try RenderOutput.hold(
+                                        output, currentDirectoryPath: cwd,
+                                        homes: try arranged.homes())
+                                    try held.put(Data("a".utf8), name: "a.png")
+                                }
                             }
                             #expect(place.entries() == before, "\(label)")
                             refused += 1
                             continue
                         }
+                        let homes = try arranged.homes()
                         _ = try RenderOutput.folder(output, currentDirectoryPath: cwd, homes: homes)
                         let held = try RenderOutput.hold(
                             output, currentDirectoryPath: cwd, homes: homes)
@@ -159,8 +256,20 @@ extension RenderOutputTests {
                 }
             }
         }
-        #expect(refused == 72)
+        #expect(refused == 136)
         #expect(rendered == 32)
+    }
+
+    @Test func aHomeThatIsNotAnAbsolutePathOrHasADotDotSegmentIsRefusedAsWritten() throws {
+        // A relative HOME becomes a path joined to the current folder with each `..` dropped by
+        // name, so only its text can show what the system would reach.
+        for home in ["lnk/../h", "../hh", "hh", "", "/a/lnk/../h"] {
+            #expect(throws: ToolError.self, "\(home)") {
+                try RenderOutput.homes(environment: ["HOME": home])
+            }
+        }
+        let read = try RenderOutput.homes(environment: ["HOME": "/a/b/h"])
+        #expect(read.first?.path == "/a/b/h")
     }
 
     @Test func aProtectedPathThatNamesTheFolderJustMadeStopsTheHoldBeforeAnyFile() throws {
@@ -204,5 +313,22 @@ extension RenderOutputTests {
         try place.link(spot, to: output.appendingPathComponent("three.png").path)
         #expect(throws: ToolError.self) { try held.put(Data("three".utf8), name: "three.png") }
         #expect(try FileManager.default.contentsOfDirectory(atPath: output.path) == ["one.png"])
+    }
+
+    @Test func aHomeSpelledWithADotDotSegmentStopsTheHoldOnceTheFolderIsOpen() throws {
+        let place = try LinkPlace()
+        let arranged = try place.arrange(
+            .dotDotHomeDangling, home: 0, name: ".claude", output: "build/t")
+        let homes = try arranged.homes()
+        #expect(RenderOutput.protectedIdentities(homes) == nil)
+        // Opened directly, as if the path rules had passed: the check the writer makes once the
+        // folder is open, and again before each file, refuses that home too.
+        #expect(throws: ToolError.self) {
+            _ = try NoFollowWriter.holdFolder(
+                start: place.cwd.path, checked: place.cwd.path, names: ["build", "x", "u"],
+                refused: [], current: { RenderOutput.protectedIdentities(homes) })
+        }
+        let made = place.cwd.appendingPathComponent("build/x/u").path
+        #expect(try FileManager.default.contentsOfDirectory(atPath: made).isEmpty)
     }
 }

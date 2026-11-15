@@ -27,7 +27,9 @@ without it. CI runs the same script on every pull request.
 `scripts/build-app.sh` builds the menu bar app into `build/`. `scripts/render-views.sh` builds the
 app and the command line tool, draws the app's views into `build/renders/`, copies the README
 pictures that run drew into `docs/media/` and runs the README check; the pictures show made-up
-accounts only.
+accounts only. Both scripts work from the checkout's real path, so they also run from a checkout
+opened through a link. Both exit 1 in a clone inside the home's `.claude` folder, since the app
+writes nothing there.
 
 ## Safety rules
 

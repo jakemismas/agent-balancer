@@ -81,9 +81,10 @@ extension ManageViewModelTests {
             spoken: "signed in as another account", signIn: "Sign in again...", signInOn: true,
             stepDone: false, stepOn: true)
 
-        static func tokenEnded(_ end: String) -> Shown {
+        /// An ended token row, whose list line is its end.
+        static func tokenEnded(_ list: String) -> Shown {
             Shown(
-                panel: "Account ended", panelGreen: false, list: "Account ended" + end,
+                panel: "Account ended", panelGreen: false, list: list,
                 listGreen: false, spoken: "account ended", signIn: "Sign in again...",
                 signInOn: true, stepDone: false, stepOn: true)
         }
@@ -110,9 +111,10 @@ extension ManageViewModelTests {
             spoken: "signed in as another account", signIn: nil, signInOn: false, stepDone: nil,
             stepOn: nil)
 
-        static func loginEnded(_ end: String) -> Shown {
+        /// An ended login row, whose list line is its end.
+        static func loginEnded(_ list: String) -> Shown {
             Shown(
-                panel: "Account ended", panelGreen: false, list: "Account ended" + end,
+                panel: "Account ended", panelGreen: false, list: list,
                 listGreen: false, spoken: "account ended", signIn: nil, signInOn: false,
                 stepDone: nil, stepOn: nil)
         }
@@ -299,9 +301,13 @@ extension ManageViewModelTests {
         SignInRow(
             kind: "folder", state: "error", code: "settings_changed", linked: true,
             earlier: true, shown: .folderNotConfirmed()),
+        // Not linked, it shows its link step with Sign in off, whatever its code.
         SignInRow(
             kind: "folder", state: "error", code: "not_linked", linked: false, tier: tier,
-            earlier: true, shown: .folderNotConfirmed()),
+            earlier: true, shown: .folderNot(linked: false)),
+        SignInRow(
+            kind: "folder", state: "error", code: "check_failed", linked: false, tier: tier,
+            earlier: true, shown: .folderNot(linked: false)),
         SignInRow(
             kind: "folder", state: "error", code: "duplicate_login", linked: true, tier: tier,
             earlier: true, shown: .folderNotConfirmed()),
@@ -323,9 +329,13 @@ extension ManageViewModelTests {
         SignInRow(
             kind: "folder", state: "error", code: "wrong_account", linked: true, tier: tier,
             earlier: true, shown: .folderOther),
+        // Such a writer's check may have failed over a sign-in it saw, so no Sign in.
         SignInRow(
             kind: "folder", state: "error", code: "check_failed", linked: true, tier: tier,
-            earlier: true, shown: .folderNot(linked: true)),
+            earlier: true, shown: .folderNotConfirmed()),
+        SignInRow(
+            kind: "folder", state: "error", code: "check_failed", linked: true, earlier: true,
+            shown: .folderNotConfirmed()),
     ]
 
     /// The token and login rows the window shows. Neither kind reads the tier, so only a row with
@@ -341,7 +351,7 @@ extension ManageViewModelTests {
         SignInRow(kind: "token", state: "error", code: "check_failed", shown: .tokenNotConfirmed),
         SignInRow(
             kind: "token", state: "ended", code: "account_ended", extra: ended,
-            shown: .tokenEnded(" \u{00B7} ends Nov 1")),
+            shown: .tokenEnded("Ended Nov 1")),
         SignInRow(kind: "token", state: "error", code: "wrong_account", shown: .tokenOther),
         SignInRow(
             kind: "token", state: "error", code: "duplicate_login", shown: .tokenNotConfirmed),
@@ -350,19 +360,25 @@ extension ManageViewModelTests {
         SignInRow(kind: "login", state: "error", code: "login_rejected", shown: .loginOut),
         SignInRow(
             kind: "login", state: "error", code: "wrong_account", tier: tier, shown: .loginOther),
+        // A login row's tier counts under these two codes, as a folder row's does.
         SignInRow(
-            kind: "login", state: "error", code: "plan_changed", tier: tier,
-            shown: .loginNotConfirmed),
+            kind: "login", state: "error", code: "plan_changed", tier: tier, shown: .loginIn()),
         SignInRow(
-            kind: "login", state: "error", code: "duplicate_login", tier: tier,
-            shown: .loginNotConfirmed),
+            kind: "login", state: "error", code: "duplicate_login", tier: tier, shown: .loginIn()),
+        SignInRow(kind: "login", state: "error", code: "plan_changed", shown: .loginNotConfirmed),
+        SignInRow(
+            kind: "login", state: "error", code: "duplicate_login", shown: .loginNotConfirmed),
         SignInRow(
             kind: "login", state: "error", code: "settings_changed", tier: tier,
             shown: .loginNotConfirmed),
         SignInRow(kind: "login", state: "error", code: "check_failed", shown: .loginNotConfirmed),
         SignInRow(
             kind: "login", state: "ended", code: "account_ended", tier: tier, extra: ended,
-            shown: .loginEnded(" \u{00B7} ends Nov 1")),
+            shown: .loginEnded("Ended Nov 1")),
+        // Ended by its plan, with no date that has passed.
+        SignInRow(
+            kind: "login", state: "ended", code: "account_ended", tier: tier,
+            extra: endedByPlan, shown: .loginEnded("Ended")),
         // Shapes the tool never writes for a token or login account.
         SignInRow(kind: "token", state: "error", shown: .tokenNotConfirmed),
         SignInRow(kind: "token", state: "error", code: "a_later_code", shown: .tokenNotConfirmed),
@@ -540,6 +556,8 @@ extension ManageViewModelTests {
         let failed = ProbeObservation(
             error: Issue(.checkFailed, .error, "Check failed: probe timed out."))
         let rejected = ProbeObservation(error: Issue(.loginRejected, .error, "Login rejected."))
+        // Dated when each probe runs, so its reading is newer than a rejection recorded before it.
+        func worked() -> ProbeObservation { ProbeObservation(error: nil, readAt: .at(Date())) }
 
         var got = try after(auth: try check(in: own))
         #expect(got.code == nil && got.tier == "max_20x" && got.seen == .signedIn)
@@ -557,14 +575,21 @@ extension ManageViewModelTests {
         got = try after(auth: try check(loggedIn: false, in: own))
         #expect(got.code == "login_rejected" && got.tier == nil && got.seen == .signedOut)
         #expect(got.check == "signed_out")
-        got = try after(probe: ProbeObservation(error: nil))
+        got = try after(probe: worked())
         #expect(got.code == nil && got.tier == nil && got.seen == .notSignedIn)
         got = try after(auth: try check(in: own))
         #expect(got.seen == .signedIn)
-        // A probe that saw it logged out, then a check that saw it signed in again.
+        // A probe that saw it logged out, then a check that sees only the old sign-in, as
+        // `status` makes it: the rejection stands, so no "Signed in".
         got = try after(probe: rejected)
         #expect(got.code == "login_rejected" && got.tier == nil && got.seen == .signedOut)
         got = try after(auth: try check(in: own))
+        #expect(got.code == "login_rejected" && got.tier == nil && got.seen == .signedOut)
+        #expect(got.check == "signed_in")
+        // The check `login` makes once it completed a new sign-in ends the rejection.
+        var signedInAgain = try check(in: own)
+        signedInAgain.newSignIn = true
+        got = try after(auth: signedInAgain)
         #expect(got.code == nil && got.tier == "max_20x" && got.seen == .signedIn)
 
         // Ended: the row's code is `account_ended`, which hides what the checks said.
@@ -578,7 +603,7 @@ extension ManageViewModelTests {
         got = try after(probe: rejected)
         #expect(got.code == "account_ended" && got.tier == nil && got.seen == .notConfirmed)
         got = try after(auth: try check(in: own))
-        #expect(got.seen == .signedIn)
+        #expect(got.seen == .notConfirmed)
         got = try after(auth: try check(loggedIn: false, in: own))
         #expect(got.code == "account_ended" && got.tier == nil && got.seen == .notSignedIn)
         got = try after(auth: try check(in: own))
@@ -589,13 +614,13 @@ extension ManageViewModelTests {
 
         // A changed hook record shows first and hides a failed probe under it.
         got = try after(
-            probe: ProbeObservation(error: nil),
+            probe: worked(),
             settings: SettingsObservation(issue: "changed", carriesKey: false))
         #expect(got.code == "settings_changed" && got.tier == "max_20x" && got.seen == .signedIn)
         got = try after(probe: failed)
         #expect(got.code == "settings_changed" && got.tier == nil && got.seen == .notConfirmed)
         got = try after(
-            probe: ProbeObservation(error: nil),
+            probe: worked(),
             settings: SettingsObservation(issue: nil, carriesKey: false))
         #expect(got.code == nil && got.seen == .signedIn)
 

@@ -63,6 +63,29 @@ private func text(_ data: Data) -> String { String(decoding: data, as: UTF8.self
         #expect(cli.fakeRecord("args.log").contains("--settings"))
     }
 
+    @Test func runRefusesATokenAccountWhoseProbesRejectionStands() throws {
+        let cli = try setUp(token: Canary.realShapeToken())
+        defer { cli.cleanup() }
+        try cli.fakeProbe("ok.jsonl")
+        #expect(try cli.run(["refresh", "--label", "pool-a"]).status == 0)
+        try cli.fakeProbe("auth_error.jsonl")
+        #expect(try cli.run(["refresh", "--label", "pool-a", "--force"]).status == 1)
+        // The refusal gives the next step the status row gives, in the same words.
+        let status = try cli.run(["status", "--cached", "--json"])
+        let document = try #require(
+            JSONSerialization.jsonObject(with: status.stdout) as? [String: Any])
+        let rows = try #require(document["accounts"] as? [[String: Any]])
+        let row = try #require(rows.first { $0["label"] as? String == "pool-a" })
+        let error = try #require(row["error"] as? [String: Any])
+        #expect(error["text"] as? String == Messages.probeLoginRejected)
+        for args in [["run", "pool-a"], ["run", "--print-command", "pool-a"]] {
+            let out = try cli.run(args)
+            #expect(out.status == 1, "\(args)")
+            #expect(text(out.stderr).contains("Error: \(Messages.probeLoginRejected)"), "\(args)")
+        }
+        #expect(launchFiles(cli).isEmpty)
+    }
+
     @Test func runPassesTheChildsExitStatusThrough() throws {
         let cli = try setUp()
         defer { cli.cleanup() }
@@ -259,6 +282,9 @@ private func text(_ data: Data) -> String { String(decoding: data, as: UTF8.self
         let out = try cli.run(["run", "main"])
         #expect(out.status == 1)
         #expect(text(out.stderr).contains("Login rejected."))
+        // A login account's refusal gives its own next step, not a token probe's text.
+        #expect(text(out.stderr).contains("Run `claude` and sign in again"))
+        #expect(!text(out.stderr).contains(Messages.probeLoginRejected))
         #expect(!cli.fakeRecord("args.log").contains("--settings"))
     }
 

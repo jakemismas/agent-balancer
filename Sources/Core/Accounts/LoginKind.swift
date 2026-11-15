@@ -25,10 +25,11 @@ public struct LoginKind: AccountKindHandler {
                         .loginRejected, .error,
                         "Login rejected. Run `claude` and sign in again, then run `agent-balancer doctor`."
                     )
-                ])
+                ], emailDigest: account.emailDigest)
         }
         var check = AccountCheck(
-            planTier: status.planTier, loginExpiresAt: status.loginExpiresAt, signedIn: true)
+            planTier: status.planTier, loginExpiresAt: status.loginExpiresAt, signedIn: true,
+            emailDigest: account.emailDigest)
         // A stored claude.ai sign-in reports its email, so an expected email is always compared:
         // a missing one fails like a different one.
         if let expected = account.email {

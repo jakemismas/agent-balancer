@@ -109,11 +109,20 @@ struct ConfigCommand: ParsableCommand {
             var lines: [String] = []
             // Under the pick lock like every registry writer, so an add, remove or role change
             // saved at the same moment is kept and a remove never sees a rename half way.
-            try TokenAccounts.updateConfig(context: context, backup: true) { config in
+            let config = try TokenAccounts.updateConfig(context: context, backup: true) { config in
                 lines = try Self.change(words, in: &config)
             }
             for line in lines { print(line) }
-            Shared.rebuildStatus(context)
+            var observations = StatusObservations()
+            // A new email is checked as `status` checks it, since no check of the old one counts.
+            if words.count == 3, words[1] == "email", let account = config.account(words[0]),
+                let handler = AccountKinds.handler(for: account.kind)
+            {
+                let check = handler.check(
+                    account: account, runner: ClaudeRunner(context: context), now: Date())
+                observations.auth[account.label] = AuthObservation(check)
+            }
+            Shared.rebuildStatus(context, observations: observations)
         }
 
         /// Applies one change to `config` and returns the lines to print.
@@ -171,6 +180,12 @@ struct ConfigCommand: ParsableCommand {
                 guard account.kind != Kind.token else {
                     throw ToolError(
                         "A token account cannot be renamed. Run `agent-balancer remove \(Display.safe(label))`, then `agent-balancer add \(Display.safe(value))` and `agent-balancer login \(Display.safe(value))`."
+                    )
+                }
+                // A rename would leave the folder, with its sign-in and links, under the old name.
+                guard account.kind != Kind.folder else {
+                    throw ToolError(
+                        "A folder account cannot be renamed: its folder is named for the label. Nothing was changed."
                     )
                 }
                 guard ConfigValidator.isValidLabel(value) else {

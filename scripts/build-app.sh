@@ -3,7 +3,9 @@
 # drawn by the app binary and turned into an icns with iconutil, and an ad hoc signature.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# The real path: the app refuses an output path that names a link, and a checkout opened through
+# one would give it one.
+ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
 cd "$ROOT"
 
 APP="build/AgentBalancerBar.app"

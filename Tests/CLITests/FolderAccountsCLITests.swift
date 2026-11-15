@@ -584,6 +584,20 @@ private func text(_ data: Data) -> String { String(decoding: data, as: UTF8.self
         #expect(args.allSatisfy { $0.hasPrefix("auth status") })
     }
 
+    @Test func loginRefusesASignedInFolderWhoseLastProbeFailedWithoutARejection() throws {
+        let cli = try setUp()
+        defer { cli.cleanup() }
+        try linked(cli)
+        // The probe fails without finding the sign-in rejected, and `auth status` still lists it.
+        try cli.fakeProbe("no_event.jsonl")
+        #expect(try cli.run(["refresh", "--label", "spare", "--force"]).status == 1)
+        #expect(
+            (try statusRow(cli)["error"] as? [String: Any])?["code"] as? String == "check_failed")
+        let out = try cli.run(["login", "spare", "--browser"])
+        #expect(out.status == 1 && text(out.stderr).contains("already signed in"))
+        #expect(!cli.fakeRecord("args.log").contains("auth login"))
+    }
+
     // MARK: remove
 
     @Test func removeDeletesTheEntryItsLaunchFilesAndLeasesButNeverTheFolder() throws {

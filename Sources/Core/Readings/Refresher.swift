@@ -194,10 +194,14 @@ public struct Refresher: Sendable {
     /// reported `check_failed`; one whose probe has not begun, still waiting for a thread or for
     /// its lock, is `notStarted`; one whose Fable probe is running is reported by its plain step,
     /// a fresh reading or a finished plain probe. A running probe is left to end on its own.
-    /// `forced` names labels probed even when their reading is fresh.
+    /// `forced` names labels probed even when their reading is fresh. `reprobe` names labels where
+    /// a probe's rejection of the sign-in stands, each with the time the status counts as the
+    /// latest stored reading it saw (`StatusBuilder.probeRejection`): such an account is probed
+    /// even when its reading is fresh, but not once a newer one is stored, which only a probe
+    /// that worked can do.
     public func refresh(
         accounts: [Account], force: Bool, forced: Set<String> = [], fable: FableMode = .daily,
-        deadline: TimeInterval? = nil
+        deadline: TimeInterval? = nil, reprobe: [String: Date] = [:]
     ) -> [AccountRefresh] {
         let results = Results()
         let begun = Begun()
@@ -214,8 +218,8 @@ public struct Refresher: Sendable {
                         index,
                         refresh(
                             account: account, force: force || forced.contains(account.label),
-                            fable: fable, begin: { begun.begin(index) },
-                            report: { results.set(index, $0) }))
+                            fable: fable, rejectedAt: reprobe[account.label],
+                            begin: { begun.begin(index) }, report: { results.set(index, $0) }))
                 }
                 done.leave()
             }.start()
@@ -264,15 +268,23 @@ public struct Refresher: Sendable {
     public func refresh(account: Account, force: Bool, fable mode: FableMode = .daily)
         -> AccountRefresh
     {
-        refresh(account: account, force: force, fable: mode, begin: { true }, report: { _ in })
+        refresh(
+            account: account, force: force, fable: mode, rejectedAt: nil, begin: { true },
+            report: { _ in })
     }
 
     /// `begin` runs just before each probe, plain or Fable; when it returns false that probe does
-    /// not run. `report` hears the plain result before a Fable probe begins.
+    /// not run. `report` hears the plain result before a Fable probe begins. `rejectedAt` is the
+    /// account's `reprobe` time, if any.
     private func refresh(
-        account: Account, force: Bool, fable mode: FableMode, begin: () -> Bool,
-        report: (AccountRefresh) -> Void
+        account: Account, force: Bool, fable mode: FableMode, rejectedAt: Date?,
+        begin: () -> Bool, report: (AccountRefresh) -> Void
     ) -> AccountRefresh {
+        // A stored reading newer than the time the status counts as the latest one it saw came
+        // from a probe that worked since, so the freshness rule holds again.
+        func probeAgain(_ stored: Reading) -> Bool {
+            rejectedAt.map { stored.readAt <= $0 } ?? false
+        }
         let duplicate = DuplicateBox()
         let store = storeWithDuplicateCheck(into: duplicate)
         func failed(_ issue: Issue) -> AccountRefresh {
@@ -294,7 +306,7 @@ public struct Refresher: Sendable {
             var now = clock()
             let early = try store.load(label: account.label)
             if !force, let early, early.isFresh(now: now, maxAgeMinutes: maxAge),
-                !fableDue(early, now: now, mode: mode)
+                !fableDue(early, now: now, mode: mode), !probeAgain(early)
             {
                 return AccountRefresh(label: account.label, status: .fresh(early), fable: .notRun)
             }
@@ -318,7 +330,9 @@ public struct Refresher: Sendable {
             now = clock()
             var stored = try store.load(label: account.label)
             var status: RefreshStatus
-            if !force, let current = stored, current.isFresh(now: now, maxAgeMinutes: maxAge) {
+            if !force, let current = stored, current.isFresh(now: now, maxAgeMinutes: maxAge),
+                !probeAgain(current)
+            {
                 status = .fresh(current)
             } else {
                 guard begin() else {

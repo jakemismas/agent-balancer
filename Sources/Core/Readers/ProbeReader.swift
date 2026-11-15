@@ -84,11 +84,7 @@ public enum ProbeReader {
         }
 
         if let error = resultError, error.auth {
-            return .failed(
-                Issue(
-                    .loginRejected, .error,
-                    "Login rejected. Sign in to this account again, then run `agent-balancer refresh`."
-                ))
+            return .failed(Issue(.loginRejected, .error, Messages.probeLoginRejected))
         }
         guard sawEvent else {
             if let error = resultError {

@@ -96,10 +96,18 @@ import Testing
 
     /// Runs the app binary with one render flag in `cwd`, with `home` as the home folder.
     static func renderFlag(_ arguments: [String], cwd: URL, home: URL) throws -> (Int32, String) {
+        try renderFlag(arguments, cwd: cwd, homeVariable: home.path)
+    }
+
+    /// Runs the app binary with one render flag in `cwd`, with HOME set to `homeVariable` as it
+    /// is spelled, empty included.
+    static func renderFlag(_ arguments: [String], cwd: URL, homeVariable: String) throws
+        -> (Int32, String)
+    {
         let task = Process()
         task.executableURL = try appBinary()
         task.arguments = arguments
-        task.environment = ["HOME": home.path, "PATH": "/usr/bin:/bin"]
+        task.environment = ["HOME": homeVariable, "PATH": "/usr/bin:/bin"]
         task.currentDirectoryURL = cwd
         let out = Pipe()
         task.standardInput = FileHandle.nullDevice
@@ -416,5 +424,69 @@ extension AppSurfaceTests {
         #expect(!appear.contains("model.reload()"))
         let disappear = try #require(Self.block(after: ".onDisappear", in: window))
         #expect(disappear.contains("model.windowClosed()"))
+    }
+}
+
+/// The window's wiring that no view model test reaches: the Add button's guards, the Dock seam
+/// and the end date picker.
+extension AppSurfaceTests {
+    @Test func theAddButtonIsOffOnceAddedWhileACommandRunsAndWhileTheFormHasAProblem() throws {
+        let sheets = try Self.source("Manage/ManageSheets.swift")
+        #expect(sheets.contains("private var added: Bool { draft.stage == .added }"))
+        let buttons = try #require(Self.block(after: "private var buttons: some View", in: sheets))
+        // The sheet's one primary button is Add.
+        #expect(buttons.components(separatedBy: "style: .primary").count - 1 == 1)
+        #expect(
+            buttons.contains("enabled: !added && !busy && problem == nil, action: actions.submit"))
+        let window = try Self.source("Manage/ManageWindow.swift")
+        #expect(window.contains("problem: model.add.flatMap { model.addProblem($0) },"))
+        #expect(
+            window.contains("steps: model.add.map { model.addSteps($0) } ?? [], busy: model.busy,"))
+    }
+
+    @Test func theDockFollowsTheWindowOnlyThroughTheViewModel() throws {
+        let app = try Self.source("AppModel.swift")
+        #expect(
+            app.contains("ManageViewModel(context: context, dock: { DockMode.apply(shown: $0) })"))
+        let window = try Self.source("Manage/ManageWindow.swift")
+        let apply = try #require(Self.block(after: "static func apply(shown: Bool)", in: window))
+        #expect(apply.contains("NSApp.setActivationPolicy(.regular)"))
+        #expect(apply.contains("NSApp.setActivationPolicy(.accessory)"))
+        // Nothing else sets the policy.
+        var calls = 0
+        for (_, text) in try Self.appSources() {
+            calls += text.components(separatedBy: "setActivationPolicy").count - 1
+        }
+        #expect(calls == 2)
+    }
+
+    @Test func theEndDatePickerReportsStepsAndSavesOnlyWhenTheEditEnds() throws {
+        let content = try Self.source("Manage/ManageContent.swift")
+        #expect(content.contains("changed: actions.stepEndDate,"))
+        #expect(content.contains("ended: actions.finishEndDate)"))
+        #expect(content.contains(".onChange(of: editing) { _, now in if !now { ended() } }"))
+        // No date the picker passes through reaches a command on its own.
+        #expect(!content.contains("actions.changeEnds(.on($0))"))
+        let window = try Self.source("Manage/ManageWindow.swift")
+        #expect(window.contains("model.stepEndDate(label: label, to: date)"))
+        #expect(window.contains("finishEndDate: { Task { await model.finishEndDate() } }"))
+        // The picker may report no focus change, so the edit also ends when the field or the
+        // window goes away, when the window stops being key, and before another account is
+        // selected.
+        let field = try #require(Self.block(after: "struct EndDateField: View", in: content))
+        #expect(field.contains(".focused($editing)"))
+        #expect(field.contains(".onDisappear { ended() }"))
+        let save = "Task { await model.finishEndDate() }"
+        let gone = try #require(Self.block(after: ".onDisappear", in: window))
+        #expect(gone.contains(save))
+        let resigned = try #require(
+            Self.block(
+                after:
+                    ".onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification))",
+                in: window))
+        #expect(resigned.contains("window.title == \"Manage accounts\""))
+        #expect(resigned.contains(save))
+        let select = try #require(Self.block(after: "select:", in: window))
+        #expect(select.contains(save) && select.contains("model.selection = label"))
     }
 }

@@ -302,8 +302,20 @@ public enum MenuBuilder {
     /// Steps that name an action only the menu has, so the Manage accounts window leaves them out.
     static let menuOnlySteps: Set<String> = ["Choose Refresh now."]
 
-    static func steps(code: String, label: String) -> StepsModel {
+    /// The steps for a code. A login account is the default folder's own sign-in: it has no
+    /// folder of its own to relabel, and `agent-balancer login` refuses it.
+    static func steps(code: String, label: String, kind: String? = nil) -> StepsModel {
         let ok = safeLabel(label)
+        switch (code, kind == Kind.login) {
+        case ("login_rejected", true):
+            return StepsModel(
+                steps: ["Open Terminal.", "Run claude and sign in again.", "Choose Refresh now."],
+                command: nil)
+        case ("wrong_account", true):
+            return StepsModel(
+                steps: [Messages.signExpectedBackInLogin, "Choose Refresh now."], command: nil)
+        default: break
+        }
         switch code {
         case "login_rejected", "token_missing":
             return StepsModel(
@@ -342,11 +354,12 @@ public enum MenuBuilder {
         var dimmed = false
         let body: RowBody
         if a.state == "error", let e = a.error, e.code != "settings_changed" {
+            // The window has nothing to change for a login account.
             body = .error(
                 ErrorModel(
                     title: title(for: e.code), text: plain(e.text),
-                    steps: steps(code: e.code, label: a.label),
-                    manageable: manageableCodes.contains(e.code)))
+                    steps: steps(code: e.code, label: a.label, kind: a.kind),
+                    manageable: manageableCodes.contains(e.code) && a.kind != Kind.login))
         } else if a.state == "ended" {
             body = .note(plain(a.error?.text ?? "Account ended."))
         } else if let weekly = a.weekly, let used = weekly.usedPercent {

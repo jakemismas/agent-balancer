@@ -69,34 +69,51 @@ extension ManageViewModelTests {
 
     enum GenLink: String, CaseIterable, Sendable { case ok, broken, notLinked }
 
-    /// One generated row: what the account's checks, probe and setup were.
+    /// One generated row: what the account's checks, probes and setup were.
     struct GenCase: CustomStringConvertible, Sendable {
         var label: String
         var kind: String
         var checks: [GenCheck] = []
+        /// The probe after the checks.
         var probe = GenProbe.none
         var link = GenLink.ok
         var tokenUsable = true
         var duplicate = false
         var ended = false
         var settingsChanged = false
+        /// A probe before the first check, which a probe after the checks would replace.
+        var probeBefore = GenProbe.none
+        /// Marked ending soon, so a check that sees the plan drop ends the account.
+        var endingSoon = false
+        /// A stored reading at the limit.
+        var limited = false
 
         var description: String {
-            "\(label) \(kind) checks \(checks.map(\.rawValue)) probe \(probe.rawValue) link "
-                + "\(link.rawValue) token \(tokenUsable) duplicate \(duplicate) ended \(ended) "
-                + "settings changed \(settingsChanged)"
+            "\(label) \(kind) probe before \(probeBefore.rawValue) checks "
+                + "\(checks.map(\.rawValue)) probe \(probe.rawValue) link \(link.rawValue) token "
+                + "\(tokenUsable) duplicate \(duplicate) ended \(ended) ending soon \(endingSoon) "
+                + "limited \(limited) settings changed \(settingsChanged)"
         }
 
         var lastSeen: GenCheck? { checks.last { $0.readsStatus } }
 
+        /// The probe whose result the entry keeps: no check clears a probe's result.
+        var lastProbe: GenProbe { probe != .none ? probe : probeBefore }
+
+        /// A check placed the expected sign-in on a lower plan while the account ends soon.
+        var endedByPlan: Bool { endingSoon && kind != Kind.token && checks.contains(.planChanged) }
+
         /// Every error code the writer records for the account, from the inputs alone.
         var recorded: Set<String> {
             var codes = Set<String>()
-            // A probe that works clears a check's `login_rejected`.
-            if let code = checks.last?.code, !(code == "login_rejected" && probe == .ok) {
+            // A probe that works after the checks clears a check's `login_rejected`, and an
+            // account that ends soon shows no `plan_changed`.
+            if let code = checks.last?.code, !(code == "login_rejected" && probe == .ok),
+                !(code == "plan_changed" && endingSoon)
+            {
                 codes.insert(code)
             }
-            if let code = probe.code { codes.insert(code) }
+            if let code = lastProbe.code { codes.insert(code) }
             if kind == Kind.folder {
                 switch link {
                 case .ok: if settingsChanged { codes.insert("settings_changed") }
@@ -108,21 +125,36 @@ extension ManageViewModelTests {
             }
             if kind == Kind.token, !tokenUsable { codes.insert("token_missing") }
             if duplicate { codes.insert("duplicate_login") }
-            if ended { codes.insert("account_ended") }
+            // A rejected sign-in shows over a plan drop; a date that passed shows over all.
+            if ended || (endedByPlan && !codes.contains("login_rejected")) {
+                codes.insert("account_ended")
+            }
             return codes
         }
 
         /// The one code the row shows, by the ranking.
         var shown: String? {
             if ended { return "account_ended" }
-            return Transitions.errorOrder.map(\.rawValue).first { recorded.contains($0) }
+            let first = Transitions.errorOrder.map(\.rawValue).first { recorded.contains($0) }
+            if first != "login_rejected", recorded.contains("account_ended") {
+                return "account_ended"
+            }
+            return first
+        }
+
+        /// The row's state: ended by its date or its plan, an error, limited by its reading, or
+        /// ok.
+        var state: String {
+            if shown == "account_ended" { return "ended" }
+            if shown != nil { return "error" }
+            return limited ? "limited" : "ok"
         }
 
         /// The plan tier the row carries: only from a last check that placed the expected
         /// sign-in, with no doubt since.
         var tier: String? {
             guard kind != Kind.token, let last = checks.last, last.places,
-                probe != .rejected, probe != .failed
+                lastProbe != .rejected, lastProbe != .failed
             else { return nil }
             return last == .planChanged ? "pro" : "max_20x"
         }
@@ -144,7 +176,11 @@ extension ManageViewModelTests {
             default:
                 if shown == "login_rejected" { return .signedOut }
                 if shown == "wrong_account" { return .otherAccount }
-                if ended { return .ended }
+                if state == "ended" { return .ended }
+                // As a folder row does, a login row counts its tier under these two codes.
+                if shown == "plan_changed" || shown == "duplicate_login" {
+                    return tier != nil ? .signedIn : .notConfirmed
+                }
                 return shown == nil ? .signedIn : .notConfirmed
             }
         }
@@ -159,6 +195,12 @@ extension ManageViewModelTests {
         let readable = checks.filter { $0.readsStatus && $0 != .planChanged && $0 != .unreported }
         return [[]] + checks.map { [$0] } + readable.map { [$0, .unreadable] }
     }
+
+    /// The probes around the checks: none, one after them, or one before the first check with
+    /// none after, since a probe after would replace its result.
+    static let probeRuns: [(before: GenProbe, after: GenProbe)] =
+        GenProbe.allCases.map { (GenProbe.none, $0) }
+        + [GenProbe.rejected, .failed].map { ($0, GenProbe.none) }
 
     /// The sign-in check `check` as the account's kind runs it.
     static func authObservation(_ check: GenCheck, account: Account, folder: URL?)
@@ -192,6 +234,8 @@ extension ManageViewModelTests {
         var tokenUsable = true
         var duplicate = false
         var ended = false
+        var endingSoon = false
+        var limited = false
     }
 
     static func genSlots() -> [GenSlot] {
@@ -205,6 +249,11 @@ extension ManageViewModelTests {
                             duplicate: duplicate, ended: ended))
                 }
             }
+            // An account keeps one end marker, so the one that ends soon has no date.
+            slots.append(
+                GenSlot(label: "f\(slots.count)", kind: Kind.folder, link: link, endingSoon: true))
+            slots.append(
+                GenSlot(label: "f\(slots.count)", kind: Kind.folder, link: link, limited: true))
         }
         for usable in [true, false] {
             for duplicate in [false, true] {
@@ -216,27 +265,42 @@ extension ManageViewModelTests {
                 }
             }
         }
+        slots.append(GenSlot(label: "t\(slots.count)", kind: Kind.token, limited: true))
         return slots
     }
+
+    /// The login account's ends: none, a stored reading at the limit, a date that passed, or
+    /// ending soon.
+    static let loginEnds: [(ended: Bool, endingSoon: Bool, limited: Bool)] = [
+        (false, false, false), (false, false, true), (true, false, false), (false, true, false),
+    ]
 
     static func loginCases() -> [GenCase] {
         var cases: [GenCase] = []
         for checks in checkRuns(folder: false) {
-            for probe in GenProbe.allCases {
+            for probes in probeRuns {
                 for duplicate in [false, true] {
-                    for ended in [false, true] {
+                    for end in loginEnds {
                         for settingsChanged in [false, true] {
                             cases.append(
                                 GenCase(
-                                    label: "main", kind: Kind.login, checks: checks, probe: probe,
-                                    duplicate: duplicate, ended: ended,
-                                    settingsChanged: settingsChanged))
+                                    label: "main", kind: Kind.login, checks: checks,
+                                    probe: probes.after, duplicate: duplicate, ended: end.ended,
+                                    settingsChanged: settingsChanged, probeBefore: probes.before,
+                                    endingSoon: end.endingSoon, limited: end.limited))
                         }
                     }
                 }
             }
         }
         return cases
+    }
+
+    /// A reading at the limit, as a probe stores it.
+    static func limitedReading(now: Date = Date()) -> Reading {
+        let week = WindowReading(
+            usedPercent: 100, resetsAt: now.addingTimeInterval(3 * 86_400), readAt: now)
+        return Reading(readAt: now, windows: [WindowName.sevenDay: week])
     }
 
     /// The accounts of `cases` as a config: each gets a new account key, so the writer starts
@@ -249,7 +313,7 @@ extension ManageViewModelTests {
                 Account(
                     label: c.label, kind: c.kind, role: Role.pool, email: email,
                     expectedPlanTier: c.kind == Kind.token ? nil : "max_20x",
-                    endsAt: c.ended ? pastDay : nil))
+                    endsAt: c.ended ? pastDay : nil, endingSoon: c.endingSoon ? true : nil))
             if c.duplicate {
                 accounts.append(
                     Account(label: "d\(c.label)", kind: Kind.token, role: Role.pool, email: email))
@@ -260,9 +324,10 @@ extension ManageViewModelTests {
         return config
     }
 
-    /// Writes `cases` through the real writer: the first sign-in check, then the second with the
-    /// probe after it, as the commands that run them would. Returns each row and entry.
-    /// It runs off the main actor, so the window tests around it are not held up.
+    /// Writes `cases` through the real writer: a probe before the checks, the first sign-in
+    /// check, then the second with the probe after it, as the commands that run them would.
+    /// Returns each row and entry. It runs off the main actor, so the window tests around it are
+    /// not held up.
     nonisolated static func writeGenerated(
         _ cases: [GenCase], settingsChanged: Bool, context: ToolContext
     )
@@ -271,15 +336,17 @@ extension ManageViewModelTests {
     {
         let config = genConfig(cases)
         try ConfigStore(context: context).save(config)
-        var first = StatusObservations()
-        first.settings = SettingsObservation(
+        let settings = SettingsObservation(
             issue: settingsChanged ? "changed" : nil, carriesKey: false)
+        var before = StatusObservations(settings: settings)
+        var first = StatusObservations(settings: settings)
         var second = StatusObservations()
         for c in cases {
             let account = try #require(config.account(c.label))
             let folder =
                 c.kind == Kind.folder
                 ? try FolderPaths.configDir(context: context, label: c.label) : nil
+            before.probe[c.label] = c.probeBefore.observation
             if let check = c.checks.first {
                 first.auth[c.label] = authObservation(check, account: account, folder: folder)
             }
@@ -290,6 +357,9 @@ extension ManageViewModelTests {
             } else {
                 first.probe[c.label] = c.probe.observation
             }
+        }
+        if !before.probe.isEmpty {
+            _ = try StatusBuilder.rebuild(context: context, observations: before)
         }
         var document = try StatusBuilder.rebuild(context: context, observations: first)
         if !second.auth.isEmpty {
@@ -313,9 +383,11 @@ extension ManageViewModelTests {
         let name = "\(c)"
         // The writer recorded what the inputs say, and the row shows the ranking's first code.
         #expect(row.error?.code == c.shown, "\(name): code \(row.error?.code ?? "none")")
+        #expect(row.state == c.state, "\(name): state \(row.state)")
         #expect(row.planTier == c.tier, "\(name): tier \(row.planTier ?? "none")")
         #expect(entry?.authError?.code == c.recordedAuth, "\(name): auth error")
-        #expect(entry?.probeError?.code == c.probe.code, "\(name): probe error")
+        #expect(entry?.probeError?.code == c.lastProbe.code, "\(name): probe error")
+        #expect(entry?.endedByPlan == c.endedByPlan, "\(name): ended by plan")
         if c.kind == Kind.folder {
             #expect(
                 row.signInCheck == c.lastSeen?.seen, "\(name): check \(row.signInCheck ?? "none")")
@@ -340,20 +412,26 @@ extension ManageViewModelTests {
         ).first { $0.id == 3 }
 
         // Never green unless the last check placed the expected sign-in (folders), or no code
-        // could hide or contradict it (token and login).
+        // could hide or contradict it (token and login), or a login row's tier stands under a
+        // code that says nothing against it.
         if panel.signedIn {
             if c.kind == Kind.folder {
                 #expect(
-                    c.checks.last?.places == true && c.probe != .rejected && c.probe != .failed
-                        && c.link == .ok, "\(name): green without evidence")
+                    c.checks.last?.places == true && c.lastProbe != .rejected
+                        && c.lastProbe != .failed && c.link == .ok,
+                    "\(name): green without evidence")
             } else {
-                #expect(row.error == nil, "\(name): green with a code")
+                let tierUnder = ["plan_changed", "duplicate_login"].contains(row.error?.code)
+                #expect(
+                    row.error == nil || (c.kind == Kind.login && tierUnder && row.planTier != nil),
+                    "\(name): green with a code")
             }
         }
         if c.kind == Kind.folder {
-            // Never a Sign in that `login --browser` would refuse as already signed in.
+            // Never a Sign in that `login --browser` would refuse as already signed in: a
+            // standing probe rejection lets it sign the folder in again.
             let offered = panel.signIn?.enabled == true || step?.actionEnabled == true
-            let refused = c.lastSeen?.sawSignIn == true && c.probe != .rejected
+            let refused = c.lastSeen?.sawSignIn == true && c.lastProbe != .rejected
             #expect(!(offered && refused), "\(name): offers a Sign in that would be refused")
             if c.lastSeen == .other {
                 #expect(panel.signInText == "Signed in as another account", "\(name)")
@@ -408,21 +486,26 @@ extension ManageViewModelTests {
         for slot in slots where slot.kind == Kind.token && slot.tokenUsable {
             _ = try t.makeTokenFile(label: slot.label, secret: Canaries.oauth())
         }
+        for slot in slots where slot.limited {
+            try ReadingStore(context: context).save(Self.limitedReading(), label: slot.label)
+        }
         let tool = try Self.loggingTool(in: t.home)
         let vm = ManageViewModel(
             context: context, runner: CLIRunner(context: context, candidates: [tool.exe]),
             clock: { Self.now })
         vm.windowOpened()
         for checks in Self.checkRuns(folder: true) {
-            for probe in GenProbe.allCases {
+            for probes in Self.probeRuns {
                 for settingsChanged in [false, true] {
                     // A token account has no sign-in check, so its rows come with no check.
                     let cases = slots.filter { $0.kind == Kind.folder || checks.isEmpty }.map {
                         GenCase(
                             label: $0.label, kind: $0.kind,
-                            checks: $0.kind == Kind.folder ? checks : [], probe: probe,
+                            checks: $0.kind == Kind.folder ? checks : [], probe: probes.after,
                             link: $0.link, tokenUsable: $0.tokenUsable, duplicate: $0.duplicate,
-                            ended: $0.ended, settingsChanged: settingsChanged)
+                            ended: $0.ended, settingsChanged: settingsChanged,
+                            probeBefore: probes.before, endingSoon: $0.endingSoon,
+                            limited: $0.limited)
                     }
                     let (rows, entries) = try await Self.writeGenerated(
                         cases, settingsChanged: settingsChanged, context: context)
@@ -437,16 +520,25 @@ extension ManageViewModelTests {
             }
         }
 
-        // The login account, one at a time, since a setup has one.
-        let login = try TestHome()
-        let loginVM = ManageViewModel(
-            context: login.context,
-            runner: CLIRunner(context: login.context, candidates: [tool.exe]),
-            clock: { Self.now })
-        loginVM.windowOpened()
+        // The login account, one at a time, since a setup has one: one home with a reading at
+        // the limit and one without.
+        var loginHomes: [Bool: (TestHome, ManageViewModel)] = [:]
+        for limited in [false, true] {
+            let home = try TestHome()
+            if limited {
+                try ReadingStore(context: home.context).save(Self.limitedReading(), label: "main")
+            }
+            let model = ManageViewModel(
+                context: home.context,
+                runner: CLIRunner(context: home.context, candidates: [tool.exe]),
+                clock: { Self.now })
+            model.windowOpened()
+            loginHomes[limited] = (home, model)
+        }
         for c in Self.loginCases() {
+            let (home, loginVM) = try #require(loginHomes[c.limited])
             let (rows, entries) = try await Self.writeGenerated(
-                [c], settingsChanged: c.settingsChanged, context: login.context)
+                [c], settingsChanged: c.settingsChanged, context: home.context)
             loginVM.statusMayHaveChanged()
             try Self.checkGenerated(
                 c, row: try #require(rows[c.label]), entry: entries[c.label], vm: loginVM)
@@ -485,7 +577,11 @@ extension ManageViewModelTests {
                 }
             }
         }
-        #expect(all.count > 1000)
+        // A probe before the checks, a reading at the limit and a plan drop are each in it.
+        #expect(all.contains { $0.probeBefore == .rejected && $0.checks == [.placed] })
+        #expect(all.contains { $0.state == "limited" })
+        #expect(all.contains { $0.endedByPlan && $0.state == "ended" })
+        #expect(all.count == 3564)
         #expect(Self.lines(tool.log).isEmpty)
     }
 }
@@ -534,7 +630,9 @@ extension ManageViewModelTests {
             vm.selection = "spare"
             let panel = try #require(vm.panel)
             #expect(panel.problem?.title == "Wrong account", "\(place)")
-            #expect(panel.problem?.text == Messages.wrongAccount, "\(place)")
+            // Ended, it says that too.
+            let end = place == "under account_ended" ? " Account ended." : ""
+            #expect(panel.problem?.text == Messages.wrongAccount + end, "\(place)")
             #expect(panel.problem?.steps.steps == [Messages.signExpectedBackIn], "\(place)")
             // The other account's plan never shows on this account's line.
             #expect(panel.emailLine == "acct@example.com", "\(place)")

@@ -97,10 +97,18 @@ struct LinkCommand: ParsableCommand {
         print(
             "Linked '\(Display.safe(label, limit: 32))': \(applied.created) made, \(applied.replaced) replaced, \(applied.dropped) removed, \(applied.present) already in place, \(applied.skipped) skipped."
         )
-        Shared.rebuildStatus(
-            context,
-            observations: StatusObservations(
-                settings: SettingsObservation(issue: nil, carriesKey: seen.carriesKey)))
+        var observations = StatusObservations(
+            settings: SettingsObservation(issue: nil, carriesKey: seen.carriesKey))
+        // The folder's sign-in is checked as `status` checks it, so the window reads what the
+        // folder holds before it offers Sign in.
+        if let account = try? ConfigStore(context: context).loadRequired().account(label),
+            account.kind == Kind.folder, let handler = AccountKinds.handler(for: account.kind)
+        {
+            let check = handler.check(
+                account: account, runner: ClaudeRunner(context: context), now: Date())
+            observations.auth[label] = AuthObservation(check)
+        }
+        Shared.rebuildStatus(context, observations: observations)
     }
 
     private static func describe(_ action: LinkPlan.Action) -> String {

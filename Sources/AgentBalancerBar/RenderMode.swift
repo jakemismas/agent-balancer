@@ -8,7 +8,8 @@ import SwiftUI
 /// write only into a folder that `RenderOutput` accepts (under the current folder's `build`
 /// folder, with no `..`, no link and no folder named `.claude` or `.agent-balancer` on its path
 /// below the current folder, and outside the home's `.claude` and `.agent-balancer` folders,
-/// each of which must be missing or a folder: a link to nothing stops the run), held open once
+/// each of which must be missing or a folder: a link to nothing stops the run, and so does a
+/// HOME that is set but empty, is not an absolute path, or has a `..` segment), held open once
 /// and written relative to its handle.
 enum RenderMode {
     static func run(arguments: [String]) {

@@ -64,10 +64,11 @@ public struct AccountSnapshot: Decodable, Equatable, Sendable {
     /// a plain tier reads as none, so it never counts as a sign-in.
     public var planTier: String?
     /// A folder account's last sign-in check result, as written. Nil in a status written before
-    /// the field, or before the first check; the window fails closed on a value it does not know.
+    /// the field, before the first check, or when the value is not a string; the window fails
+    /// closed on a value it does not know.
     public var signInCheck: String?
-    /// Whether the row carries the `signInCheck` key, null included. A folder row written before
-    /// the field has none, and its plan tier may outlive a check that doubted the sign-in.
+    /// Whether the row carries the `signInCheck` key as a string or null. A folder row written
+    /// before the field has none, and its plan tier may outlive a check that doubted the sign-in.
     public var hasSignInCheck: Bool
 
     private enum CodingKeys: String, CodingKey {
@@ -100,8 +101,15 @@ public struct AccountSnapshot: Decodable, Equatable, Sendable {
         stateSince = (try? c.decodeIfPresent(Date.self, forKey: .stateSince)) ?? nil
         planTier = ((try? c.decodeIfPresent(String.self, forKey: .planTier)) ?? nil)
             .flatMap { AuthStatusReader.isPlainTier($0) ? $0 : nil }
-        signInCheck = try c.decodeIfPresent(String.self, forKey: .signInCheck)
-        hasSignInCheck = c.contains(.signInCheck)
+        do {
+            signInCheck = try c.decodeIfPresent(String.self, forKey: .signInCheck)
+            hasSignInCheck = c.contains(.signInCheck)
+        } catch {
+            // A value of another type is no check, read as strictly as a row with no key, and
+            // the rest of the status still loads.
+            signInCheck = nil
+            hasSignInCheck = false
+        }
     }
 }
 

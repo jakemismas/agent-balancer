@@ -130,6 +130,85 @@ import Testing
         #expect(launchFiles(t).isEmpty)
     }
 
+    /// True when the pick lock can be taken now; a holder in this process counts as one.
+    static func pickLockIsFree(_ context: ToolContext) -> Bool {
+        guard
+            let lock = try? NoFollowWriter(root: context.dataRoot).acquireLock(
+                folders: Layout.locksFolders, name: Layout.pickLockName, wait: 0)
+        else { return false }
+        lock.release()
+        return true
+    }
+
+    /// A clock for `run` or `pick` that, the first time it is read while the pick lock is held,
+    /// records a probe's rejection of `label` as another command's status rebuild would.
+    static func clockRecordingARejection(
+        of label: String, context: ToolContext, recorded: Box<Bool>
+    ) -> @Sendable () -> Date {
+        {
+            if recorded.value == nil, !pickLockIsFree(context) {
+                recorded.value = true
+                let rejected = Core.Issue(.loginRejected, .error, Messages.probeLoginRejected)
+                StatusBuilder.rebuildQuietly(
+                    context: context,
+                    observations: StatusObservations(
+                        probe: [label: ProbeObservation(error: rejected)]))
+            }
+            return Date()
+        }
+    }
+
+    @Test func runRefusesATokenWhoseRejectionIsRecordedOnceItHoldsThePickLock() throws {
+        for printOnly in [false, true] {
+            let (t, base) = try setUp([token()])
+            _ = try TokenAccounts.install(
+                context: t.context, label: "pool-a", token: Canaries.oauth())
+            // The checks before the lock find no rejection; the record lands before the decision.
+            let recorded = Box<Bool>()
+            var service = base
+            service.clock = Self.clockRecordingARejection(
+                of: "pool-a", context: t.context, recorded: recorded)
+            #expect(
+                throws: ToolError(Messages.probeLoginRejected, code: .loginRejected), "\(printOnly)"
+            ) {
+                try service.prepareRun(label: "pool-a", arguments: [], printOnly: printOnly)
+            }
+            #expect(recorded.value == true, "\(printOnly)")
+            #expect(launchFiles(t).isEmpty, "\(printOnly)")
+            #expect(TokenAccounts.openLeaseCount(context: t.context, leaseMinutes: 30) == 0)
+        }
+    }
+
+    @Test func runStartsALoginAccountWhoseProbesRejectionIsRecordedOnceItHoldsThePickLock() throws {
+        let (t, base) = try setUp([login()])
+        // A login account is judged by its sign-in check, which passes.
+        let recorded = Box<Bool>()
+        var service = base
+        service.clock = Self.clockRecordingARejection(
+            of: "main", context: t.context, recorded: recorded)
+        _ = try service.prepareRun(label: "main", arguments: [])
+        #expect(recorded.value == true)
+        let main = try #require(try ConfigStore(context: t.context).loadRequired().account("main"))
+        #expect(StatusBuilder.probeFoundSignInRejected(context: t.context, account: main))
+        #expect(launchFiles(t).count == 1)
+    }
+
+    @Test func aPickSkipsATokenWhoseRejectionIsRecordedOnceItHoldsThePickLock() throws {
+        let (t, base) = try setUp([token()])
+        try t.fakeProbe("ok.jsonl")
+        _ = try TokenAccounts.install(context: t.context, label: "pool-a", token: Canaries.oauth())
+        // The checks before the probes find no rejection; the record lands once the lock is held.
+        let recorded = Box<Bool>()
+        var service = base
+        service.clock = Self.clockRecordingARejection(
+            of: "pool-a", context: t.context, recorded: recorded)
+        let result = try service.pick(PickRequest(caller: .launcher))
+        #expect(recorded.value == true)
+        #expect(result.label == nil)
+        #expect(result.candidates.first { $0.label == "pool-a" }?.reason == "login rejected")
+        #expect(launchFiles(t).isEmpty)
+    }
+
     @Test func runRefusesAnUnknownLabelAndAPersonSettingsFlag() throws {
         let (t, service) = try setUp([login()])
         #expect(throws: ToolError.self) { try service.prepareRun(label: "nope", arguments: []) }

@@ -328,9 +328,12 @@ enum LeakShapes {
         {
             shapes.append("org field")
         }
+        // As in scripts/check-readme.sh, one leading hyphen before a made-up account is allowed.
         let addresses = matches(#"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+"#, in: text)
         if addresses.contains(where: { address in
-            !labels.contains { address == $0 + "@example.com" }
+            !labels.contains { label in
+                ["", "-"].contains { address == $0 + label + "@example.com" }
+            }
         }) {
             shapes.append("email")
         }
@@ -455,6 +458,8 @@ extension LeakTests {
             ("a path in a URL with another scheme", "smb://host" + "/share/some" + "one/x", "path"),
             ("a home path written with $HOME", "$HO" + "ME/Desktop/shot.png", "path"),
             ("an address with an upper-case domain", "someone@" + "EXAMPLE.ORG", "email"),
+            ("a made-up address with two leading hyphens", "--lab@" + "example.com", "email"),
+            ("a hyphen before no made-up account", "-x@" + "example.com", "email"),
             ("a token-like run with no prefix", run, "token-like run"),
             ("a token prefix with no run", "sk-" + "ant-" + "x", "token"),
             (
@@ -468,8 +473,8 @@ extension LeakTests {
             #expect(shapes == [shape], "\(what): \(shapes)")
         }
         for clean in [
-            "lab@example.com", "~/.agent-balancer/accounts/lab/.claude", "\"sessions\": []",
-            String(repeating: "ab", count: 20), "https://example.com",
+            "lab@example.com", "-lab@example.com", "~/.agent-balancer/accounts/lab/.claude",
+            "\"sessions\": []", String(repeating: "ab", count: 20), "https://example.com",
         ] {
             #expect(LeakShapes.found(in: clean).isEmpty, "\(clean)")
         }

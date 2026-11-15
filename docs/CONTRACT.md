@@ -21,7 +21,7 @@ seconds and wait up to 30 seconds for the pick lock.
 |---|---|---|
 | 0 | A recipe | Apply it |
 | 2 | Nothing fits | Do not launch. Leave the item waiting and show `reason` |
-| 1 | No pick: a refused flag, refused settings, a busy lock or another error | Report the error text. Nothing was written |
+| 1 | No pick: a refused flag, refused settings, a busy lock or another error | Report the error text. No lease or launch file was written |
 
 ### Fields stable in schema version 1
 
@@ -115,7 +115,16 @@ could not confirm as the expected account because the sign-in reported no email.
 null before the first such check and stays as it was after a check that got no answer; `login` and
 `token` rows have no such key. The row shows one `error` code, and a higher one can hide
 `wrong_account`, so read `signInCheck` for the folder's sign-in. `planTier` is null after any check
-that did not place the expected account's sign-in.
+that did not place the expected account's sign-in. A check counts only for the account and email
+it was made for: after an account's email changes, by `config set <label> email`, by an edit of
+`config.json`, or by `remove` and `add` of the same label, its row has a null `planTier`, and a
+null `signInCheck` where the last check saw `signed_in`, until a check of the new email. A `login`
+account's `planTier` follows the same rule. These commands record a check: `status` (not
+`status --cached`), `pick`, `run` (once it has written its launch file), `verify`, `refresh` (for
+each `login` and `folder` account whose reading did not fail, every time it runs), `init`,
+`login` for a folder account, `link <label>` (once its links are made) and
+`config set <label> email`. `refresh` also probes again an account whose sign-in a probe found
+rejected, as the status records it, even when its reading is fresh.
 
 ## What changed
 
@@ -132,9 +141,10 @@ types it does not know. An event can come more than once, with a new `seq` and t
 `type`, `code`, `window`, `resetsAt` and `notBefore`: read each event as the state it reports for
 its label, never as a count, so a repeat changes nothing. After a failed save an event can also
 be missing, and a label's last event and `status --json` can disagree; either can be behind until
-the label's next event, and `pick` decides from live checks either way. `history` gives the
-readings over time, for a chart or a burn-rate estimate. The fields of each answer that the schema
-documents are stable in version 1.
+the label's next event, and `pick` decides from live checks and, for a token account, from the
+probe rejection `state/current.json` records. `history` gives the readings over time, for a chart
+or a burn-rate estimate. The fields of each answer that the schema documents are stable in
+version 1.
 
 ## Information is not authority
 
@@ -148,9 +158,10 @@ window or pick again.
 
 ## Commands for people
 
-`run`, `uninstall`, `remove`, `login` and `link` are for a person in their own terminal. They
-refuse to start a session or change anything inside a Claude Code chat shell. A caller applies the
-recipe from `pick` and does not use them. In a chat shell `run`
+`run`, `uninstall`, `remove`, `login` and `link` are for a person in their own terminal. Inside a
+Claude Code chat shell each of them refuses before it starts a session or changes anything,
+and so does a form that changes nothing, such as `link --dry-run`. A caller
+applies the recipe from `pick` and does not use them. In a chat shell `run`
 writes nothing, starts nothing and prints the line to type in your own terminal,
 `agent-balancer run <label> -- <arguments>`, then exits 1. `uninstall` exits 0 once the removal
 is done or when there is nothing to remove, and 1 when it refuses, stops, is not confirmed, could
@@ -160,11 +171,13 @@ link, a file or another user's folder where a label's launch folder belongs.
 
 Applying a link change (`link`, `link --repair`, `link --accept-source-change`, `unlink`) also needs a
 person at an interactive terminal who types the label (or `accept`) back. Input from a pipe is
-refused before the prompt and nothing changes; `link --dry-run` needs no terminal.
+refused before the prompt and nothing changes; `link --dry-run` needs no interactive terminal, but
+it still refuses inside a chat shell.
 
 `remove <label>` of the main account also needs a person at an interactive terminal: with
 standard input from a pipe it exits 1, changes nothing, and says to run
-`agent-balancer remove <label>` in Terminal. Removing a pool account needs no terminal. Every
+`agent-balancer remove <label>` in Terminal. Removing a pool account needs no interactive terminal,
+but `remove` still refuses inside a chat shell. Every
 command that saves `config.json` (`init`, `add`, `login`, `refresh`, `config set`,
 `config set-main`, `config clear-main`, `remove`) saves it under the pick lock, so two at once
 never save over each other, and a role change or a rename is seen by a `remove` that runs at the

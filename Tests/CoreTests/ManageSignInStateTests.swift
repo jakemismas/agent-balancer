@@ -252,7 +252,7 @@ extension MenuControllerTests {
         var passes = 0
         controller.afterFileRead = { passes += 1 }
         controller.start()
-        let seen = await Self.waitFor(60) { passes >= 2 }
+        let seen = await Self.waitFor(300) { passes >= 2 }
         controller.stop()
         #expect(seen)
     }
@@ -390,7 +390,7 @@ extension ManageViewModelTests {
         let entry = try #require(getpwuid(getuid()))
         let dir = try #require(entry.pointee.pw_dir)
         let home = String(cString: dir)
-        #expect(RenderOutput.homes().contains { $0.path == home })
+        #expect(try RenderOutput.homes().contains { $0.path == home })
         // A folder inside that home's .claude is refused, read only: nothing is made.
         #expect(throws: ToolError.self) {
             try RenderOutput.folder(

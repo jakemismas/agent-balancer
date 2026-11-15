@@ -115,11 +115,17 @@ struct LoginCommand: ParsableCommand {
         case .ok: break
         }
         let runner = ClaudeRunner(context: context)
+        let wasSignedIn: Bool
         switch AuthStatusReader.read(runner: runner, configDir: folder) {
         case .failed(let issue):
             throw ToolError(issue.text)
         case .status(let status):
-            guard !status.loggedIn else {
+            wasSignedIn = status.loggedIn
+            // A sign-in the last probe found rejected is signed in again, not refused.
+            guard
+                !status.loggedIn
+                    || StatusBuilder.probeFoundSignInRejected(context: context, account: account)
+            else {
                 // The sign-in it just read is recorded as any check is, so the status shows it.
                 var observations = StatusObservations()
                 observations.auth[label] = AuthObservation(
@@ -146,7 +152,7 @@ struct LoginCommand: ParsableCommand {
             )
         }
         fflush(stdout)
-        _ = try runner.launchAttached(arguments: arguments, configDir: folder)
+        let exitStatus = try runner.launchAttached(arguments: arguments, configDir: folder)
 
         var observations = StatusObservations()
         let now = Date()
@@ -158,7 +164,11 @@ struct LoginCommand: ParsableCommand {
         case .status(let status):
             check = FolderKind.evaluate(status, account: account, folder: folder, now: now)
         }
-        observations.auth[label] = AuthObservation(check)
+        var observation = AuthObservation(check)
+        // New only when the folder was signed out before, or `claude auth login` finished: an
+        // interactive run that ends cleanly may never have signed in again.
+        observation.newSignIn = !wasSignedIn || (browser && exitStatus == 0)
+        observations.auth[label] = observation
         Shared.rebuildStatus(context, observations: observations)
         guard check.signedIn else {
             print(
@@ -176,6 +186,11 @@ struct LoginCommand: ParsableCommand {
             print(Messages.signExpectedBackIn)
             throw ExitCode.failure
         }
+        // Signed in before, and this run cannot show a new sign-in: the rejection stands.
+        if wasSignedIn && !observation.newSignIn {
+            print(Shared.line(Issue(.loginRejected, .error, Messages.signInNotRenewed(label))))
+            throw ExitCode.failure
+        }
         if account.email == nil {
             print("Signed in. No expected email is set for '\(safe)'.")
         } else {
@@ -183,7 +198,8 @@ struct LoginCommand: ParsableCommand {
         }
         // The first sign-in fixes the plan the account is expected to keep.
         if account.expectedPlanTier == nil, let tier = check.planTier {
-            try Shared.recordExpectedTiers(context: context, tiers: [label: tier])
+            try Shared.recordExpectedTiers(
+                context: context, tiers: [label: (tier, check.emailDigest)])
         }
         for issue in check.issues { print(Shared.line(issue)) }
     }

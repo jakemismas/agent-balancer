@@ -60,10 +60,19 @@ extension ManageViewModelTests {
             let text = try #require(account(label)?.error?.text)
             // A folder whose last check could not place its sign-in says that, not the row's text.
             let placed = account(label)?.signInCheck != SignInSeen.notConfirmed.rawValue
-            let reason = placed ? MenuBuilder.plain(text) : ManageBuilder.notPlacedText
+            // An ended folder placed and doubted since also names a rejected sign-in as a
+            // possible cause, with the command that signs it in again.
+            let doubted = label == "fol-doubt"
+            let own =
+                MenuBuilder.plain(text) + (doubted ? " " + ManageBuilder.possiblyRejectedText : "")
+            let reason = placed ? own : ManageBuilder.notPlacedText
             #expect(problem.text == reason, "\(label)")
             #expect(account(label)?.error?.code == code)
-            #expect(problem.steps.steps.isEmpty && problem.steps.command == nil, "\(label)")
+            if doubted {
+                #expect(problem.steps.command == "agent-balancer login fol-doubt --browser")
+            } else {
+                #expect(problem.steps.steps.isEmpty && problem.steps.command == nil, "\(label)")
+            }
         }
         // Control and bidi characters never reach the panel as they are.
         let hook = try #require(try panel("tok-hook").problem?.text)
@@ -198,11 +207,28 @@ extension ManageViewModelTests {
 
         var errorText: String? { code.map { "The reason for \($0)." } }
 
+        /// An ended folder, whose problem also says that it has ended.
+        var endedFolder: Bool { kind == Kind.folder && state == "ended" }
+
+        /// An ended folder the last check placed and something doubted since.
+        var doubtedUnderEnd: Bool {
+            endedFolder && check == SignInSeen.signedIn.rawValue && reads == .notConfirmed
+        }
+
+        /// `text`, then the row's own end for an ended folder.
+        func withEnd(_ text: String) -> String {
+            endedFolder ? text + " " + MenuBuilder.plain(errorText ?? "Account ended.") : text
+        }
+
         /// The problem text the panel should show: the row's own, or the not-placed text for a
-        /// folder whose last check could not place the sign-in.
+        /// folder whose last check could not place the sign-in, which an ended folder follows with
+        /// its end. An ended folder placed and doubted since adds a possibly rejected sign-in.
         var problemText: String {
             if kind == Kind.folder, check == SignInSeen.notConfirmed.rawValue {
-                return ManageBuilder.notPlacedText
+                return withEnd(ManageBuilder.notPlacedText)
+            }
+            if doubtedUnderEnd {
+                return MenuBuilder.plain(errorText ?? "") + " " + ManageBuilder.possiblyRejectedText
             }
             return MenuBuilder.plain(errorText ?? "")
         }
@@ -283,6 +309,10 @@ extension ManageViewModelTests {
             ProblemCell(
                 reads: .otherAccount, problem: wrong, kind: Kind.login, state: "error",
                 code: "wrong_account"),
+            // An ended folder that reads as another account's says both.
+            ProblemCell(
+                reads: .otherAccount, problem: wrong, state: "ended", code: "account_ended",
+                check: "other_account", ended: true),
             // Ended: the row's own error, when it has one.
             ProblemCell(
                 reads: .ended, problem: "Account ended", kind: Kind.token, state: "ended",
@@ -314,6 +344,14 @@ extension ManageViewModelTests {
             ProblemCell(
                 reads: .notConfirmed, problem: "Settings changed", state: "error",
                 code: "settings_changed", tier: true, earlier: true),
+            // An earlier writer's `check_failed` may cover a sign-in its check saw: no Sign in.
+            // Not linked, it reads as a folder still to link, with Sign in off.
+            ProblemCell(
+                reads: .notConfirmed, problem: "Check failed", state: "error",
+                code: "check_failed", tier: true, earlier: true),
+            ProblemCell(
+                reads: .notSignedIn, problem: nil, state: "error", code: "check_failed",
+                linked: false, tier: true, earlier: true),
             ProblemCell(reads: .notConfirmed, problem: "Check failed", check: "not_confirmed"),
             ProblemCell(reads: .notConfirmed, problem: nil, kind: Kind.token, state: "error"),
         ]
@@ -352,13 +390,64 @@ extension ManageViewModelTests {
             guard let problem = panel.problem else { continue }
             if cell.reads == .otherAccount {
                 let own = cell.code == "wrong_account" ? cell.errorText : nil
-                #expect(problem.text == MenuBuilder.plain(own ?? Messages.wrongAccount), "\(name)")
-                #expect(problem.steps.steps == [Messages.signExpectedBackIn], "\(name)")
+                #expect(
+                    problem.text == cell.withEnd(MenuBuilder.plain(own ?? Messages.wrongAccount)),
+                    "\(name)")
+                // A login account has no folder to relabel.
+                let step =
+                    cell.kind == Kind.login
+                    ? Messages.signExpectedBackInLogin : Messages.signExpectedBackIn
+                #expect(problem.steps.steps == [step], "\(name)")
             } else {
                 #expect(problem.text == cell.problemText, "\(name)")
-                #expect(problem.steps.steps.isEmpty && problem.steps.command == nil, "\(name)")
+                if cell.doubtedUnderEnd {
+                    #expect(
+                        problem.steps.command == "agent-balancer login \(label) --browser",
+                        "\(name)")
+                } else {
+                    #expect(problem.steps.steps.isEmpty && problem.steps.command == nil, "\(name)")
+                }
             }
         }
         #expect(fake.calls().isEmpty)
+    }
+
+    /// The `wrong_account` problem a row's other code hides has no text of its own in the
+    /// status, so the panel shows a fixed one: the text the tool writes for that code.
+    @Test @MainActor func theHiddenWrongAccountTextIsTheTextTheToolWrites() throws {
+        let folders = FolderAccountsTests()
+        let (t, context) = try folders.setUp()
+        defer { withExtendedLifetime(t) {} }
+        _ = try folders.link(context)
+        let account = try #require(
+            try ConfigStore(context: context).loadRequired().account("spare"))
+        let folder = try FolderPaths.configDir(context: context, label: "spare")
+        let other = AuthObservation(
+            FolderKind.evaluate(
+                AuthStatus(
+                    loggedIn: true, email: "other@example.com", planTier: "max_20x",
+                    configDirectory: folder.path), account: account, folder: folder, now: Date()))
+        let shown = try Self.row(
+            try StatusBuilder.rebuild(
+                context: context, observations: StatusObservations(auth: ["spare": other])),
+            "spare")
+        let written = try #require(shown.error?.text)
+        #expect(shown.error?.code == "wrong_account")
+        // The same check under a hook change, which hides its code.
+        let hidden = try Self.row(
+            try StatusBuilder.rebuild(
+                context: context,
+                observations: StatusObservations(
+                    settings: SettingsObservation(issue: "changed", carriesKey: false))), "spare")
+        #expect(hidden.error?.code == "settings_changed")
+        let tool = try Self.loggingTool(in: t.home)
+        let vm = ManageViewModel(
+            context: context, runner: CLIRunner(context: context, candidates: [tool.exe]),
+            clock: { Self.now })
+        vm.windowOpened()
+        vm.selection = "spare"
+        let problem = try #require(vm.panel?.problem)
+        #expect(problem.title == "Wrong account")
+        #expect(problem.text == MenuBuilder.plain(written))
     }
 }

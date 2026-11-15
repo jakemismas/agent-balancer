@@ -2,15 +2,20 @@ import Core
 import Foundation
 
 enum Shared {
-    /// Records the plan of an account that has none yet. A plan already recorded is never changed.
-    static func recordExpectedTiers(context: ToolContext, tiers: [String: String]) throws {
+    /// Records the plan of an account that has none yet, from a check that placed its expected
+    /// sign-in. A plan already recorded is never changed, and a check made for another email or
+    /// account (`AccountCheck.emailDigest`) records nothing.
+    static func recordExpectedTiers(
+        context: ToolContext, tiers: [String: (tier: String, emailDigest: String?)]
+    ) throws {
         guard !tiers.isEmpty else { return }
         try TokenAccounts.updateConfig(context: context) { config in
-            for (label, tier) in tiers {
+            for (label, found) in tiers {
                 if let index = config.accounts.firstIndex(where: { $0.label == label }),
-                    config.accounts[index].expectedPlanTier == nil
+                    config.accounts[index].expectedPlanTier == nil,
+                    found.emailDigest == config.accounts[index].emailDigest
                 {
-                    config.accounts[index].expectedPlanTier = tier
+                    config.accounts[index].expectedPlanTier = found.tier
                 }
             }
         }

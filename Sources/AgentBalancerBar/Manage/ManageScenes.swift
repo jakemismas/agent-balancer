@@ -9,59 +9,54 @@ enum ManageScenes {
     static let now = RenderScenes.now
     static let barTime = ISO8601DateFormatter().date(from: "2026-11-09T21:12:00Z") ?? Date()
 
-    static func accounts(folder: Bool) -> String {
-        let kind = folder ? "folder" : "token"
-        func account(
-            _ label: String, role: String = "pool", email: String, kind: String, extra: String = ""
-        ) -> String {
-            """
-            { "label": "\(label)", "email": "\(email)", "role": "\(role)", "kind": "\(kind)",
-              "state": "ok", \(extra) "weekly": null }
-            """
-        }
-        let spareB: String
-        if folder {
-            spareB = """
-                { "label": "spare-b", "email": "spare-b@example.com", "role": "pool", "kind": "folder",
-                  "fullLogin": true, "configDir": "~/.agent-balancer/accounts/spare-b/.claude",
-                  "linked": true, "endingSoon": true, "state": "error", "planTier": "Ultra",
-                  "stateSince": "2026-11-09T20:40:00Z",
-                  "error": { "code": "login_rejected", "text": "Logged out." }, "weekly": null }
-                """
-        } else {
-            spareB = """
-                { "label": "spare-b", "email": "spare-b@example.com", "role": "pool", "kind": "token",
-                  "endingSoon": true, "state": "error", "stateSince": "2026-11-09T20:40:00Z",
-                  "error": { "code": "token_missing", "text": "No token." },
-                  "loginExpiresAt": "2027-03-02T20:00:00Z", "loginExpiresSource": "estimate",
-                  "weekly": null }
-                """
-        }
-        // A folder reads as signed in only with the plan tier a signed-in check writes.
-        let signedInFolder = "\"linked\": true, \"planTier\": \"max_20x\","
-        let personal = account(
-            "personal", email: "personal@example.com", kind: kind,
-            extra: folder
-                ? signedInFolder
-                : "\"loginExpiresAt\": \"2027-10-27T10:00:00Z\", \"loginExpiresSource\": \"estimate\","
-        )
-        let lab = account(
-            "lab", email: "lab@example.com", kind: kind,
-            extra: folder
-                ? signedInFolder
-                : "\"loginExpiresAt\": \"2027-11-10T10:00:00Z\", \"loginExpiresSource\": \"estimate\","
-        )
-        let spareA = account(
-            "spare-a", email: "spare-a@example.com", kind: kind,
-            extra: "\"endsAt\": \"2026-11-16\", " + (folder ? signedInFolder : ""))
-        return """
-            { "schemaVersion": 1, "generatedAt": "2026-11-09T21:11:00Z", "banner": null,
-              "accounts": [
-                { "label": "main", "email": "main@example.com", "role": "main", "kind": "login",
-                  "fullLogin": true, "state": "ok", "weekly": null },
-                \(personal), \(lab), \(spareA), \(spareB) ] }
-            """
-    }
+    /// The token frame, as the writer writes it.
+    static let tokenAccounts = """
+        { "schemaVersion": 1, "generatedAt": "2026-11-09T21:13:00Z", "banner": null,
+          "accounts": [
+            { "label": "main", "email": "main@example.com", "role": "main", "kind": "login",
+              "fullLogin": true, "state": "ok", "weekly": null },
+            { "label": "personal", "email": "personal@example.com", "role": "pool", "kind": "token",
+              "fullLogin": false, "state": "ok", "weekly": null,
+              "loginExpiresAt": "2027-10-27T10:00:00Z", "loginExpiresSource": "estimate" },
+            { "label": "lab", "email": "lab@example.com", "role": "pool", "kind": "token",
+              "fullLogin": false, "state": "ok", "weekly": null,
+              "loginExpiresAt": "2027-11-09T21:13:00Z", "loginExpiresSource": "estimate" },
+            { "label": "spare-a", "email": "spare-a@example.com", "role": "pool", "kind": "token",
+              "fullLogin": false, "endsAt": "2026-11-16", "state": "ok", "weekly": null,
+              "loginExpiresAt": "2027-11-02T10:00:00Z", "loginExpiresSource": "estimate" },
+            { "label": "spare-b", "email": "spare-b@example.com", "role": "pool", "kind": "token",
+              "fullLogin": false, "endingSoon": true, "state": "error",
+              "stateSince": "2026-11-09T20:40:00Z",
+              "error": { "code": "login_rejected", "text": "Login rejected, or the plan has ended. Sign in again in Terminal; if it will not sign in, the plan has ended." },
+              "loginExpiresAt": "2027-03-02T20:00:00Z", "loginExpiresSource": "estimate",
+              "weekly": null } ] }
+        """
+
+    /// The folder frame, as the writer writes it: a signed out folder shows no tier.
+    static let folderAccounts = """
+        { "schemaVersion": 1, "generatedAt": "2026-11-09T21:11:00Z", "banner": null,
+          "accounts": [
+            { "label": "main", "email": "main@example.com", "role": "main", "kind": "login",
+              "fullLogin": true, "state": "ok", "weekly": null },
+            { "label": "personal", "email": "personal@example.com", "role": "pool", "kind": "folder",
+              "fullLogin": true, "configDir": "~/.agent-balancer/accounts/personal/.claude",
+              "linked": true, "planTier": "max_20x", "signInCheck": "signed_in", "state": "ok",
+              "weekly": null },
+            { "label": "lab", "email": "lab@example.com", "role": "pool", "kind": "folder",
+              "fullLogin": true, "configDir": "~/.agent-balancer/accounts/lab/.claude",
+              "linked": true, "planTier": "max_20x", "signInCheck": "signed_in", "state": "ok",
+              "weekly": null },
+            { "label": "spare-a", "email": "spare-a@example.com", "role": "pool", "kind": "folder",
+              "fullLogin": true, "configDir": "~/.agent-balancer/accounts/spare-a/.claude",
+              "linked": true, "endsAt": "2026-11-16", "planTier": "max_20x",
+              "signInCheck": "signed_in", "state": "ok", "weekly": null },
+            { "label": "spare-b", "email": "spare-b@example.com", "role": "pool", "kind": "folder",
+              "fullLogin": true, "configDir": "~/.agent-balancer/accounts/spare-b/.claude",
+              "linked": true, "endingSoon": true, "signInCheck": "signed_out", "state": "error",
+              "stateSince": "2026-11-09T20:40:00Z",
+              "error": { "code": "login_rejected", "text": "Login rejected, or the plan has ended. Sign in again in Terminal; if it will not sign in, the plan has ended." },
+              "weekly": null } ] }
+        """
 
     static func document(_ json: String) -> StatusSnapshot? {
         if case .loaded(let s) = StatusSnapshot.parse(Data(json.utf8)) { return s }
@@ -75,7 +70,7 @@ enum ManageScenes {
     @MainActor static func window(
         folder: Bool, settings: ManageSettings = ManageSettings(), json: String? = nil
     ) -> AnyView {
-        let status = document(json ?? self.accounts(folder: folder))
+        let status = document(json ?? (folder ? folderAccounts : tokenAccounts))
         let accounts = status?.accounts ?? []
         let rows = accounts.map { ManageBuilder.listRow($0, now: now) }
         let selected = accounts.last
@@ -109,8 +104,10 @@ enum ManageScenes {
           "accounts": [
             { "label": "spare-b", "email": "spare-b@example.com", "role": "pool", "kind": "folder",
               "fullLogin": true, "configDir": "~/.agent-balancer/accounts/spare-b/.claude",
-              "linked": false, "state": "error",
-              "error": { "code": "not_linked", "text": "Settings not shared." }, "weekly": null } ] }
+              "linked": false, "signInCheck": null, "state": "error",
+              "stateSince": "2026-11-09T21:10:00Z",
+              "error": { "code": "not_linked", "text": "Settings not shared. Run `agent-balancer link spare-b` in Terminal." },
+              "weekly": null } ] }
         """
 
     @MainActor static func addSheet(folder: Bool, settings: ManageSettings = ManageSettings())
@@ -149,25 +146,31 @@ enum ManageScenes {
     /// the login account. The selected folder's last check found another account, which the
     /// hook change hides from its code.
     static let statesJson = """
-        { "schemaVersion": 1, "generatedAt": "2026-11-09T21:10:00Z", "banner": null,
+        { "schemaVersion": 1, "generatedAt": "2026-11-09T21:10:00Z",
+          "banner": { "code": "settings_changed", "text": "Settings changed. Run `agent-balancer link --accept-source-change --all` in Terminal." },
           "accounts": [
             { "label": "main", "email": "main@example.com", "role": "main", "kind": "login",
               "fullLogin": true, "state": "error", "weekly": null,
-              "error": { "code": "settings_changed", "text": "Settings changed. Run `agent-balancer link --accept-source-change --all` in Terminal." } },
+              "stateSince": "2026-11-09T20:40:00Z",
+              "error": { "code": "settings_changed", "text": "Settings changed. Run `agent-balancer link --accept-source-change` in Terminal." } },
             { "label": "personal", "email": "personal@example.com", "role": "pool", "kind": "folder",
               "fullLogin": true, "linked": true, "planTier": "max_20x", "signInCheck": "signed_in",
               "state": "error", "weekly": null,
+              "stateSince": "2026-11-09T20:40:00Z",
               "error": { "code": "settings_changed", "text": "Settings changed. Run `agent-balancer link --accept-source-change --all` in Terminal." } },
             { "label": "lab", "email": "lab@example.com", "role": "pool", "kind": "folder",
               "fullLogin": true, "linked": true, "signInCheck": "other_account",
               "state": "error", "weekly": null,
+              "stateSince": "2026-11-09T20:40:00Z",
               "error": { "code": "settings_changed", "text": "Settings changed. Run `agent-balancer link --accept-source-change --all` in Terminal." } },
             { "label": "spare-a", "email": "spare-a@example.com", "role": "pool", "kind": "token",
               "state": "ended", "endsAt": "2026-11-01", "weekly": null,
+              "stateSince": "2026-11-09T20:40:00Z",
               "error": { "code": "account_ended", "text": "Account ended." } },
             { "label": "spare-b", "email": "spare-b@example.com", "role": "pool", "kind": "folder",
               "fullLogin": true, "linked": true, "signInCheck": "not_confirmed",
               "state": "error", "weekly": null,
+              "stateSince": "2026-11-09T20:40:00Z",
               "error": { "code": "check_failed", "text": "Check failed: the sign-in is not in this account's own folder." } } ] }
         """
 
@@ -193,6 +196,25 @@ enum ManageScenes {
             })
     }
 
+    /// Rows for the folder whose email starts with a hyphen, the selected one: login will not
+    /// sign it in.
+    static let emailNoteJson = """
+        { "schemaVersion": 1, "generatedAt": "2026-11-09T21:11:00Z", "banner": null,
+          "accounts": [
+            { "label": "main", "email": "main@example.com", "role": "main", "kind": "login",
+              "fullLogin": true, "state": "ok", "weekly": null },
+            { "label": "personal", "email": "personal@example.com", "role": "pool", "kind": "folder",
+              "fullLogin": true, "configDir": "~/.agent-balancer/accounts/personal/.claude",
+              "linked": true, "planTier": "max_20x", "signInCheck": "signed_in", "state": "ok",
+              "weekly": null },
+            { "label": "lab", "email": "-lab@example.com", "role": "pool", "kind": "folder",
+              "fullLogin": true, "configDir": "~/.agent-balancer/accounts/lab/.claude",
+              "linked": true, "signInCheck": "signed_out", "state": "error",
+              "stateSince": "2026-11-09T20:40:00Z",
+              "error": { "code": "login_rejected", "text": "Login rejected. Run `agent-balancer login lab` in Terminal." },
+              "weekly": null } ] }
+        """
+
     @MainActor static func all() -> [(String, AnyView)] {
         [
             ("manage-token", window(folder: false)),
@@ -205,6 +227,7 @@ enum ManageScenes {
             ("manage-add-folder", addSheet(folder: true)),
             ("manage-remove", removeSheet()),
             ("manage-states", statesWindow()),
+            ("manage-email-note", window(folder: true, json: emailNoteJson)),
         ]
     }
 }

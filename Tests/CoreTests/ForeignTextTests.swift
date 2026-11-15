@@ -246,6 +246,7 @@ import Testing
         ["expiringNotified", #""2026-12-07\n""#],
         ["authError", #"{"code":"\u001b[2J","text":"x"}"#],
         ["probeError", #"{"code":"nope","text":"x"}"#], ["label", "\u{1B}]0;x\u{07}"],
+        ["signInCheck", #""a_later_result""#], ["emailDigest", #""not a digest""#],
     ])
     func aCurrentFileWithAValueTheToolNeverWritesStartsOver(_ change: [String]) throws {
         let t = try rebuildHome()

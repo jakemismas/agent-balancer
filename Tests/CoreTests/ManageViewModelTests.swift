@@ -402,6 +402,9 @@ import Testing
         let steps = vm.addSteps(try #require(vm.add))
         #expect(steps.last?.command == "agent-balancer login spare")
         #expect(steps.last?.action == nil)
+        // The status does not list the new account yet, so its sign-in is still to do.
+        #expect(!vm.accounts.contains { $0.label == "spare" })
+        #expect(steps.map(\.id) == [1, 2] && steps.last?.state == .todo)
     }
 
     @Test @MainActor func addingAFolderAccountListsTheRemainingSteps() async throws {

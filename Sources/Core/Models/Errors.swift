@@ -101,6 +101,14 @@ public enum Messages {
     public static let oneAccountPerFolder =
         "Never sign a different account into a folder that already has chats. Add a new folder for the new account instead."
 
+    /// `login` over a folder sign-in its last probe found rejected, when the run cannot show that
+    /// it signed the folder in again.
+    public static func signInNotRenewed(_ label: String) -> String {
+        let safe = Display.safe(label, limit: 32)
+        return
+            "This run did not show a new sign-in, so the probe's rejection stands. Run `agent-balancer login \(safe) --browser`, or `agent-balancer refresh --label \(safe) --force` once it is signed in."
+    }
+
     /// `login --browser` for a folder whose expected email fails `ConfigValidator.isPlainEmail`.
     public static func emailNotPlain(_ label: String) -> String {
         "The expected email of '\(Display.safe(label, limit: 32))' cannot be passed to claude safely. Fix it with `agent-balancer config set`."
@@ -113,6 +121,9 @@ public enum Messages {
         "Check failed: the sign-in reported no email, so it could not be confirmed as this account."
     public static let signExpectedBackIn =
         "Sign the expected account back in to this folder. Do not relabel the folder."
+    /// The same step for a login account, the default folder's own sign-in.
+    public static let signExpectedBackInLogin =
+        "Run claude and sign the expected account back in."
 
     /// `uninstall` with a data folder that is a link, which it never follows.
     public static let uninstallDataFolderIsALink = uninstallFolderIsALink(
@@ -177,4 +188,10 @@ public enum Messages {
     public static func tokenMissing(_ label: String) -> String {
         "No token saved. Run `agent-balancer login \(Display.safe(label, limit: 32))` in Terminal."
     }
+
+    /// The `login_rejected` text of a probe that got an auth error: what a token account's status
+    /// row shows unless the account is marked ending soon, and what `run` refuses such an account
+    /// with.
+    public static let probeLoginRejected =
+        "Login rejected. Sign in to this account again, then run `agent-balancer refresh`."
 }

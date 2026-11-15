@@ -289,6 +289,9 @@ struct ManagePanelView: View {
                 Text(note).font(.ui(11)).foregroundStyle(palette.text2)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            if let command = panel.signInNoteCommand {
+                CommandField(command: command, fill: true, copy: actions.copy)
+            }
         }
     }
 
@@ -344,9 +347,9 @@ struct ManagePanelView: View {
                 action: { actions.changeEnds(.on(isoDate)) }
             ) {
                 TipMark(text: panel.endsOnTip, palette: palette)
-                EndDateField(iso: shownDate, enabled: panel.canChangeEnds) {
-                    actions.changeEnds(.on($0))
-                }
+                EndDateField(
+                    iso: shownDate, enabled: panel.canChangeEnds, changed: actions.stepEndDate,
+                    ended: actions.finishEndDate)
             }
         }
         .accessibilityElement(children: .contain)
@@ -390,11 +393,14 @@ struct ManagePanelView: View {
 
 /// The date of the "On" end choice. The real window uses the system date picker, which takes
 /// today or later; the render tool draws the same text in a field because it cannot draw the
-/// picker.
+/// picker. The picker reports each date it passes through to `changed`, and `ended` once the
+/// edit is over: it lost focus or went away.
 struct EndDateField: View {
     @Binding var iso: String
     let enabled: Bool
     let changed: (String) -> Void
+    var ended: () -> Void = {}
+    @FocusState private var editing: Bool
     @Environment(\.flatMaterials) private var flat
     @Environment(\.colorScheme) private var scheme
 
@@ -416,6 +422,9 @@ struct EndDateField: View {
             )
             .labelsHidden().datePickerStyle(.compact).disabled(!enabled)
             .accessibilityLabel("End date")
+            .focused($editing)
+            .onChange(of: editing) { _, now in if !now { ended() } }
+            .onDisappear { ended() }
         }
     }
 

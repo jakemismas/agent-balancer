@@ -3,18 +3,19 @@ import Foundation
 /// The folder the menu app's developer flags (`--render`, `--iconset`) write into. It must lie
 /// under the current folder's `build` folder, be written with no `..` segment, have no link on its
 /// way and no folder named `.claude` or `.agent-balancer` below the current folder, and sit
-/// outside the home's `.claude` and `.agent-balancer` folders. Each home must be a folder, and its
-/// `.claude` and `.agent-balancer` missing or a folder, a link to one included. `hold` checks
-/// that, then opens the folder once, one name at a time from the current folder, and every file
-/// is written relative to that handle by the Paths writer, after the protected folders are read
-/// again.
+/// outside the home's `.claude` and `.agent-balancer` folders. Each home must be a folder named
+/// with no `..` segment, and its `.claude` and `.agent-balancer` missing or a folder, a link to one
+/// included; a HOME that is set but empty or is not an absolute path stops the render too. `hold`
+/// checks that, then opens the folder once, one name at a time from the current folder, and every
+/// file is written relative to that handle by the Paths writer, after the protected folders are
+/// read again.
 public enum RenderOutput {
     static let refusal = ToolError(
         "The output folder must be a folder under build/ in the current folder, written without .. and with no link or .claude or .agent-balancer folder on its path, outside ~/.claude and ~/.agent-balancer. Nothing was written."
     )
 
     static let toolFolderRefusal = ToolError(
-        "The home must be a folder, and its .claude and .agent-balancer folders or missing: a link to nothing or to a file stops every render. Nothing was written."
+        "The home must be a folder, and its .claude and .agent-balancer must each be missing or a folder: a link to nothing or to a file stops every render. A HOME that is set but empty, is not an absolute path, or has a .. segment stops every render too. Nothing was written."
     )
 
     static let toolFolders = [".claude", ".agent-balancer"]
@@ -22,13 +23,24 @@ public enum RenderOutput {
     /// Folder names no output path may hold below the current folder, compared without case.
     static let toolFolderNames = Set(toolFolders)
 
-    static func homes() -> [URL] {
-        var homes = [ToolContext.current().home]
+    /// HOME, or the default home when HOME is not set, and the home the user database names.
+    /// HOME is checked as written, before it becomes a path: a path made from a relative HOME is
+    /// joined to the current folder with each `..` dropped by name, while the system resolves a
+    /// `..` after a link from where the link points, and a path made from an empty HOME names the
+    /// current folder (`ToolContext.current()` reads an empty HOME as the default home).
+    static func homes(environment: [String: String]) throws -> [URL] {
+        let home = environment["HOME"] ?? NSHomeDirectory()
+        guard home.hasPrefix("/"), !home.split(separator: "/").contains("..") else {
+            throw toolFolderRefusal
+        }
+        var homes = [URL(fileURLWithPath: home)]
         if let entry = getpwuid(getuid()), let dir = entry.pointee.pw_dir {
             homes.append(URL(fileURLWithPath: String(cString: dir)))
         }
         return homes
     }
+
+    static func homes() throws -> [URL] { try homes(environment: Env.snapshot()) }
 
     /// The checked folder for the flag's argument, from the process's current folder and homes.
     public static func folder(_ argument: String) throws -> URL {
@@ -69,13 +81,18 @@ public enum RenderOutput {
     }
 
     /// The homes' `.claude` and `.agent-balancer` folders as their paths name them now, or nil
-    /// when one cannot be compared: a home that is not a folder, or a tool folder that is a link
-    /// to nothing, names something other than a folder, or cannot be read. A tool folder missing
-    /// from a home that is a folder can be made only by its own name, which no output path holds.
+    /// when one cannot be compared: a home named with a `..` segment or that is not a folder, or
+    /// a tool folder that is a link to nothing, names something other than a folder, or cannot be
+    /// read. A tool folder missing from a home that is a folder can be made only by its own name,
+    /// which no output path holds.
     static func protectedIdentities(_ homes: [URL]) -> [FileIdentity]? {
         var found: [FileIdentity] = []
         for home in homes {
-            guard folderIdentity(normalized(home.path)) != nil else { return nil }
+            // The system resolves a `..` after a link from where the link points, while a join of
+            // the path drops the name before it, so the two can name different tool folders.
+            guard !home.path.split(separator: "/").contains(".."),
+                folderIdentity(normalized(home.path)) != nil
+            else { return nil }
             for name in toolFolders {
                 let spot = normalized(home.path + "/" + name)
                 var st = stat()

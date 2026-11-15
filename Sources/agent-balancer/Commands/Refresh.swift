@@ -5,7 +5,10 @@ import Foundation
 struct RefreshCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "refresh",
-        abstract: "Read each account's usage with a one-turn probe and store the reading.")
+        abstract: "Read each account's usage with a one-turn probe and store the reading.",
+        discussion:
+            "A reading younger than picker.maxReadingAgeMinutes is kept without a plain probe, except for an account whose sign-in a probe found rejected, as the status records it, which is probed again; while fable.probe is on, its default, the daily Fable probe still runs on a fresh reading. It also checks the sign-in of each login and folder account whose probe did not fail, with `claude auth status`, which spends no usage."
+    )
 
     @Option(name: .long, help: "Refresh only this account.")
     var label: String?
@@ -30,8 +33,17 @@ struct RefreshCommand: ParsableCommand {
             return
         }
 
+        // A sign-in check that sees the old sign-in leaves a probe's rejection standing, so such
+        // an account is probed again even while its reading is fresh. The rest keep the
+        // freshness rule.
+        var rejected: [String: Date] = [:]
+        for account in accounts {
+            if let at = StatusBuilder.probeRejection(context: context, account: account) {
+                rejected[account.label] = at
+            }
+        }
         let results = Refresher(context: context, config: config)
-            .refresh(accounts: accounts, force: force)
+            .refresh(accounts: accounts, force: force, reprobe: rejected)
         var failed = false
         for result in results {
             let name = Display.safe(result.label)
@@ -55,26 +67,28 @@ struct RefreshCommand: ParsableCommand {
         Upkeep.runLocked(context: context, config: config)
         var observations = StatusObservations()
         observations.add(results)
-        // The first refresh after a sign-in fixes the plan the account is expected to keep.
-        var tiers: [String: String] = [:]
+        // What the probes found is recorded however the refresh ends, after any plan is saved.
+        defer { Shared.rebuildStatus(context, observations: observations) }
+        // Every refresh checks the sign-in, which costs no usage, so a sign-in that is back clears
+        // a check's `login_rejected` without waiting for the reading to age.
+        var tiers: [String: (tier: String, emailDigest: String?)] = [:]
         let runner = ClaudeRunner(context: context)
-        for account in accounts
-        where account.expectedPlanTier == nil
-            && (account.kind == Kind.login || account.kind == Kind.folder)
-        {
+        for account in accounts where account.kind == Kind.login || account.kind == Kind.folder {
             guard let outcome = results.first(where: { $0.label == account.label }),
                 !outcome.failed, let handler = AccountKinds.handler(for: account.kind)
             else { continue }
             let check = handler.check(account: account, runner: runner, now: Date())
-            observations.auth[account.label] = AuthObservation(check)
-            if check.signedIn, !check.issues.contains(where: { $0.code == .wrongAccount }),
+            let observation = AuthObservation(check)
+            observations.auth[account.label] = observation
+            // Only the first check that placed the expected sign-in in its own folder fixes the
+            // plan; a later one that sees another plan reports `plan_changed`, as `status` does.
+            if account.expectedPlanTier == nil, observation.seen == .signedIn,
                 let tier = check.planTier
             {
-                tiers[account.label] = tier
+                tiers[account.label] = (tier, check.emailDigest)
             }
         }
         try Shared.recordExpectedTiers(context: context, tiers: tiers)
-        Shared.rebuildStatus(context, observations: observations)
         if failed { throw ExitCode.failure }
     }
 

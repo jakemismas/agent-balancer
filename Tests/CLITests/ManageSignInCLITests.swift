@@ -143,13 +143,14 @@ extension FolderAccountsCLITests {
         try linked(cli)
         try signedIn(cli, loggedIn: false)
         #expect(try cli.run(["status", "--json"]).status == 0)
-        // Signed in again in Terminal, and a probe that works since.
+        // Signed in again in Terminal, which no command has checked since.
         try signedIn(cli, loggedIn: true)
-        #expect(try cli.run(["refresh", "--label", "spare", "--force"]).status == 0)
         var row = try statusRow(cli)
-        #expect(row["error"] is NSNull && row["planTier"] is NSNull)
+        #expect(
+            (row["error"] as? [String: Any])?["code"] as? String == "login_rejected"
+                && row["planTier"] is NSNull)
         let vm = window(cli)
-        #expect(vm.panel?.signInText == "Not signed in")
+        #expect(vm.panel?.signInText.hasPrefix("Signed out") == true)
         #expect(vm.panel?.signIn?.enabled == true)
 
         await vm.signIn("spare")

@@ -139,6 +139,9 @@ extension PickService {
             if skip.code == .tokenMissing {
                 throw ToolError(Messages.tokenMissing(label), code: .tokenMissing)
             }
+            if skip.code == .loginRejected, account.kind == Kind.token {
+                throw ToolError(Messages.probeLoginRejected, code: .loginRejected)
+            }
             throw ToolError(skip.reason, code: skip.code)
         }
 
@@ -150,6 +153,10 @@ extension PickService {
         defer { lock.release() }
 
         let now = clock()
+        // Another command may have recorded the token's rejection while this run waited.
+        if account.kind == Kind.token, tokenRejectionStands(account) {
+            throw ToolError(Messages.probeLoginRejected, code: .loginRejected)
+        }
         let leaseStore = LeaseStore(context: context)
         var leases = try leaseStore.current(now: now, leaseMinutes: config.picker.leaseMinutes)
         let id = freshLeaseId(leases)

@@ -6,7 +6,9 @@
 # the README check.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# The real path: the app refuses an output path that names a link, and a checkout opened through
+# one would give it one.
+ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
 cd "$ROOT"
 
 # The README check needs the CLI as well as the app, so a fresh clone builds both.

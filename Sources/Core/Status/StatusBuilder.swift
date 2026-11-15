@@ -92,7 +92,8 @@ public enum StatusBuilder {
             let entry = Transitions.observed(
                 known, account: account, auth: observations.auth[account.label],
                 probe: observations.probe[account.label],
-                duplicate: observations.duplicates[account.label] ?? .notRun, now: now)
+                duplicate: observations.duplicates[account.label] ?? .notRun,
+                storedReadAt: reading?.readAt, now: now)
             let token = tokens[account.label]
             let duplicate = emails[account.email?.lowercased() ?? ""].flatMap { group in
                 group.count > 1 ? group.first { $0 != account.label } : nil
@@ -145,6 +146,10 @@ public enum StatusBuilder {
                 next.limitedSince = nil
             }
             next.lastReadingAt = reading?.readAt ?? known?.lastReadingAt
+            // A reading not usable here may predate the rejection, so the rejection is dated now.
+            if reading == nil, observations.probe[account.label]?.error?.code == .loginRejected {
+                next.lastReadingAt = Date(timeIntervalSince1970: floor(now.timeIntervalSince1970))
+            }
             if drafted == nil, let expires = evaluation.loginExpiresAt,
                 evaluation.warnings.contains(where: { $0.code == .loginExpiring })
             {
@@ -457,6 +462,29 @@ public enum StatusBuilder {
             try StatusDocument.encoder().encode(built.document) + Data([0x0A]),
             folders: Layout.stateFolders, name: statusName)
         return built.document
+    }
+
+    /// True while a probe's rejection of the sign-in of `account` stands, as `state/current.json`
+    /// records it. A file that cannot be read, or that holds another account under the label,
+    /// gives false.
+    public static func probeFoundSignInRejected(context: ToolContext, account: Account) -> Bool {
+        probeRejection(context: context, account: account) != nil
+    }
+
+    /// While a probe's rejection of the sign-in of `account` stands, as `state/current.json`
+    /// records it, the time that file counts as the latest stored reading it saw (`lastReadingAt`,
+    /// `Date.distantPast` for none). Nil otherwise, and for a file that cannot be read or that
+    /// holds another account under the label.
+    public static func probeRejection(context: ToolContext, account: Account) -> Date? {
+        guard
+            let data = try? NoFollowReader(root: context.dataRoot).read(
+                folders: Layout.stateFolders, name: currentName),
+            let file = try? EventLog.decoder().decode(CurrentFile.self, from: data),
+            file.schemaVersion == CurrentFile.currentSchema, file.isSound,
+            let entry = file.accounts[account.label], entry.accountKey == account.accountKey,
+            entry.probeError?.code == StateCode.loginRejected.rawValue
+        else { return nil }
+        return entry.lastReadingAt ?? .distantPast
     }
 
     /// Rebuilds after a command's own work is done. A failure is logged and never changes the

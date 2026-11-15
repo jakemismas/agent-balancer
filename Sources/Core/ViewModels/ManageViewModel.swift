@@ -113,7 +113,7 @@ public enum ManageTips {
     }
 
     public static func sharedSettings(label: String) -> String {
-        "Run this in Terminal to share settings with this folder: agent-balancer link \(label)"
+        "Approve linking in Terminal: agent-balancer link \(label)"
     }
 
     /// Samples of every tip, with the longest dynamic parts, for the length test.
@@ -182,6 +182,8 @@ public struct ManagePanel: Equatable, Sendable {
     public var remove: RemoveControl?
     /// Why a folder that is not signed in offers no Sign in, shown in the button's place.
     public var signInNote: String? = nil
+    /// The Terminal command that fixes what `signInNote` says, shown with a Copy button.
+    public var signInNoteCommand: String? = nil
 }
 
 public struct ManageBar: Equatable, Sendable {
@@ -196,6 +198,29 @@ public struct ManageBar: Equatable, Sendable {
         self.ok = ok
         self.text = text
         self.at = at
+    }
+}
+
+/// The line under the Add form: a run's error in red, or why Add is off.
+public struct AddNote: Equatable, Sendable {
+    public var text: String
+    public var isError: Bool
+
+    public init(text: String, isError: Bool) {
+        self.text = text
+        self.isError = isError
+    }
+}
+
+/// An end date the panel's date picker is part way through editing. Nothing runs until the edit
+/// ends.
+public struct EndDateEdit: Equatable, Sendable {
+    public var label: String
+    public var date: String
+
+    public init(label: String, date: String) {
+        self.label = label
+        self.date = date
     }
 }
 
@@ -224,10 +249,12 @@ public struct AddStep: Equatable, Sendable, Identifiable {
     public var action: ManageCommand?
     public var actionTitle: String?
     public var actionEnabled: Bool
+    /// Why the step's button is off when the panel says why too.
+    public var note: String?
 
     public init(
         id: Int, title: String, command: String?, state: State, action: ManageCommand?,
-        actionTitle: String?, actionEnabled: Bool
+        actionTitle: String?, actionEnabled: Bool, note: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -236,6 +263,7 @@ public struct AddStep: Equatable, Sendable, Identifiable {
         self.action = action
         self.actionTitle = actionTitle
         self.actionEnabled = actionEnabled
+        self.note = note
     }
 }
 
@@ -271,6 +299,8 @@ public final class ManageViewModel {
     public var removeSheet: RemoveDraft?
     /// The date the "On" end choice holds before the person picks one.
     public var endsDate: String
+    /// The end date the panel's picker is part way through editing, if any.
+    public private(set) var endDateEdit: EndDateEdit?
 
     @ObservationIgnored public let settings: ManageSettings
     @ObservationIgnored private let reader: StatusReader
@@ -282,11 +312,14 @@ public final class ManageViewModel {
     @ObservationIgnored let loginTimeoutSeconds: Double
     /// Counts the Add sheets opened, so a command that finishes after its sheet closed knows it.
     @ObservationIgnored private var addSheetCount = 0
+    /// Shows the app in the Dock and the app switcher (true) or takes it out (false). The app
+    /// sets its activation policy here; a test records the calls.
+    @ObservationIgnored private let dock: @MainActor (Bool) -> Void
 
     public init(
         context: ToolContext, runner: CLIRunner? = nil, settings: ManageSettings = ManageSettings(),
         clock: @escaping @Sendable () -> Date = { Date() }, timeoutSeconds: Double = 60,
-        loginTimeoutSeconds: Double = 600
+        loginTimeoutSeconds: Double = 600, dock: @escaping @MainActor (Bool) -> Void = { _ in }
     ) {
         self.context = context
         self.reader = StatusReader(context: context)
@@ -295,6 +328,7 @@ public final class ManageViewModel {
         self.clock = clock
         self.timeoutSeconds = timeoutSeconds
         self.loginTimeoutSeconds = loginTimeoutSeconds
+        self.dock = dock
         self.endsDate = ManageFormat.isoDay(clock())
         reload()
     }
@@ -333,6 +367,8 @@ public final class ManageViewModel {
             selection = nil
         }
         if selection == nil { selection = accounts.first?.label }
+        // An earlier run's error no longer says why nothing can run once management is off.
+        if !isOn, add?.error != nil { add?.error = nil }
     }
 
     /// Opens the window on one account, as the menu's fix action does.
@@ -346,10 +382,14 @@ public final class ManageViewModel {
 
     public func windowOpened() {
         isOpen = true
+        dock(true)
         reload()
     }
 
-    public func windowClosed() { isOpen = false }
+    public func windowClosed() {
+        isOpen = false
+        dock(false)
+    }
 
     /// Called when the window becomes key and on each pass of the menu's file loop. While the
     /// window is open it reads the status again, so a sheet follows a `link` run in Terminal.
@@ -366,9 +406,14 @@ public final class ManageViewModel {
 
     public var panel: ManagePanel? {
         guard let account = selected else { return nil }
-        return ManageBuilder.panel(
+        var panel = ManageBuilder.panel(
             account, settings: settings, now: clock(), checked: generatedAt, canAct: canAct,
             folderPath: ManageBuilder.folderPath(account.label, context: context))
+        // While its date is edited, the panel shows the date the edit would save.
+        if let edit = endDateEdit, edit.label == account.label, panel.canChangeEnds {
+            panel.ends = .on(Display.safe(edit.date, limit: 32))
+        }
+        return panel
     }
 
     // MARK: Running commands
@@ -419,11 +464,16 @@ public final class ManageViewModel {
                 let line = ManageViewModel.firstLine(output.stdout)
                 text = line.isEmpty ? "Done." : line
             }
-            // A browser sign-in prints its advice first, so the bar picks the line that answers.
-            if case .loginBrowser = command, !output.timedOut,
-                let answer = Self.signInAnswer(output, ok: ok)
-            {
-                text = answer
+            // A sign-in prints its advice or its opening line first, so the bar picks the line
+            // that answers.
+            if !output.timedOut {
+                var answer: String?
+                switch command {
+                case .loginBrowser: answer = Self.signInAnswer(output, ok: ok)
+                case .login: answer = Self.tokenSignInAnswer(output, ok: ok)
+                default: break
+                }
+                if let answer { text = answer }
             }
         }
         bar = ManageBar(command: shown, ok: ok, text: text, at: clock())
@@ -436,6 +486,7 @@ public final class ManageViewModel {
         let line =
             text.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }
             .first { !$0.isEmpty } ?? ""
+        // A second guard: ChildProcess.run already cuts tokens, so no run's text reaches it whole.
         return Display.safe(Scrubber.tokenPass(line), limit: 240)
     }
 
@@ -448,6 +499,28 @@ public final class ManageViewModel {
             let lines = text.split(whereSeparator: \.isNewline)
                 .map { $0.trimmingCharacters(in: .whitespaces) }
             if let line = lines.first(where: { $0.hasPrefix(prefix) }) {
+                return firstLine(line)
+            }
+        }
+        return nil
+    }
+
+    /// For a token account's `login`: how it ended, the saved token and its first check, or when
+    /// it stopped before saving the first line, standard error then standard output, that starts
+    /// with "Error". Nil when there is none, so the bar keeps the first line.
+    static func tokenSignInAnswer(_ output: RunOutput, ok: Bool) -> String? {
+        func lines(_ text: String) -> [String] {
+            text.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }
+        }
+        let printed = lines(output.stdout)
+        let ending = [
+            printed.first { $0.hasPrefix("Saved the token") },
+            printed.last { $0.hasPrefix("First check") },
+        ].compactMap { $0 }
+        if !ending.isEmpty { return firstLine(ending.joined(separator: " ")) }
+        guard !ok else { return nil }
+        for text in [output.stderr, output.stdout] {
+            if let line = lines(text).first(where: { $0.hasPrefix("Error") }) {
                 return firstLine(line)
             }
         }
@@ -489,13 +562,29 @@ public final class ManageViewModel {
     }
 
     /// Runs the choice's one command after a fresh read still lists the account as one whose end
-    /// the window may change.
+    /// the window may change. A choice made while that account's date is being edited replaces
+    /// the edit.
     public func changeEnds(label: String, to choice: EndChoice) async {
+        if endDateEdit?.label == label { endDateEdit = nil }
         reload()
         guard let account = accounts.first(where: { $0.label == label }),
             ManageBuilder.panelKind(account) != .login
         else { return }
         await run(Self.endCommand(label: label, to: choice))
+    }
+
+    /// One step the panel's date picker reports while its date is edited, such as each digit
+    /// typed into the year. It runs nothing, so a date part way through an edit, today included,
+    /// is never saved.
+    public func stepEndDate(label: String, to date: String) {
+        endDateEdit = EndDateEdit(label: label, date: date)
+    }
+
+    /// The end of the edit: one `config set <label> ends <date>` for the date the edit finished
+    /// on. While another command runs, the edit waits for the next end.
+    public func finishEndDate() async {
+        guard let edit = endDateEdit, !busy else { return }
+        await changeEnds(label: edit.label, to: .on(edit.date))
     }
 
     // MARK: Add sheet
@@ -532,6 +621,18 @@ public final class ManageViewModel {
         return nil
     }
 
+    /// What the sheet shows under the form. Once management is off its reason shows whatever
+    /// the form holds, in place of an earlier run's error; otherwise that error, then the form's
+    /// problem once a label is typed.
+    public func addNote(_ draft: AddDraft) -> AddNote? {
+        if let offReason { return AddNote(text: offReason, isError: false) }
+        if let error = draft.error { return AddNote(text: error, isError: true) }
+        guard draft.stage == .form, !draft.label.isEmpty, let problem = addProblem(draft) else {
+            return nil
+        }
+        return AddNote(text: problem, isError: false)
+    }
+
     public func addCommand(_ draft: AddDraft) -> ManageCommand { ManageBuilder.addCommand(draft) }
 
     /// "Sign in and add" for a token account, "Create folder" for a folder account. A token
@@ -546,7 +647,8 @@ public final class ManageViewModel {
         // A sheet closed while the command ran stays closed, and no sign-in starts for it.
         guard add != nil, addSheetCount == sheet else { return }
         guard ok else {
-            draft.error = bar?.text
+            // A tool that went missing during the run leaves the sheet the off reason instead.
+            draft.error = isOn ? bar?.text : nil
             add = draft
             return
         }
@@ -607,7 +709,8 @@ public final class ManageViewModel {
     /// Runs `remove <label>` only when a fresh read still lists the account as a pool account of
     /// a kind the window removes, with the kind and email the sheet was opened for. Otherwise
     /// nothing runs, the sheet closes, and the panel shows the Terminal command for a main
-    /// account.
+    /// account. A remove the tool refuses, such as one another remove got to first, closes the
+    /// sheet too, and the bar shows the tool's text.
     public func confirmRemove() async {
         guard let draft = removeSheet, canConfirmRemove(draft) else { return }
         let check = removeCheck(draft.label, as: draft)
@@ -619,10 +722,10 @@ public final class ManageViewModel {
                 at: clock())
             return
         }
-        if await run(.removeAccount(label: draft.label)) {
-            removeSheet = nil
-            if selection == draft.label { selection = accounts.first?.label }
-        }
+        let removed = await run(.removeAccount(label: draft.label))
+        // The sheet asked about the account as it was read; after a refusal that may have changed.
+        removeSheet = nil
+        if removed, selection == draft.label { selection = accounts.first?.label }
     }
 
     /// What a remove depends on, read again from the status file right before it runs.
@@ -725,11 +828,15 @@ public enum ManageBuilder {
     /// code must say nothing against the sign-in either; any other row fails closed. The row's
     /// one code can hide the last check's result, so a folder row's `signInCheck` comes first:
     /// another account reads as that whatever the code, and a sign-in the check saw but could not
-    /// place offers no Sign in, which `login --browser` would refuse. A row with no
-    /// `signInCheck` key comes from a writer that kept the tier through a doubt, so it reads by
-    /// the tier alone only while it shows no code that can hide one.
-    /// A token or login row has no such evidence, and any code could hide one that says otherwise
-    /// (`account_ended` hides them all), so it counts only when it has no code at all.
+    /// place offers no Sign in, which `login --browser` would refuse. A linked row with no
+    /// `signInCheck` key comes from a writer that kept the tier through a doubt and wrote no
+    /// check result, so it reads by the tier alone only while it shows no code that can hide a
+    /// doubt or is one (`check_failed`, which such a check may have written over a sign-in it saw);
+    /// one that is not linked shows its link step with Sign in off.
+    /// A token row has no such evidence, and any code could hide one that says otherwise
+    /// (`account_ended` hides them all), so it counts only when it has no code at all. A login row
+    /// counts the same way, and also by its tier, as a folder row does, under `plan_changed` or
+    /// `duplicate_login`, which say nothing against the sign-in.
     static func signInState(_ a: AccountSnapshot) -> SignIn {
         let folder = panelKind(a) == .folder
         if folder, let seen = a.signInCheck {
@@ -743,12 +850,17 @@ public enum ManageBuilder {
         if a.error?.code == StateCode.wrongAccount.rawValue { return .otherAccount }
         guard folder else {
             if a.state == "ended" { return .ended }
+            let tierCounts = panelKind(a) == .login && a.planTier != nil
             switch (a.state, a.error?.code) {
             case ("ok", nil), ("limited", nil): return .signedIn
+            case ("error", "plan_changed"?), ("error", "duplicate_login"?):
+                return tierCounts ? .signedIn : .notConfirmed
             default: return .notConfirmed
             }
         }
-        if !a.hasSignInCheck, let code = a.error?.code, hidesADoubt.contains(code) {
+        if !a.hasSignInCheck, a.linked == true, let code = a.error?.code,
+            hidesADoubt.contains(code) || code == StateCode.checkFailed.rawValue
+        {
             return .notConfirmed
         }
         let linked = a.linked == true
@@ -798,31 +910,49 @@ public enum ManageBuilder {
     /// The text for a folder whose last sign-in check saw a sign-in that reported no email.
     static let noEmailText = MenuBuilder.plain(Messages.signInEmailMissing)
 
+    /// What an ended folder placed by its last check, and doubted since, adds to its end: the
+    /// end hides which doubt it was, and a rejected sign-in is one that signing in again fixes.
+    static let possiblyRejectedText =
+        "Its sign-in has not been confirmed since the last check and may have been rejected. If so, sign in again."
+
     /// The panel's problem block. Another account reads as `wrong_account` with its steps even
     /// when the row shows another code over it. A folder whose last check could not place its
     /// sign-in says so, whatever code the row shows, and names the missing email when the row's
     /// own error is that one. Otherwise "Sign-in not confirmed" and
     /// "Account ended" give the row's own error as the reason, and an ended folder, which keeps
-    /// its sign-in line, gives its own `account_ended` error.
+    /// its sign-in line, gives its own `account_ended` error. An ended folder that reads as
+    /// another account's or as not placed says it has ended after that problem, and one placed
+    /// and doubted since names a rejected sign-in as a possible cause, with the command that signs
+    /// it in again.
     static func problem(_ a: AccountSnapshot, state: SignIn) -> ErrorModel? {
         let folder = panelKind(a) == .folder
+        let ended = folder && a.state == "ended" ? endedNote(a) : nil
+        func withEnd(_ text: String) -> String { ended.map { text + " " + $0 } ?? text }
         switch state {
         case .otherAccount:
             let code = StateCode.wrongAccount.rawValue
             let text = a.error?.code == code ? a.error?.text : nil
             return ErrorModel(
                 title: MenuBuilder.title(for: code),
-                text: MenuBuilder.plain(text ?? Messages.wrongAccount),
-                steps: windowSteps(code: code, label: a.label))
+                text: withEnd(MenuBuilder.plain(text ?? Messages.wrongAccount)),
+                steps: windowSteps(code: code, label: a.label, kind: a.kind))
         case .notConfirmed, .ended:
             if folder, a.signInCheck == SignInSeen.notConfirmed.rawValue {
                 let noEmail = a.error?.text == Messages.signInEmailMissing
                 return ErrorModel(
                     title: MenuBuilder.title(for: StateCode.checkFailed.rawValue),
-                    text: noEmail ? noEmailText : notPlacedText,
+                    text: withEnd(noEmail ? noEmailText : notPlacedText),
                     steps: StepsModel(steps: [], command: nil))
             }
             guard let e = a.error else { return nil }
+            if let ended, a.signInCheck == SignInSeen.signedIn.rawValue {
+                let command = terminalCommand("login", a.label).map { $0 + " --browser" }
+                return ErrorModel(
+                    title: MenuBuilder.title(for: e.code), text: ended + " " + possiblyRejectedText,
+                    steps: StepsModel(
+                        steps: ["Open Terminal.", "Run the command below and sign in."],
+                        command: command))
+            }
             return ErrorModel(
                 title: MenuBuilder.title(for: e.code), text: MenuBuilder.plain(e.text),
                 steps: StepsModel(steps: [], command: nil))
@@ -834,9 +964,15 @@ public enum ManageBuilder {
         }
     }
 
-    /// The menu's steps for a code, less the ones that name an action only the menu has.
-    static func windowSteps(code: String, label: String) -> StepsModel {
-        var steps = MenuBuilder.steps(code: code, label: label)
+    /// An ended row's own `account_ended` text, display-safe.
+    static func endedNote(_ a: AccountSnapshot) -> String {
+        let own = a.error?.code == StateCode.accountEnded.rawValue ? a.error?.text : nil
+        return MenuBuilder.plain(own ?? "Account ended.")
+    }
+
+    /// The menu's steps for a code and kind, less the ones that name an action only the menu has.
+    static func windowSteps(code: String, label: String, kind: String?) -> StepsModel {
+        var steps = MenuBuilder.steps(code: code, label: label, kind: kind)
         steps.steps.removeAll { MenuBuilder.menuOnlySteps.contains($0) }
         return steps
     }
@@ -854,6 +990,20 @@ public enum ManageBuilder {
         return Int((at.timeIntervalSince(now) / 86400).rounded(.down))
     }
 
+    /// A signed-in token's time left by its estimated end: "N days left", "1 day left" or "Less
+    /// than a day left". Nil once the estimate has passed, since a token whose probe still works
+    /// is signed in whatever the estimate says.
+    static func tokenLeftText(_ a: AccountSnapshot, now: Date) -> String? {
+        guard let at = a.loginExpiresAt, at > now, let days = daysLeft(a, now: now) else {
+            return nil
+        }
+        switch days {
+        case 0: return "Less than a day left"
+        case 1: return "1 day left"
+        default: return "\(days) days left"
+        }
+    }
+
     static func endText(_ a: AccountSnapshot) -> String? {
         if let ends = a.endsAt, !ends.isEmpty { return "ends " + MenuFormat.day(ends) }
         if a.endingSoon { return "ending soon" }
@@ -865,9 +1015,13 @@ public enum ManageBuilder {
         panelKind(a) == .folder && a.state == "ended"
     }
 
-    /// "ended Nov 1" for a date that has passed, "ended" for a plan that dropped.
-    static func endedText(_ a: AccountSnapshot) -> String {
-        if let ends = a.endsAt, !ends.isEmpty { return "ended " + MenuFormat.day(ends) }
+    /// "ended Nov 1" once its end date has passed, by the rule the status writer ends it by, and
+    /// "ended" for a plan that dropped, even with a date still ahead. Every kind's ended row ends
+    /// with these words.
+    static func endedText(_ a: AccountSnapshot, now: Date) -> String {
+        if let ends = a.endsAt, let end = Picker.endsAtEnd(ends), now >= end {
+            return "ended " + MenuFormat.day(ends)
+        }
         return "ended"
     }
 
@@ -890,6 +1044,12 @@ public enum ManageBuilder {
         ConfigValidator.isValidLabel(label) ? "agent-balancer \(verb) \(label)" : nil
     }
 
+    /// The command that changes an account's email, which the window never runs: the person
+    /// types the address in place of `<address>`.
+    static func emailCommand(_ label: String) -> String? {
+        terminalCommand("config set", label).map { $0 + " email <address>" }
+    }
+
     /// The folder path a folder panel shows and copies. It is made from the plain label and the
     /// data folder, never taken from the status file, so the clipboard gets only a path the tool
     /// would make.
@@ -907,14 +1067,15 @@ public enum ManageBuilder {
     public static func listRow(_ a: AccountSnapshot, now: Date) -> ManageListRow {
         let kind = panelKind(a)
         let state = signInState(a)
-        let end = folderEnded(a) ? endedText(a) : endText(a)
+        let end = folderEnded(a) ? endedText(a, now: now) : endText(a)
         func withEnd(_ base: String) -> String { end.map { base + " \u{00B7} " + $0 } ?? base }
         let subtitle: String
         switch state {
         case .signedOut: subtitle = withEnd("Signed out")
         case .notSignedIn: subtitle = withEnd("Not signed in")
         case .otherAccount: subtitle = withEnd("Signed in as another account")
-        case .ended: subtitle = withEnd("Account ended")
+        // A token or login row that ended has nothing else to say, so its end is its line.
+        case .ended: subtitle = capitalized(endedText(a, now: now))
         case .notConfirmed: subtitle = withEnd("Sign-in not confirmed")
         case .signedIn:
             switch kind {
@@ -923,10 +1084,8 @@ public enum ManageBuilder {
             case .token:
                 if let end {
                     subtitle = capitalized(end)
-                } else if let days = daysLeft(a, now: now) {
-                    subtitle = days <= 0 ? "Expired" : "\(days) days left"
                 } else {
-                    subtitle = "Signed in"
+                    subtitle = tokenLeftText(a, now: now) ?? "Signed in"
                 }
             }
         }
@@ -1025,6 +1184,7 @@ public enum ManageBuilder {
             }
             if offersSignIn(state), let blocked = signInBlocked(a) {
                 panel.signInNote = blocked
+                panel.signInNoteCommand = emailCommand(label)
             } else if offersSignIn(state) {
                 panel.signInTip = ManageTips.folderSignIn(email: email)
                 let command = ManageCommand.loginBrowser(label: label)
@@ -1087,6 +1247,8 @@ public enum ManageBuilder {
         let done = linked && state == .signedIn
         let loginCommand = ManageCommand.loginBrowser(label: label)
         let byButton = settings.folderSignIn == .run
+        // The panel's reason, where the panel gives one in the button's place.
+        let blocked = offersSignIn(state) ? account.flatMap(signInBlocked) : nil
         return [
             AddStep(
                 id: 1, title: "Create the folder", command: addDisplay, state: .done, action: nil,
@@ -1102,7 +1264,7 @@ public enum ManageBuilder {
                 state: done ? .done : .todo, action: byButton ? loginCommand : nil,
                 actionTitle: byButton ? "Sign in..." : nil,
                 actionEnabled: canAct && linked && offersSignIn(state)
-                    && account.flatMap(signInBlocked) == nil),
+                    && account.flatMap(signInBlocked) == nil, note: blocked),
             AddStep(
                 id: 4, title: "Trust each project once, in Terminal",
                 command: terminalCommand("run", label), state: .todo, action: nil,

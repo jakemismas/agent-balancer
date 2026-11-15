@@ -105,8 +105,11 @@ Upgrade the tool with `brew upgrade agent-balancer` and replace the app from the
 
 1. It skips an account that is ended, limited or in error. A login or folder account is in error,
    for example, when a sign-in check finds it signed out, or signed in as another email or on
-   another plan than the tool expects. A token account is in error, for example, when its token
-   file is missing or unusable; its email is a note that is never checked.
+   another plan than the tool expects. It runs that check itself at pick time, so a probe's earlier
+   rejection alone does not skip a login or folder account whose check passes. A token account is in
+   error, for example, when its token file is missing or unusable, or while the status shows its
+   token rejected and has seen its latest reading (only a probe that works stores a newer one);
+   its email is a note that is never checked.
 2. It keeps accounts with enough room in the weekly window (and the five-hour window when there is
    one). For a Fable launch, it also needs room in the Fable allowance.
 3. The main account has a reserve: it is eligible only while its weekly use stays under a line
@@ -120,7 +123,10 @@ Upgrade the tool with `brew upgrade agent-balancer` and replace the app from the
 ## How it works
 
 - `agent-balancer refresh` reads each account's usage with a one-turn probe, skipping a reading
-  that is still fresh, and stores the usage that `claude` reports as a percent from 0 to 100.
+  that is still fresh, but for the daily Fable probe, and stores the usage that `claude` reports
+  as a percent from 0 to 100. It also checks the sign-in of each login and folder account whose
+  probe did not fail, and probes again an account whose sign-in a probe found rejected, as the
+  status records it, even when its reading is fresh.
   `agent-balancer pick` refreshes readings that are too old, then returns a recipe: the
   environment and arguments to launch `claude` with.
 - `agent-balancer run <label>` starts Claude Code on one account for you. Programs and skills

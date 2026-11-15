@@ -23,7 +23,7 @@ public struct PickRequest: Sendable {
 
 /// `pick`: refreshes stale readings, then under the pick lock decides, writes the launch file and
 /// the lease, and logs one line (docs/ARCHITECTURE.md sections 4A and 7.2). A thrown `ToolError`
-/// is exit 1 and nothing was written for it.
+/// is exit 1, and no lease, launch file or `picks.log` line was written for it.
 public struct PickService: Sendable {
     public let context: ToolContext
     public var clock: @Sendable () -> Date = { Date() }
@@ -98,7 +98,12 @@ public struct PickService: Sendable {
                 default: break
                 }
             }
+            if case .failed(let issue) = result.fable, issue.code == .loginRejected {
+                skips[result.label] = "login rejected"
+            }
         }
+        // What the probes found is recorded however the pick ends, after the pick lock is let go.
+        defer { StatusBuilder.rebuildQuietly(context: context, observations: observations) }
 
         // The decision, the launch file and the lease happen under the pick lock.
         let writer = NoFollowWriter(root: context.dataRoot)
@@ -114,6 +119,13 @@ public struct PickService: Sendable {
         Upkeep.run(
             context: context, snapshot: SessionsReader.read(context: context), openLeases: leases,
             leaseMinutes: config.picker.leaseMinutes, keepDays: config.launch.keepDays, now: now)
+        // Another command may have recorded a token's rejection since the checks before the probes.
+        for account in config.accounts
+        where account.kind == Kind.token && skips[account.label] == nil
+            && tokenRejectionStands(account)
+        {
+            skips[account.label] = "login rejected"
+        }
 
         var decision: PickDecision
         var leaseId: String?
@@ -195,7 +207,6 @@ public struct PickService: Sendable {
                 leaseId: leaseId, reason: result.reason, writer: writer)
         }
         lock.release()
-        StatusBuilder.rebuildQuietly(context: context, observations: observations)
         return result
     }
 
@@ -268,6 +279,9 @@ public struct PickService: Sendable {
             guard TokenStore.isUsable(context: context, label: account.label) else {
                 return Skip("no token saved", code: .tokenMissing)
             }
+            if tokenRejectionStands(account) {
+                return Skip("login rejected", code: .loginRejected)
+            }
         }
         if account.kind == Kind.login, let handler = AccountKinds.handler(for: Kind.login) {
             let check = handler.check(account: account, runner: runner, now: clock())
@@ -277,6 +291,15 @@ public struct PickService: Sendable {
             }
         }
         return nil
+    }
+
+    /// True while a probe's rejection of the token of `account` stands, as `state/current.json`
+    /// records it. A fresh reading starts no probe, so the rejection holds until a newer reading.
+    func tokenRejectionStands(_ account: Account) -> Bool {
+        guard let rejectedAt = StatusBuilder.probeRejection(context: context, account: account)
+        else { return false }
+        return (try? ReadingStore(context: context).load(label: account.label))
+            .map({ $0.readAt <= rejectedAt }) ?? true
     }
 
     /// True when a stored window's reset time has passed, so its use is no longer current.

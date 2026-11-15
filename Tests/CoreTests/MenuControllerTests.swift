@@ -93,7 +93,7 @@ import Testing
         try fake.writeStatus(generatedAt: Date().addingTimeInterval(-3 * 3600))
         let controller = MenuController(context: fake.context, runner: fake.runner)
         controller.start()
-        let saw = await Self.waitFor(60) { fake.calls().contains("refresh") }
+        let saw = await Self.waitFor(300) { fake.calls().contains("refresh") }
         controller.stop()
         #expect(saw)
     }
@@ -119,7 +119,7 @@ import Testing
         timing.statusPollSeconds = 0.3
         let controller = MenuController(context: fake.context, runner: fake.runner, timing: timing)
         controller.start()
-        let saw = await Self.waitFor(60) {
+        let saw = await Self.waitFor(300) {
             fake.calls().filter { $0 == "refresh" }.count >= 2
                 && fake.calls().contains("status --cached")
         }

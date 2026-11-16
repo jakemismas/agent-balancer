@@ -65,7 +65,7 @@ public struct ReadingStore: Sendable {
         return merged
     }
 
-    /// Notes that a Fable probe was tried now, so the once-a-day limit holds when it fails.
+    /// Notes when a Fable probe was tried, so the once-a-day limit holds when it fails.
     public func noteFableAttempt(label: String, at time: Date) throws {
         guard var stored = try load(label: label) else { return }
         stored.fableProbedAt = time

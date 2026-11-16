@@ -16,7 +16,8 @@ public enum ProbeReader {
         "invalid api key", "please run /login", "authentication", "unauthorized",
         "oauth token", "token has expired", "invalid bearer", "not logged in",
     ]
-    static let badUsage = "Check failed: the probe gave a usage value outside 0 to 1."
+    static let badUsage =
+        "Check failed: the probe gave a usage value that is negative or not a number."
     static let badReset = "Check failed: the probe gave a reset time outside the window."
     static let noWeekly = "Check failed: the probe reply carried no weekly usage."
     static let noFiveHour = "Check failed: the probe reply carried no 5-hour usage."
@@ -148,15 +149,16 @@ public enum ProbeReader {
         return nil
     }
 
-    /// Converts a probe utilization (0 to 1) to percent (0 to 100, one decimal). A value that is
-    /// not a number, or is outside 0 to 1, gives nil.
+    /// Converts a probe utilization (0 to 1) to percent (0 to 100, one decimal). A value above 1
+    /// counts as 100. A value that is not a number, is negative or is not finite gives nil.
     static func percent(from value: Any) -> Double? {
         guard let number = value as? NSNumber,
             CFGetTypeID(number) != CFBooleanGetTypeID()
         else { return nil }
         let utilization = number.doubleValue
-        guard utilization.isFinite, utilization >= 0, utilization <= 1 else { return nil }
-        return Reading.round1(utilization * 100)
+        guard utilization.isFinite, utilization >= 0 else { return nil }
+        // The client reports more than 1 when use runs past a window's cap, so the window is full.
+        return Reading.round1(min(utilization, 1) * 100)
     }
 
     enum ResetParse: Equatable {

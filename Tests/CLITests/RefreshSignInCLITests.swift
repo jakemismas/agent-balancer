@@ -38,13 +38,14 @@ extension FolderAccountsCLITests {
         return cli
     }
 
-    /// Dates the stored reading of `label` two minutes back, still fresh, so a probe after a
-    /// rejection stores a newer one than the status saw with it.
+    /// Dates the stored reading of `label` two minutes back, still fresh, and lets the status see
+    /// it, so a probe after a rejection stores a newer one than the status saw with it.
     func ageFreshReading(_ cli: CLIHome, _ label: String) throws {
         let store = ReadingStore(context: context(cli))
         var reading = try #require(try store.load(label: label))
         reading.readAt = Date().addingTimeInterval(-120)
         try store.save(reading, label: label)
+        #expect(try cli.run(["status", "--cached", "--json"]).status == 0)
     }
 
     func errorCode(_ row: [String: Any]) -> String? {
@@ -133,6 +134,7 @@ extension FolderAccountsCLITests {
         var reading = try #require(try store.load(label: "spare"))
         reading.readAt = Date().addingTimeInterval(-120)
         try store.save(reading, label: "spare")
+        #expect(try cli.run(["status", "--cached", "--json"]).status == 0)
         try cli.fakeProbe("auth_error.jsonl")
         #expect(try cli.run(["refresh", "--label", "spare", "--force"]).status == 1)
         #expect(errorCode(try statusRow(cli)) == "login_rejected")

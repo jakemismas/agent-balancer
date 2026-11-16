@@ -80,20 +80,74 @@ import Testing
             "{\"type\":\"rate_limit_event\",\"rate_limit_info\":{\"unifiedWindows\":"
                 + "{\"seven_day\":{\"utilization\":\(u),\"resetsAt\":1800400000}}}}"
         }
-        for (text, want) in [("0", 0.0), ("1", 100.0), ("0.0449", 4.5)] {
+        for (text, want) in [("0", 0.0), ("1", 100.0), ("0.0449", 4.5), ("1.01", 100.0)] {
             guard case .reading(let r) = ProbeReader.parse(line(text), readAt: readAt) else {
                 Issue.record("expected a reading for \(text)")
                 continue
             }
             #expect(r.sevenDay?.usedPercent == want)
         }
-        for bad in ["-0.1", "1.01", "\"0.5\"", "true", "null"] {
+        for bad in ["-0.1", "\"0.5\"", "true", "null"] {
             guard case .failed(let issue) = ProbeReader.parse(line(bad), readAt: readAt) else {
                 Issue.record("expected a failure for \(bad)")
                 continue
             }
             #expect(issue.code == .checkFailed)
         }
+    }
+
+    /// A reply whose `five_hour` and `seven_day` entries carry these usage values.
+    func bothWindows(five: String, week: String) -> String {
+        "{\"type\":\"rate_limit_event\",\"rate_limit_info\":{\"unifiedWindows\":{"
+            + "\"five_hour\":{\"utilization\":\(five),\"resetsAt\":1800010000},"
+            + "\"seven_day\":{\"utilization\":\(week),\"resetsAt\":1800400000}}}}"
+    }
+
+    @Test func aUsageAboveOneCountsAsFullUseOfThatWindowAndKeepsItsReset() {
+        // The client reports more than 1 when use runs past a window's cap.
+        let cases: [(five: String, week: String, wantFive: Double, wantWeek: Double)] = [
+            ("0.2", "1.5", 20, 100), ("1.25", "0.4", 100, 40), ("3", "1.0001", 100, 100),
+        ]
+        for c in cases {
+            let name = "five \(c.five), week \(c.week)"
+            let parsed = ProbeReader.parse(bothWindows(five: c.five, week: c.week), readAt: readAt)
+            guard case .reading(let r) = parsed else {
+                Issue.record("expected a reading for \(name), got \(parsed)")
+                continue
+            }
+            #expect(r.fiveHour?.usedPercent == c.wantFive, "\(name)")
+            #expect(r.sevenDay?.usedPercent == c.wantWeek, "\(name)")
+            #expect(r.fiveHour?.resetsAt == Date(timeIntervalSince1970: 1_800_010_020), "\(name)")
+            #expect(r.sevenDay?.resetsAt == Date(timeIntervalSince1970: 1_800_400_020), "\(name)")
+        }
+    }
+
+    @Test func aNegativeInfiniteOrNonNumberUsageStillFailsTheWholeReading() {
+        // Each bad value sits in one window beside good ones, so the failure is the whole reply's.
+        let bad = ["-0.1", "-2", "-1e999", "\"0.5\"", "true", "null", "{}", "[0.5]"]
+        for value in bad {
+            let replies = [
+                ("five_hour", bothWindows(five: value, week: "0.4")),
+                ("seven_day", bothWindows(five: "0.2", week: value)),
+                ("other", unified([("seven_day", entry("0.4")), ("monthly_extra", entry(value))])),
+            ]
+            for (window, reply) in replies {
+                guard case .failed(let issue) = ProbeReader.parse(reply, readAt: readAt) else {
+                    Issue.record("expected a failure for \(value) in \(window)")
+                    continue
+                }
+                #expect(issue.code == .checkFailed, "\(value) in \(window)")
+                #expect(issue.text == ProbeReader.badUsage, "\(value) in \(window)")
+            }
+        }
+        // A value that is not finite never counts, even one that is too large to send.
+        for value in [Double.infinity, -Double.infinity, Double.nan] {
+            #expect(ProbeReader.percent(from: NSNumber(value: value)) == nil, "\(value)")
+        }
+        // The text names what fails, not a range that a value above 1 now passes.
+        #expect(
+            ProbeReader.badUsage
+                == "Check failed: the probe gave a usage value that is negative or not a number.")
     }
 
     @Test func readsTheFlatEventForm() {

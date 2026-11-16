@@ -91,9 +91,10 @@ public struct PickService: Sendable {
         let remaining = max(1, Double(config.picker.deadlineSeconds) - elapsed)
         var refresher = Refresher(context: context, config: config, store: store)
         refresher.clock = clock
+        let watch = RefreshWatch()
         let results = refresher.refresh(
             accounts: live, force: false, forced: forced,
-            fable: model == .fable ? .forPick : .none, deadline: remaining)
+            fable: model == .fable ? .forPick : .none, deadline: remaining, watch: watch)
         observations.add(results)
         for result in results {
             if case .failed(let issue) = result.status {
@@ -108,7 +109,11 @@ public struct PickService: Sendable {
             }
         }
         // What the probes found is recorded however the pick ends, after the pick lock is let go.
-        defer { StatusBuilder.rebuildQuietly(context: context, observations: observations) }
+        defer {
+            // A rejection a probe found after the deadline counts too.
+            observations.add(watch.close().filter(Self.rejectsSignIn))
+            StatusBuilder.rebuildQuietly(context: context, observations: observations)
+        }
 
         // The decision, the launch file and the lease happen under the pick lock.
         let writer = NoFollowWriter(root: context.dataRoot)
@@ -131,13 +136,6 @@ public struct PickService: Sendable {
         {
             skips[account.label] = "the account changed while the pick waited"
         }
-        // Another command may have recorded a token's rejection since the checks before the probes.
-        for account in config.accounts
-        where account.kind == Kind.token && skips[account.label] == nil
-            && tokenRejectionStands(account)
-        {
-            skips[account.label] = "login rejected"
-        }
         // A sign-in may have switched since the checks before the probes, so a login or folder
         // account is checked again before its reading is trusted.
         for account in config.accounts
@@ -145,6 +143,17 @@ public struct PickService: Sendable {
             if let issue = Refresher.identityIssue(account: account, runner: runner, now: now) {
                 skips[account.label] = Display.safe(issue.text, limit: 200)
             }
+        }
+        // Read last, after those checks: another command may have recorded a token's rejection.
+        for account in config.accounts
+        where account.kind == Kind.token && skips[account.label] == nil
+            && tokenRejectionStands(account)
+        {
+            skips[account.label] = "login rejected"
+        }
+        // A probe still running at the deadline may have found the sign-in rejected meanwhile.
+        for late in watch.results() where Self.rejectsSignIn(late) {
+            skips[late.label] = "login rejected"
         }
         var decision: PickDecision
         var leaseId: String?
@@ -353,6 +362,13 @@ public struct PickService: Sendable {
         else { return false }
         return (try? ReadingStore(context: context).load(label: account.label))
             .map({ $0.readAt <= rejectedAt }) ?? true
+    }
+
+    /// True when the plain or the Fable probe of `result` found the sign-in rejected.
+    static func rejectsSignIn(_ result: AccountRefresh) -> Bool {
+        if case .failed(let issue) = result.status, issue.code == .loginRejected { return true }
+        if case .failed(let issue) = result.fable, issue.code == .loginRejected { return true }
+        return false
     }
 
     /// True when a stored window's reset time has passed, so its use is no longer current.

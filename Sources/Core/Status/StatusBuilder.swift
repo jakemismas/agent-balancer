@@ -93,7 +93,8 @@ public enum StatusBuilder {
                 known, account: account, auth: observations.auth[account.label],
                 probe: observations.probe[account.label],
                 duplicate: observations.duplicates[account.label] ?? .notRun,
-                storedReadAt: reading?.readAt, now: now)
+                storedReadAt: reading?.readAt,
+                newToken: observations.newToken.contains(account.label), now: now)
             let token = tokens[account.label]
             let duplicate = emails[account.email?.lowercased() ?? ""].flatMap { group in
                 group.count > 1 ? group.first { $0 != account.label } : nil
@@ -151,10 +152,15 @@ public enum StatusBuilder {
                 next.limitedUntil = nil
                 next.limitedSince = nil
             }
-            next.lastReadingAt = reading?.readAt ?? known?.lastReadingAt
-            // A reading not usable here may predate the rejection, so the rejection is dated now.
-            if reading == nil, observations.probe[account.label]?.error?.code == .loginRejected {
-                next.lastReadingAt = Date(timeIntervalSince1970: floor(now.timeIntervalSince1970))
+            let seen = known?.lastReadingAt
+            next.lastReadingAt = reading?.readAt ?? seen
+            if observations.probe[account.label]?.error?.code == .loginRejected {
+                // Dated now with no usable reading, never before a reading the status had seen.
+                let second = Date(timeIntervalSince1970: floor(now.timeIntervalSince1970))
+                next.lastReadingAt = max(reading?.readAt ?? second, seen ?? .distantPast)
+            } else if next.probeError?.code == StateCode.loginRejected.rawValue, let seen {
+                // An older reading, put back or read after a clock change, never dates it earlier.
+                next.lastReadingAt = max(next.lastReadingAt ?? seen, seen)
             }
             if drafted == nil, let expires = evaluation.loginExpiresAt,
                 evaluation.warnings.contains(where: { $0.code == .loginExpiring })
@@ -346,6 +352,14 @@ public enum StatusBuilder {
         context: ToolContext, observations: StatusObservations = StatusObservations(),
         now: Date = Date(), lockWait: TimeInterval? = nil
     ) throws -> StatusDocument? {
+        try rebuilt(context: context, observations: observations, now: now, lockWait: lockWait)?
+            .document
+    }
+
+    /// `rebuild`, with whether it saved `state/current.json`.
+    static func rebuilt(
+        context: ToolContext, observations: StatusObservations, now: Date, lockWait: TimeInterval?
+    ) throws -> (document: StatusDocument, savedState: Bool)? {
         let writer = NoFollowWriter(root: context.dataRoot)
         guard
             let lock = try writer.acquireLock(
@@ -469,7 +483,7 @@ public enum StatusBuilder {
         try writer.put(
             try StatusDocument.encoder().encode(built.document) + Data([0x0A]),
             folders: Layout.stateFolders, name: statusName)
-        return built.document
+        return (built.document, eventsSaved)
     }
 
     /// True while a probe's rejection of the sign-in of `account` stands, as `state/current.json`
@@ -494,8 +508,8 @@ public enum StatusBuilder {
     /// Keeps token rejections in a file of their own, so deleting or damaging `current.json` does
     /// not make a rejected account eligible again. A label leaves the file only on positive
     /// evidence: a stored reading newer than the one the rejection saw, a new sign-in seen by a
-    /// check, a changed account key, or the account's removal. An entry rebuilt from nothing is
-    /// never such evidence.
+    /// check, a new token's first probe that worked, a changed account key, or the account's
+    /// removal. An entry rebuilt from nothing is never such evidence.
     static func recordRejections(
         context: ToolContext, config: Config, current: CurrentFile,
         observations: StatusObservations
@@ -539,12 +553,17 @@ public enum StatusBuilder {
             } else if let known {
                 let newerReading = entry.lastReadingAt.map { $0 > known.at } ?? false
                 let newSignIn = observations.auth[account.label]?.newSignIn ?? false
+                let newToken =
+                    observations.newToken.contains(account.label)
+                    && observations.probe[account.label]?.worked(after: nil) == true
                 let ended =
                     previous?.accounts[account.label].map {
                         $0.accountKey == account.accountKey
                             && $0.probeError?.code == StateCode.loginRejected.rawValue
                     } ?? false
-                if newerReading || newSignIn || ended { file.tokens[account.label] = nil }
+                if newerReading || newSignIn || newToken || ended {
+                    file.tokens[account.label] = nil
+                }
             }
         }
         let unchanged =
@@ -590,15 +609,19 @@ public enum StatusBuilder {
     }
 
     /// Rebuilds after a command's own work is done. A failure is logged and never changes the
-    /// command's output or exit code.
+    /// command's output or exit code. Returns whether `state/current.json` was saved.
+    @discardableResult
     public static func rebuildQuietly(
         context: ToolContext, observations: StatusObservations = StatusObservations()
-    ) {
+    ) -> Bool {
         do {
-            try rebuild(context: context, observations: observations)
+            return try rebuilt(
+                context: context, observations: observations, now: Date(), lockWait: nil)?
+                .savedState ?? false
         } catch {
             Self.log(
                 context, "status rebuild failed: \((error as? ToolError)?.message ?? "unknown")")
+            return false
         }
     }
 

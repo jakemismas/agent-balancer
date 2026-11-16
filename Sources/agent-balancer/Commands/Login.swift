@@ -77,9 +77,13 @@ struct LoginCommand: ParsableCommand {
         if captured.replaced { observations.tokenReplaced = [label] }
         // Every save deleted the label's reading, so a limit it showed did not clear.
         observations.readingDropped = [label]
+        observations.newToken = [label]
         let result = Refresher(context: context, config: config)
-            .refresh(account: config.accounts[index], force: true, fable: .none)
-        observations.add([result])
+            .refresh(account: config.accounts[index], force: true, fable: .none) { checked in
+                // Recorded while the probe lock is held, so no later probe of the token comes first.
+                observations.add([checked])
+                Shared.rebuildStatus(context, observations: observations)
+            }
         var failed = false
         switch result.status {
         case .probed(let reading), .fresh(let reading), .usedStored(let reading):
@@ -94,7 +98,6 @@ struct LoginCommand: ParsableCommand {
         if !failed, let warning = result.duplicate.issue {
             print(Shared.line(warning))
         }
-        Shared.rebuildStatus(context, observations: observations)
         if failed { throw ExitCode.failure }
     }
 

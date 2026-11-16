@@ -780,6 +780,48 @@ import Testing
         #expect(stored.fiveHour?.resetsAt == nil && stored.sevenDay?.resetsAt == nil)
     }
 
+    @Test func eachResultIsHeardBeforeTheAccountsProbeLockIsLetGo() throws {
+        let t = try setUp()
+        let account = login()
+        let r = refresher(t, accounts: [account], clock: ClockBox(Self.start)) {
+            $0.fable.probe = false
+        }
+        let context = t.context
+        @Sendable func lockIsHeld() -> Bool {
+            guard
+                let lock = try? NoFollowWriter(root: context.dataRoot).acquireLock(
+                    folders: Layout.locksFolders, name: Layout.lockName(account.label), wait: 0)
+            else { return true }
+            lock.release()
+            return false
+        }
+        var heardHeld: Bool?
+        let one = r.refresh(account: account, force: true) { _ in heardHeld = lockIsHeld() }
+        #expect(one.status != .notStarted)
+        #expect(heardHeld == true)
+        let watched = Box<Bool>()
+        let watch = RefreshWatch(onResult: { _ in watched.value = lockIsHeld() })
+        _ = r.refresh(accounts: [account], force: true, watch: watch)
+        #expect(watched.value == true)
+        // Free again once the refresh has returned.
+        let free = try NoFollowWriter(root: context.dataRoot).acquireLock(
+            folders: Layout.locksFolders, name: Layout.lockName(account.label), wait: 5)
+        #expect(free != nil)
+        free?.release()
+        #expect(t.fakeLines("models.log") == ["haiku", "haiku"])
+    }
+
+    @Test func aFableProbeOfARefreshWithNoWatchCountsAsTriedOnceItEnds() throws {
+        let t = try setUp()
+        try t.fakeProbe("fable.jsonl", model: ProbeForm.fableModel, now: Self.start)
+        let account = login()
+        let r = refresher(t, accounts: [account], clock: ClockBox(Self.start))
+        let results = r.refresh(accounts: [account], force: false)
+        #expect(results.first?.fable == .probed)
+        let stored = try #require(try ReadingStore(context: t.context).load(label: account.label))
+        #expect(stored.fableProbedAt == Self.start)
+    }
+
     @Test func eachRefreshStartsAtAnAccountChosenAtRandom() throws {
         let t = try TestHome()
         let r = refresher(t, accounts: [], clock: ClockBox(Self.start))
@@ -796,17 +838,19 @@ import Testing
             label: "fable-save-fails", kind: Kind.login, role: Role.pool,
             email: "main@example.com")
         let r = refresher(t, accounts: [account], clock: ClockBox(Self.start))
-        // The plain reading and the Fable probe time are saved; the Fable reading's save fails.
+        // The plain reading is saved; the Fable reading's save fails.
         let name = Layout.readingName(account.label)
         let writes = Counter()
         NoFollowWriter.beforeRename.set(name) {
             writes.add()
-            if writes.value == 3 { throw ToolError("Could not write \(name).") }
+            if writes.value == 2 { throw ToolError("Could not write \(name).") }
         }
         defer { NoFollowWriter.beforeRename.set(name, nil) }
         let result = r.refresh(account: account, force: false)
         NoFollowWriter.beforeRename.set(name, nil)
-        #expect(writes.value == 3)
+        #expect(writes.value == 2)
+        // The Fable probe ran first, so the write that failed is the save of its reading.
+        #expect(t.fakeLines("models.log") == ["haiku", ProbeForm.fableModel])
         guard case .failed(let issue) = result.status else {
             Issue.record("expected the whole refresh to fail, got \(result.status)")
             return

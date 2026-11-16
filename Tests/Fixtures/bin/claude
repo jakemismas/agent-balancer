@@ -110,6 +110,12 @@ case "$1" in
       n=0
       while [ ! -f "$dir/go-$hold" ] && [ "$n" -lt 3000 ]; do sleep 0.1; n=$((n + 1)); done
     fi
+    # The same with one model only, so an account's plain probe can end while its Fable probe waits.
+    if [ -f "$dir/hold-$hold-$model" ]; then
+      : > "$dir/held-$hold-$model"
+      n=0
+      while [ ! -f "$dir/go-$hold-$model" ] && [ "$n" -lt 3000 ]; do sleep 0.1; n=$((n + 1)); done
+    fi
     # A probe with one model can take longer than the others.
     if [ -f "$dir/delay-$model" ]; then sleep "$(cat "$dir/delay-$model")"; fi
     if [ -f "$dir/unknown-option" ]; then

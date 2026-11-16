@@ -7,7 +7,7 @@ extension ProbeForm {
 
 /// When a refresh runs the Fable probe (docs/ARCHITECTURE.md section 4A.6).
 public enum FableMode: Equatable, Sendable {
-    /// At most once a day per account. What `refresh` does.
+    /// Once a day per account, counting only a probe whose result was taken. What `refresh` does.
     case daily
     /// Never. A pick that is not for Fable.
     case none
@@ -154,6 +154,52 @@ private final class Begun: @unchecked Sendable {
     }
 }
 
+/// Each account's result as its refresh ends, and the plain step before its Fable probe, for a
+/// caller that goes on while probes still run: a pick that waits for its lock after its deadline,
+/// or a `refresh` that records each result as it comes. Once closed it takes none, and a Fable
+/// probe that ends after that is not counted as tried, so the next Fable pick or refresh runs it.
+public final class RefreshWatch: @unchecked Sendable {
+    private let lock = NSLock()
+    private var latest: [String: AccountRefresh] = [:]
+    private var order: [String] = []
+    private var closed = false
+    private let onResult: (@Sendable (AccountRefresh) -> Void)?
+
+    /// `onResult` hears each result it takes, on the thread of that account's probe.
+    public init(onResult: (@Sendable (AccountRefresh) -> Void)? = nil) {
+        self.onResult = onResult
+    }
+
+    /// Takes `result` unless closed, and says whether it did.
+    func take(_ result: AccountRefresh) -> Bool {
+        lock.lock()
+        guard !closed else {
+            lock.unlock()
+            return false
+        }
+        if latest[result.label] == nil { order.append(result.label) }
+        latest[result.label] = result
+        lock.unlock()
+        onResult?(result)
+        return true
+    }
+
+    /// The latest result of each account taken so far.
+    public func results() -> [AccountRefresh] {
+        lock.lock()
+        defer { lock.unlock() }
+        return order.compactMap { latest[$0] }
+    }
+
+    /// The latest result of each account taken so far. It takes none after this.
+    public func close() -> [AccountRefresh] {
+        lock.lock()
+        defer { lock.unlock() }
+        closed = true
+        return order.compactMap { latest[$0] }
+    }
+}
+
 /// Runs the probes of `refresh`: one account lock per account, a fresh probe folder per probe,
 /// readings only from the probe.
 public struct Refresher: Sendable {
@@ -193,15 +239,15 @@ public struct Refresher: Sendable {
     /// and no probe, plain or Fable, begins after it: an account whose plain probe is running is
     /// reported `check_failed`; one whose probe has not begun, still waiting for a thread or for
     /// its lock, is `notStarted`; one whose Fable probe is running is reported by its plain step,
-    /// a fresh reading or a finished plain probe. A running probe is left to end on its own.
-    /// `forced` names labels probed even when their reading is fresh. `reprobe` names labels where
-    /// a probe's rejection of the sign-in stands, each with the time the status counts as the
-    /// latest stored reading it saw (`StatusBuilder.probeRejection`): such an account is probed
-    /// even when its reading is fresh, but not once a newer one is stored, which only a probe
-    /// that worked can do.
+    /// a fresh reading or a finished plain probe. A running probe is left to end on its own, and
+    /// `watch` takes its result when it ends. `forced` names labels probed even when their
+    /// reading is fresh. `reprobe` names labels where a probe's rejection of the sign-in stands,
+    /// each with the time the status counts as the latest stored reading it saw
+    /// (`StatusBuilder.probeRejection`): such an account is probed even when its reading is
+    /// fresh, but not once a newer one is stored, which only a probe that worked can do.
     public func refresh(
         accounts: [Account], force: Bool, forced: Set<String> = [], fable: FableMode = .daily,
-        deadline: TimeInterval? = nil, reprobe: [String: Date] = [:]
+        deadline: TimeInterval? = nil, reprobe: [String: Date] = [:], watch: RefreshWatch? = nil
     ) -> [AccountRefresh] {
         let results = Results()
         let begun = Begun()
@@ -219,7 +265,11 @@ public struct Refresher: Sendable {
                         refresh(
                             account: account, force: force || forced.contains(account.label),
                             fable: fable, rejectedAt: reprobe[account.label],
-                            begin: { begun.begin(index) }, report: { results.set(index, $0) }))
+                            begin: { begun.begin(index) },
+                            report: {
+                                results.set(index, $0)
+                                _ = watch?.take($0)
+                            }, finish: { watch?.take($0) ?? true }))
                 }
                 done.leave()
             }.start()
@@ -265,20 +315,48 @@ public struct Refresher: Sendable {
         return store
     }
 
-    public func refresh(account: Account, force: Bool, fable mode: FableMode = .daily)
-        -> AccountRefresh
-    {
+    /// `finish` hears the result as the account's refresh ends, before the account's lock is let go
+    /// when a probe ran.
+    public func refresh(
+        account: Account, force: Bool, fable mode: FableMode = .daily,
+        finish: (AccountRefresh) -> Void = { _ in }
+    ) -> AccountRefresh {
         refresh(
             account: account, force: force, fable: mode, rejectedAt: nil, begin: { true },
-            report: { _ in })
+            report: { _ in },
+            finish: {
+                finish($0)
+                return true
+            })
+    }
+
+    /// `finish` hears the account's result once, as it ends, and says whether a caller took it;
+    /// only a Fable probe whose result was taken counts as tried.
+    private func refresh(
+        account: Account, force: Bool, fable mode: FableMode, rejectedAt: Date?,
+        begin: () -> Bool, report: (AccountRefresh) -> Void,
+        finish: (AccountRefresh) -> Bool
+    ) -> AccountRefresh {
+        var finished = false
+        let result = steps(
+            account: account, force: force, fable: mode, rejectedAt: rejectedAt, begin: begin,
+            report: report
+        ) {
+            finished = true
+            return finish($0)
+        }
+        if !finished { _ = finish(result) }
+        return result
     }
 
     /// `begin` runs just before each probe, plain or Fable; when it returns false that probe does
-    /// not run. `report` hears the plain result before a Fable probe begins. `rejectedAt` is the
-    /// account's `reprobe` time, if any.
-    private func refresh(
+    /// not run. `report` hears the plain result before a Fable probe begins, and `finish` the
+    /// result once the probes have ended, while the account's lock is still held. `rejectedAt` is
+    /// the account's `reprobe` time, if any.
+    private func steps(
         account: Account, force: Bool, fable mode: FableMode, rejectedAt: Date?,
-        begin: () -> Bool, report: (AccountRefresh) -> Void
+        begin: () -> Bool, report: (AccountRefresh) -> Void,
+        finish: (AccountRefresh) -> Bool
     ) -> AccountRefresh {
         // A stored reading newer than the time the status counts as the latest one it saw came
         // from a probe that worked since, so the freshness rule holds again.
@@ -368,7 +446,7 @@ public struct Refresher: Sendable {
                 // A Fable probe still running at a deadline leaves the plain result to stand.
                 report(plain)
                 guard begin() else { return plain }
-                try store.noteFableAttempt(label: account.label, at: now)
+                let tried = now
                 switch runProbe(account: account, probe: probe, fable: true) {
                 case .failed(let issue): fableStatus = .failed(issue)
                 case .reading(let reading):
@@ -384,10 +462,19 @@ public struct Refresher: Sendable {
                         fableStatus = .failed(Issue(.checkFailed, .error, error.message))
                     }
                 }
+                let result = AccountRefresh(
+                    label: account.label, status: status, fable: fableStatus,
+                    duplicate: duplicate.value)
+                // Counted once its result is taken, so one cut off unheard is not put off a day.
+                if finish(result) { try? store.noteFableAttempt(label: account.label, at: tried) }
+                return result
             }
-            return AccountRefresh(
+            let result = AccountRefresh(
                 label: account.label, status: status, fable: fableStatus,
                 duplicate: duplicate.value)
+            // Heard before the lock is let go, so no later probe of the account comes first.
+            _ = finish(result)
+            return result
         } catch let error as ToolError {
             return failed(Issue(error.code ?? .checkFailed, .error, error.message))
         } catch {

@@ -866,11 +866,12 @@ private final class Started: @unchecked Sendable {
     }
 
     /// `lab` signed in with a fresh reading, then a forced probe that finds its token rejected.
-    /// The reading is two minutes old, so a probe after the rejection stores a newer one.
+    /// The reading is two minutes old and the status sees it, so a later probe stores a newer one.
     func rejectedLab(_ cli: CLIHome) throws {
         try addLab(cli)
         try loginLab(cli)
         try ageReading(cli, "lab", by: 120)
+        #expect(try cli.run(["status", "--cached", "--json"]).status == 0)
         try cli.fakeProbe("auth_error.jsonl")
         #expect(try cli.run(["refresh", "--label", "lab", "--force"]).status == 1)
         #expect(try tokenError(cli)?["code"] as? String == "login_rejected")
@@ -954,6 +955,9 @@ private final class Started: @unchecked Sendable {
         let file = cli.dataRoot.appendingPathComponent("state/readings/lab.json").path
         try #require(chmod(file, 0) == 0)
         defer { chmod(file, 0o600) }
+        #expect(throws: (any Error).self) {
+            try ReadingStore(context: ToolContext(home: cli.home, ambient: [:])).load(label: "lab")
+        }
         let probes = try tokenProbeRuns(cli, "lab")
         // The pick saves the settings verdict that `run` relies on, so it runs first.
         let lab = try labInPick(cli, ["--caller", "launcher"])
@@ -976,6 +980,7 @@ private final class Started: @unchecked Sendable {
         var reading = try #require(try store.load(label: "lab"))
         reading.readAt = Date().addingTimeInterval(-120)
         try store.save(reading, label: "lab")
+        #expect(try cli.run(["status", "--cached", "--json"]).status == 0)
         try cli.fakeProbe("auth_error.jsonl")
         #expect(try cli.run(["refresh", "--label", "lab", "--force"]).status == 1)
         #expect(try labInPick(cli).reason == "login rejected")
@@ -996,6 +1001,7 @@ private final class Started: @unchecked Sendable {
             try addLab(cli)
             try loginLab(cli)
             try ageReading(cli, "lab", by: 120)
+            #expect(try cli.run(["status", "--cached", "--json"]).status == 0)
             try cli.fakeProbe("auth_error.jsonl")
             #expect(try cli.run(["refresh", "--label", "lab", "--force"]).status == 1, "\(flags)")
             // A reader saves the verdict that `run` relies on.
@@ -1072,10 +1078,11 @@ private final class Started: @unchecked Sendable {
     }
 
     /// `main` with a fresh reading, then a forced probe that finds its sign-in rejected. The
-    /// reading is two minutes old, so a probe after the rejection stores a newer one.
+    /// reading is two minutes old and the status sees it, so a later probe stores a newer one.
     func rejectedMain(_ cli: CLIHome) throws {
         #expect(try cli.run(["refresh"]).status == 0)
         try ageReading(cli, "main", by: 120)
+        #expect(try cli.run(["status", "--cached", "--json"]).status == 0)
         try cli.fakeProbe("auth_error.jsonl")
         #expect(try cli.run(["refresh", "--label", "main", "--force"]).status == 1)
         #expect(try tokenError(cli, "main")?["code"] as? String == "login_rejected")
@@ -1139,6 +1146,7 @@ private final class Started: @unchecked Sendable {
         try loginLab(cli)
         // Still fresh, and older than the reading of the probe that ends the rejection.
         try ageReading(cli, "lab", by: 120)
+        #expect(try cli.run(["status", "--cached", "--json"]).status == 0)
         try fableAnswers(cli, "auth_error.jsonl")
         let plain = try tokenProbeRuns(cli, "lab", model: "haiku")
         let out = try cli.run(["refresh", "--label", "lab"])
@@ -1531,6 +1539,7 @@ private final class Started: @unchecked Sendable {
         try loginLab(cli)
         // The rejection's status sees a reading two hours old.
         try ageReading(cli, "lab", by: 7200)
+        #expect(try cli.run(["status", "--cached", "--json"]).status == 0)
         try cli.fakeProbe("auth_error.jsonl")
         #expect(try cli.run(["refresh", "--label", "lab", "--force"]).status == 1)
         // Another command's probe worked and stored a newer reading, an hour old, before it
@@ -1553,30 +1562,32 @@ private final class Started: @unchecked Sendable {
         #expect(try tokenError(cli) == nil)
     }
 
-    @Test func aWorkingProbesReadingEndsARejectionWhenAnotherRebuildSeesItFirst() throws {
+    @Test func aWorkingProbesReadingEndsARejectionAsSoonAsItsRefreshRecordsIt() throws {
         let cli = try setUp()
         defer { cli.cleanup() }
         try labAndASpare(cli)
         // The rejection's status sees a reading two minutes old.
         try ageReading(cli, "lab", by: 120)
+        #expect(try cli.run(["status", "--cached", "--json"]).status == 0)
         let seen = try labReadAt(cli)
         try cli.fake("probe-for-lab.jsonl", try probeAnswer(cli, "auth_error.jsonl"))
         #expect(try cli.run(["refresh", "--label", "lab", "--force"]).status == 1)
         try #require(try labRejectionRecorded(cli))
-        // lab is signed in again. The next refresh stores its probe's reading, then waits on
-        // spare-a's held probe before it rebuilds the status.
+        // Signed in again: the refresh records lab's working probe while spare-a's is still held.
         try cli.fake("probe-for-lab.jsonl", try probeText(cli, week: 450_000, five: 15_000))
         try ageReading(cli, "spare-a")
         try cli.fake("hold-spare-a", "")
         defer { try? cli.fake("go-spare-a", "") }
+        let spareEnds = probeEnds(cli, "spare-a")
         let refresh = Started(cli, ["refresh"])
         try #require(labReadingStored(cli, after: seen))
         try #require(heldProbe(cli, "spare-a"))
-        #expect(try labRejectionRecorded(cli))
-        // The menu's rebuild each minute lands first and sees lab's new reading.
+        try #require(pollUntil { (try? labRejectionRecorded(cli)) == false })
+        #expect(probeEnds(cli, "spare-a") == spareEnds)
+        #expect(!refresh.hasEnded)
+        // The menu's rebuild each minute sees lab's new reading too and keeps it that way.
         #expect(try cli.run(["status", "--cached", "--json"]).status == 0)
         #expect(try labRejectionRecorded(cli) == false)
-        #expect(!refresh.hasEnded)
         try cli.fake("go-spare-a", "")
         let out = try #require(refresh.wait())
         #expect(out.status == 0)
@@ -1592,6 +1603,7 @@ private final class Started: @unchecked Sendable {
         try labAndASpare(cli)
         // The rejection's status sees a reading two minutes old.
         try ageReading(cli, "lab", by: 120)
+        #expect(try cli.run(["status", "--cached", "--json"]).status == 0)
         let seen = try labReadAt(cli)
         try cli.fake("probe-for-lab.jsonl", try probeAnswer(cli, "auth_error.jsonl"))
         #expect(try cli.run(["refresh", "--label", "lab", "--force"]).status == 1)
@@ -1634,15 +1646,17 @@ private final class Started: @unchecked Sendable {
         try ageReading(cli, "spare-a")
         #expect(try cli.run(["status", "--cached", "--json"]).status == 0)
         let seen = try labReadAt(cli)
-        // The first refresh's probe of lab works and stores a newer reading, then the refresh
-        // waits on spare-a's held probe before it rebuilds the status.
+        // The first refresh records lab's working probe at once, then waits on spare-a's held one.
         try cli.fake("probe-for-lab.jsonl", try probeText(cli, week: 450_000, five: 15_000))
         try cli.fake("hold-spare-a", "")
         defer { try? cli.fake("go-spare-a", "") }
+        let spareEnds = probeEnds(cli, "spare-a")
         let first = Started(cli, ["refresh"])
         try #require(labReadingStored(cli, after: seen))
         try #require(heldProbe(cli, "spare-a"))
         let stored = try labReadAt(cli)
+        try #require(pollUntil { (try? recordedEntry(cli, "lab"))?.lastReadingAt == stored })
+        try #require(probeEnds(cli, "spare-a") == spareEnds)
         // A forced refresh reads that reading and its probe is held; the reading then cannot be
         // read until the probe's rejection is recorded.
         try cli.fake("probe-for-lab.jsonl", try probeAnswer(cli, "auth_error.jsonl"))
@@ -1653,14 +1667,16 @@ private final class Started: @unchecked Sendable {
         let file = cli.dataRoot.appendingPathComponent("state/readings/lab.json").path
         try #require(chmod(file, 0) == 0)
         defer { chmod(file, 0o600) }
+        #expect(throws: (any Error).self) {
+            try ReadingStore(context: ToolContext(home: cli.home, ambient: [:])).load(label: "lab")
+        }
         try cli.fake("go-lab", "")
         #expect(try #require(second.wait()).status == 1)
         #expect(chmod(file, 0o600) == 0)
         // The rejection is dated no earlier than the reading stored before it.
         let rejectedAt = try #require(try labRejectionTime(cli))
         #expect(rejectedAt >= stored)
-        // The menu's rebuild reads that reading, then the first refresh folds its older working
-        // probe, and the rejection stands through both.
+        // The menu's rebuild reads that reading, then the first refresh ends; the rejection stands.
         #expect(try cli.run(["status", "--cached", "--json"]).status == 0)
         #expect(try labRejectionRecorded(cli))
         try cli.fake("go-spare-a", "")
@@ -1672,13 +1688,16 @@ private final class Started: @unchecked Sendable {
         #expect(skipped.picked == nil)
         #expect(try tokenProbeRuns(cli, "lab") == probes)
 
-        // lab is signed in again. Its reading is dated two minutes back and the menu's rebuild
-        // sees it, so the next probe's reading is newer; that probe works and ends the rejection.
+        // Signed in again: an older reading keeps the rejection's time, and a later probe ends it.
+        let dated = try #require(try labRejectionTime(cli))
         try ageReading(cli, "lab", by: 120)
         #expect(try cli.run(["status", "--cached", "--json"]).status == 0)
         #expect(try labRejectionRecorded(cli))
+        #expect(try labRejectionTime(cli) == dated)
         try cli.fake("probe-for-lab.jsonl", try probeText(cli, week: 450_000, five: 15_000))
-        #expect(try cli.run(["refresh", "--label", "lab"]).status == 0)
+        let later = dated.addingTimeInterval(1)
+        let probed = try probeLab(cli, at: later)
+        try rebuild(cli, [probed], at: later)
         #expect(try tokenProbeRuns(cli, "lab") == probes + 1)
         #expect(try labRejectionRecorded(cli) == false)
         let back = try labInPick(cli, ["--caller", "launcher", "--exclude", "spare-a"])
@@ -1705,15 +1724,17 @@ private final class Started: @unchecked Sendable {
         try ageReading(cli, "spare-a")
         #expect(try cli.run(["status", "--cached", "--json"]).status == 0)
         let seen = try labReadAt(cli)
-        // The first refresh's probe of lab works and stores a newer reading, then the refresh
-        // waits on spare-a's held probe before it rebuilds the status.
+        // The first refresh records lab's working probe at once, then waits on spare-a's held one.
         try cli.fake("probe-for-lab.jsonl", try probeText(cli, week: 450_000, five: 15_000))
         try cli.fake("hold-spare-a", "")
         defer { try? cli.fake("go-spare-a", "") }
+        let spareEnds = probeEnds(cli, "spare-a")
         let first = Started(cli, ["refresh"])
         try #require(labReadingStored(cli, after: seen))
         try #require(heldProbe(cli, "spare-a"))
         let stored = try labReadAt(cli)
+        try #require(pollUntil { (try? recordedEntry(cli, "lab"))?.lastReadingAt == stored })
+        try #require(probeEnds(cli, "spare-a") == spareEnds)
         // A forced refresh reads that reading and its probe is held; the reading is then gone, or
         // does not decode, until the probe's rejection is recorded.
         try cli.fake("probe-for-lab.jsonl", try probeAnswer(cli, "auth_error.jsonl"))
@@ -1742,8 +1763,7 @@ private final class Started: @unchecked Sendable {
         // The rejection is dated no earlier than the reading stored before it.
         let rejectedAt = try #require(try labRejectionTime(cli))
         #expect(rejectedAt >= stored)
-        // The menu's rebuild reads that reading again, then the first refresh folds its older
-        // working probe, and the rejection stands through both.
+        // The menu's rebuild reads it again, then the first refresh ends; the rejection stands.
         #expect(try cli.run(["status", "--cached", "--json"]).status == 0)
         #expect(try labRejectionRecorded(cli))
         try cli.fake("go-spare-a", "")
@@ -1761,13 +1781,16 @@ private final class Started: @unchecked Sendable {
         #expect(text(run.stderr).contains(Messages.probeLoginRejected))
         #expect(try tokenProbeRuns(cli, "lab") == probes)
 
-        // lab is signed in again. Its reading is dated two minutes back and the menu's rebuild
-        // sees it, so the next probe's reading is newer; that probe works and ends the rejection.
+        // Signed in again: an older reading keeps the rejection's time, and a later probe ends it.
+        let dated = try #require(try labRejectionTime(cli))
         try ageReading(cli, "lab", by: 120)
         #expect(try cli.run(["status", "--cached", "--json"]).status == 0)
         #expect(try labRejectionRecorded(cli))
+        #expect(try labRejectionTime(cli) == dated)
         try cli.fake("probe-for-lab.jsonl", try probeText(cli, week: 450_000, five: 15_000))
-        #expect(try cli.run(["refresh", "--label", "lab"]).status == 0)
+        let later = dated.addingTimeInterval(1)
+        let probed = try probeLab(cli, at: later)
+        try rebuild(cli, [probed], at: later)
         #expect(try tokenProbeRuns(cli, "lab") == probes + 1)
         #expect(try labRejectionRecorded(cli) == false)
         let back = try labInPick(cli, ["--caller", "launcher", "--exclude", "spare-a"])
@@ -1953,6 +1976,7 @@ private final class Started: @unchecked Sendable {
         try loginLab(cli)
         // Still fresh, and older than the reading of the probe that ends the rejection.
         try ageReading(cli, "lab", by: 120)
+        #expect(try cli.run(["status", "--cached", "--json"]).status == 0)
         let file = try tokenFile(cli, "lab")
         func probes() -> Int {
             cli.fakeRecord("args.log").split(separator: "\n").filter {

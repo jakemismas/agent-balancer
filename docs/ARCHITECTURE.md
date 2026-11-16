@@ -244,12 +244,16 @@ and `link <label>` passes what the saved verdict says; the rebuild keeps it in
 `state/current.json` and carries it over for every rebuild that did not read the file. In the same way a sign-in check
 (`status` and `refresh` run `auth status` for each login and folder account) and a probe
 (`refresh`, `pick`) each pass their result, and a rebuild that observed nothing carries the last
-error over unchanged, so `status --cached` never invents a recovery. A probe that works with a
-reading newer than the latest one the status had seen clears a carried `login_rejected`, a
-rebuild that sees that reading clears a probe's, and `refresh` probes again an account whose
-sign-in a probe found rejected, as the status records it, even when its reading is fresh (6.2).
-If the rebuild that records a probe's rejection has no stored reading it can read and decode,
-the latest one the status had seen counts as that rebuild's time.
+error over unchanged, so `status --cached` never invents a recovery. The rebuild that records a
+probe's `login_rejected` dates it to the stored reading it reads, or to its own second when it
+has none it can read and decode, and never earlier than the latest reading the status had seen;
+while the rejection stands, no rebuild moves that time back. A rebuild that sees a stored reading
+newer than that time clears the rejection. A probe that works with a newer reading clears it
+only when its rebuild has no stored reading it can read and decode: while it reads one, that
+reading decides, because a stored reading older than the probe's own puts the order in doubt (a
+clock set back, or a file put back). One probe clears it whatever the times: the first check of
+a token that `login` saves, when it works (4A.5). `refresh` probes again an account whose sign-in
+a probe found rejected, as the status records it, even when its reading is fresh (6.2).
 The app reads `status.json`, checks whether `config.json` exists (to choose the "no config yet"
 state), writes no file itself, and calls the CLI for actions.
 
@@ -530,7 +534,9 @@ stores a reading of the new token's reply alone, with nothing read under another
 (6.3). A first save after `add` finds none, since `add` deletes a reading left under the label. A
 first save after the token file went missing while the reading stayed, as after a restore from a
 backup that left out `tokens/`, which is excluded from backups (Where a token may be, below),
-deletes the old token's reading. Only a replace writes `token_replaced`.
+deletes the old token's reading. When the first check works, it also ends a probe's rejection
+that stood for the label's earlier token, whatever the reading times (4A.5). Only a replace writes
+`token_replaced`.
 
 Removing: `remove <label>` never refuses because a session still names a launch file. Removing
 the main account needs a person at a terminal (5.1): with standard input not a terminal, `remove`
@@ -596,9 +602,12 @@ rename stays where it was written while its lease is open, and a session started
 old label in its environment. A token saved later under the old label is never written into such
 a file, which carries none (Replacing, above), and `remove <old label>` keeps it as a tombstone
 while its lease is open, as it keeps the label's own (Removing, above), so a session that starts
-from it after that fails to sign in. The account's history lines follow its `accountKey` (10.4),
-and an account added later under the old label starts with no reading, no lease and none of those
-lines.
+from it after that fails to sign in. When the account removed under the old label is a `folder`
+account, whose remove keeps no launch file for an open lease (5.1), that file goes with the
+label's own unless a session record names it or the records cannot be read cleanly, and a session
+that would start from it finds no settings file. The account's history lines follow its
+`accountKey` (10.4), and an account added later under the old label starts with no reading, no
+lease and none of those lines.
 
 Where a token may be: the token file, the launch files of that label, and nowhere else, except a
 writer's temporary file that a write killed before its rename leaves in `tokens/` or
@@ -618,7 +627,7 @@ file lands in it.
 | Kind | `pick` returns a recipe only when |
 |---|---|
 | `login` | `auth status` shows the default folder logged in as the configured email and plan |
-| `token` | The token file exists, is a regular file owned by the user with mode 0600, holds a token that parses, and its last probe did not end in an auth error. While its probe's `login_rejected` stands and the status has seen its latest reading (only a probe that works stores a newer one), it is skipped as `login rejected` before any probe, even on a fresh reading. `pick` and `run` read the rejection again under the pick lock right before they decide. A rejection whose command has not finished its status rebuild by then is not seen, nor is a Fable probe still running at the pick's deadline (6.4). The rejection ends once the status sees a stored reading newer than the latest one it had seen (section 4), or records a probe that works with a newer reading (a `refresh` probes it again, 6.2, and so does `login` when it saves a new token); the order of probes is judged by reading times, so a wall clock set back inside one command's probe-to-rebuild window can make an older working probe look newer. A `state/current.json` that cannot be read, is of another schema version or is unsound counts as no rejection |
+| `token` | The token file exists, is a regular file owned by the user with mode 0600, holds a token that parses, and its last probe did not end in an auth error. While its probe's `login_rejected` stands and the status has seen its latest reading (only a probe that works stores a newer one), it is skipped as `login rejected` before any probe, even on a fresh reading. `pick` and `run` read the rejection again under the pick lock right before they decide, `pick` after its sign-in checks there, and `pick` also skips the account when its own probe, still running at its deadline, ends with an auth error before the pick decides (6.4). A rejection whose command has not finished its status rebuild by then is not seen, nor is the pick's own probe while it still runs. The rejection ends once the status sees a stored reading newer than the time the rejection is dated to (section 4), or, when the rebuild has no stored reading it can read and decode, records a probe that works with a newer reading (a `refresh` probes it again, 6.2, and so does `login` when it saves a new token). A `login` that saves a new token also ends it once its first check of that token works, whatever the reading times: the rejection was of the token it replaced, and `login` records that check before it lets the label's probe lock go, so no later probe's rejection is ended by it. So a rejection dated to a reading stored while the wall clock ran ahead keeps the token out, once the clock is set right, until the clock passes that time, even when the token works again; a `login` with a new token whose first check works brings the account back at once. Otherwise the order of probes is judged by reading times, and no rebuild moves a standing rejection's time back, so neither a reading file put back in an older form nor an older working probe whose rebuild lands late after the wall clock is set back ends it while the stored reading can be read. Two routes remain. With the wall clock set back before a rejection, a reading or a working probe from before the step that no rebuild had seen can look newer than the rejection, when the stored reading cannot be read at the rebuild that records the rejection or at that probe's own late rebuild. And a process that runs as the user can write a reading newer than the rejection, or hide one no rebuild had seen while the rejection is recorded and put it back later (T16). A `state/current.json` that cannot be read, is of another schema version or is unsound counts as no rejection |
 | `folder` | `verify` passes (5.7): every link in the manifest is intact and no hook entry recorded at link time is gone. A folder account must be linked, always: a never-linked folder is refused with the reason `not linked`, because a folder without the shared settings runs with no hooks. A user with nothing to share still runs `link` once; it records an empty manifest |
 
 `init` always writes the hook record of the default folder, empty when there are no hooks. A
@@ -667,12 +676,17 @@ rules of section 7.
   child's environment.
 - **Fable:** a Fable request adds the window `seven_day_overage_included`, which is the Fable
   weekly meter. A Fable probe reads it, and `fable.probe` is true by default. One costs roughly 20
-  to 35 cents as the CLI prints it, so it runs at most once a day per account, before a Fable pick
-  whose Fable reading is older than that, or when all-models use has risen by
+  to 35 cents as the CLI prints it, so it runs once a day per account, before a Fable pick whose
+  Fable reading is older than that, or when all-models use has risen by
   `fable.recheckAfterWeeklyRisePercent` (default 5) since the reading, or when the Fable window
   has reset. The rise and reset rechecks wait at least 10 minutes after the last Fable probe
-  tried, so a failing probe is not repeated on every pick. A pick for another model runs no Fable
-  probe at all; `refresh` runs one at most once a day. A Fable probe has its own
+  counted as tried, so a failing probe is not repeated on every pick. A Fable probe counts as
+  tried only once its command takes its result (6.2). One still running when its pick rebuilds
+  the status, or when its command's process ends, as when the menu ends a `refresh`, is not
+  counted, and neither is one whose reading or time a file error keeps from being saved: it runs
+  again at the next Fable pick, and at the next `refresh` once a day has passed since the last one
+  counted. A pick for another model runs no Fable probe at all; `refresh` runs one once a day by
+  that count. A Fable probe has its own
   budget and timeout, `fable.probeBudgetUsd` (default 0.50) and `fable.probeTimeoutSeconds`
   (default 20), set from the check recorded in 6.2, because a cold Fable probe costs more than
   the 0.05 cap of the plain probe and a cap below the cold cost still spends it and returns no
@@ -978,11 +992,12 @@ strings only, so editing the script a command points to is not seen.
 | Source | Gives | Cost | When |
 |---|---|---|---|
 | `claude auth status --json` | Logged in or not, email, `planTier`, `subscriptionType`, `loginExpiresAt`, `configDirectory` | Free (no model call) | Every refresh, every login and folder account |
-| One-turn probe | `rate_limit_event.rate_limit_info`: status, `unifiedWindows.five_hour` and `seven_day` utilization (0 to 1 on the wire; a value outside that range, in any window with a valid name, is `check_failed`, 6.2) and `resetsAt` | About $0.008 API-equivalent | When the stored reading is older than `picker.maxReadingAgeMinutes`, or a stored five-hour or weekly reset time has passed (`pick`); on `refresh --force` and a token account's `login` (its first check); and on `refresh` for an account whose sign-in a probe found rejected, as the status records it |
+| One-turn probe | `rate_limit_event.rate_limit_info`: status, `unifiedWindows.five_hour` and `seven_day` utilization (0 to 1 on the wire, or above 1 once use runs past a window's cap, which counts as 1; a negative, infinite or non-number value, in any window with a valid name, is `check_failed`, 6.2) and `resetsAt` | About $0.008 API-equivalent | When the stored reading is older than `picker.maxReadingAgeMinutes`, or a stored five-hour or weekly reset time has passed (`pick`); on `refresh --force` and a token account's `login` (its first check); and on `refresh` for an account whose sign-in a probe found rejected, as the status records it |
 
-The probe reports utilization as a fraction from 0 to 1. The reader converts it once, at parse
-time, to percent from 0 to 100 with one decimal (0.456 becomes 45.6). Every stored reading, every
-room figure and every output uses percent.
+The probe reports utilization as a fraction from 0 to 1, or above 1 once use runs past a window's
+cap. The reader converts it once, at parse time, to percent from 0 to 100 with one decimal (0.456
+becomes 45.6, and any value above 1 becomes 100). Every stored reading, every room figure and
+every output uses percent.
 
 ### 6.2 The probe
 
@@ -1004,7 +1019,12 @@ claude -p "Reply with the single word OK." --model haiku --tools "" --disallowed
   `fable.probeBudgetUsd` and `fable.probeTimeoutSeconds` in place of the 0.05 cap and the 60
   second timeout. It runs after the plain step. The status records its auth error as the
   probe's `login_rejected`, and its working, where no plain probe ran, as a probe that works; any
-  other failure of it, or one still running at a pick's deadline (6.4), records nothing.
+  other failure of it records nothing. One still running at a pick's deadline records nothing
+  either, unless it ends with an auth error before that pick's status rebuild (6.4). It counts as
+  tried for the once-a-day limit and the 10-minute wait of the rechecks (6.3, 4A.6) only once its
+  command takes its result: one still running when its pick rebuilds the status, or when its
+  command's process ends, is not counted, so it stays due for the next Fable pick, and for the
+  next `refresh` once a day has passed since the last one counted.
 - The tool reads only `type == "rate_limit_event"` lines and the final `result` line's error
   fields. Everything else is discarded unread. Captured stderr goes through the scrubber before
   any log line.
@@ -1047,16 +1067,24 @@ claude -p "Reply with the single word OK." --model haiku --tools "" --disallowed
   is refused, never rounded back in. The window length is 5 hours for `five_hour`; 7 days for
   `seven_day`, the Fable window and any other name that starts with `seven_day`; and 31 days for
   any other name. A reset time that is outside that range, is not a number or a date, or is a
-  boolean gives `check_failed`, like a usage value outside 0 to 1, and nothing is stored. A
+  boolean gives `check_failed`, like a negative usage value, and nothing is stored. A
   missing or null reset time is stored as unknown. Numbers above 100 billion are read as
   milliseconds. The same range of years, 2000 to 2200, applies to dates read from `auth status`.
 - These checks apply to every window entry with a valid name and a `utilization` key, whatever
-  its name and whether or not the cap below keeps it: a usage value that is null, not a number or
-  outside 0 to 1, or a reset time that is malformed or outside its window's range, gives
+  its name and whether or not the cap below keeps it: a usage value that is null, not a number,
+  negative or not finite, or a reset time that is malformed or outside its window's range, gives
   `check_failed` for the whole reply, and nothing is stored. The reason: the parser fails closed,
   and a reply that carries a value the tool cannot trust does not vouch for its other values. The
   cost: if the service starts sending such a value in any window, every account's probe gives
   `check_failed` until the parser changes, and no account is picked on a guess meanwhile.
+- A finite usage value above 1 counts as full use of its window, 100 percent, and acts as a full
+  window does. In `five_hour` or `seven_day` the account shows as `limited`, with `until` at the
+  reset time of the window that frees it, the later one when both are full (10.1). In the Fable
+  window, read while `fable.probe` is on, it gives the `fable_limited` warning, so only Fable
+  picks skip the account (section 9). In any other window it changes no state and no pick. The
+  reason: the client the probe runs reports values above 1 as normal, for use that runs past a
+  window's cap, so the value says the window is spent; failing the whole reply for it would show
+  `check_failed` instead and leave the account's other windows unread until the next probe.
 - A reply keeps `five_hour`, `seven_day` and the Fable window, which never count toward a cap, and
   at most 14 other window names: the first in name order across the whole reply, so the choice
   never depends on the order the reply lists them in. Every entry is checked as above before the
@@ -1066,10 +1094,10 @@ claude -p "Reply with the single word OK." --model haiku --tools "" --disallowed
   plain probe when the stored reading is younger than `picker.maxReadingAgeMinutes`, except in
   the cases 6.1 lists. `refresh` also probes again an account whose sign-in a probe found
   rejected, even when its reading is fresh, because only a probe that works or a new sign-in by
-  `login` clears that `login_rejected` (10.1); a reading newer than the latest one the status
-  had seen, which only a probe that worked can store, puts the account back under the age rule,
-  and the next status rebuild, such as the menu's `status --cached` each minute, ends the
-  rejection. A 60 second timeout marks the row `check_failed`.
+  `login` clears that `login_rejected` (10.1); a reading newer than the time the rejection is
+  dated to (section 4), which only a probe that worked can store, puts the account back under the
+  age rule, and the next status rebuild, such as the menu's `status --cached` each minute, ends
+  the rejection. A 60 second timeout marks the row `check_failed`.
 - The protected group of environment names, named once here: `CLAUDE_CONFIG_DIR`,
   `CLAUDE_ENV_FILE`, every `ANTHROPIC_*`, every `CLAUDE_CODE_*` except the chat marker
   `CLAUDE_CODE_CHILD_SESSION` (the Claude Code token variable, the `CLAUDE_CODE_USE_*` provider
@@ -1123,8 +1151,11 @@ lower value that does not replace the stored one leaves the window's `readAt` wh
 `source`, `readAt`, `windows`, `fable` and `fableProbedAt`. `fable` has `source` `probe` (with
 `usedPercent` as a share of the Fable cap, `resetsAt`, `readAt`, `weeklyUsedPercentAtRead`) or
 `estimate` (with `upToPercentOfWeekly` and `guaranteedRoomPercentOfCap`, section 7.4).
-`fableProbedAt` is the time of the last Fable probe tried, so the once-a-day limit holds when one
-fails. `refresh --force` does not lift that limit.
+`fableProbedAt` is the time read once the account's plain step ended, before the last Fable probe
+counted as tried began; in `refresh` the status rebuild that records the plain step comes between
+(6.4). It is noted once the command takes that probe's result (6.2), so the once-a-day limit holds
+when one fails, and a probe that is not counted leaves it as it was. `refresh --force` does not
+lift that limit.
 
 None of those keys names an account: readings are kept by label. `state/readings/<label>.json`
 holds the reading last saved under that label, and everything that reads one for an account (the
@@ -1153,7 +1184,8 @@ The email change, the token save, the rename, `add` and `init` each hold the pic
 each label whose reading they move or delete, that label's probe lock
 (`locks/probe-<label>.lock`), and let neither go until they have saved the change and moved or
 deleted the reading. A refresh holds a label's probe lock from a registry check it makes once it
-has the lock until it has saved its reading, and goes ahead only while the saved registry still
+has the lock until it has saved its reading and run the status rebuild that records it (6.4), and
+goes ahead only while the saved registry still
 holds the account it was given under that label, with the same `accountKey`, kind and email (the
 email compared without letter case), or while no registry is saved. So a probe already under way
 when one of those commands starts saves its reading first, and the command then moves or deletes
@@ -1174,13 +1206,20 @@ Fable probe timeout plus 60 seconds, 140 seconds with the defaults, so a `pick` 
 starts meanwhile can stop at the pick lock (7.2 rule 7); when the command cannot have the probe
 lock, it changes nothing and says
 `A check of '<label>' is still running, so nothing was changed. Try again in a moment.`
+A probe lock is also held through status rebuilds: a refresh records each account's result before
+it lets that account's probe lock go, after the plain step and again after a Fable probe, and
+`login` records its first check the same way (4A.5). Each such rebuild waits up to 30 seconds for
+the history lock (section 13), so while other rebuilds hold that lock, a probe lock can stay held
+past that wait, and the command refuses as above.
 
 The rebuild that an email change or a token save runs records no `limit_cleared` for the label
 whose reading it deleted, as a removed account's records none (10.3): that limit belonged to the
 old sign-in or token and did not clear. Another rebuild that runs while one of these commands
 works, such as one during the email change's own sign-in check or the token save's first check,
-does not know of the delete and can record one. A rename moves the reading, so the account's state
-stays as it was.
+does not know of the delete and can record one. So can the next rebuild after one of these
+commands stops once it has deleted the reading, such as an email change that the registry save
+refuses (12), because such a command runs no rebuild of its own. A rename moves the reading, so
+the account's state stays as it was.
 
 `status` shows the age; the menu greys a row whose
 reading is older than twice the refresh interval. `pick` refreshes any candidate whose reading is
@@ -1233,7 +1272,8 @@ stale and recorded as `check_failed`, one whose probe had not begun by then is j
 stored reading, with nothing recorded for it, and one whose Fable probe alone is still running is
 recorded by its plain step (6.4). `pick` does not wait for a probe left running past the
 deadline, and its process ends with its answer, so what that probe reads is saved only if the
-probe ends before that process does.
+probe ends before that process does; an auth error it gets before the pick's status rebuild is
+recorded all the same (6.4).
 
 Stored window names that no reading reports are evicted, and the rule is the same for every name.
 When a probe reading is merged before it is saved, each stored window that the reading does not
@@ -1283,12 +1323,22 @@ skipped with `stale reading, refresh failed`). An account whose plain probe is s
 the deadline is recorded as `check_failed`. An account whose Fable probe is still running is
 recorded by its plain step alone, a fresh stored reading or a plain probe that finished. `pick`
 does not wait for that Fable probe, and its process ends with its answer, so what the Fable probe
-reads is saved by the usual rules only if the probe ends before that process does.
+reads is saved by the usual rules only if the probe ends before that process does. A probe still
+running at the deadline that ends with an auth error before the pick's status rebuild is
+recorded as the account's `login_rejected` in place of the above, also when the pick ends
+`pick busy`, and when it ends so before the pick decides, while the pick waits for the pick lock
+or checks sign-ins again under it, the pick skips the account as `login rejected`. A Fable probe
+still running when the pick rebuilds the status is not
+counted as tried (6.3), so it stays due instead of waiting a day.
 
 The menu app runs `agent-balancer refresh` at launch when `status.json` is missing or older than
 `refresh.backgroundMinutes`, then on its own timer at that interval, and runs
-`agent-balancer status --cached` every 60 seconds so new readings show up. Every `refresh` ends by
-rebuilding `status.json` (section 4). This version has no command that schedules `refresh` for
+`agent-balancer status --cached` every 60 seconds so new readings show up. Every `refresh`
+rebuilds `status.json` (section 4) as each account's probes end, before it lets that account's
+probe lock go, and once more at its end with the sign-in checks and each result whose own rebuild
+did not save `state/current.json` (section 13), so a refresh that the menu ends after its 300
+second timeout keeps what its finished probes found, unless such a rebuild could not save that
+file. This version has no command that schedules `refresh` for
 people who use only the CLI: `schedule install` and `schedule remove`, which would manage a user
 LaunchAgent, are parked for a later release.
 
@@ -1414,8 +1464,8 @@ the last point at which a launch may start. A validator refuses any point above 
    label's probe lock, up to 140 seconds with the default timeouts (6.3), so a `pick` that starts
    then can exit 1 with `pick busy` after its 30 seconds, and `run` with `Another pick is running.
    Try again in a moment.`
-8. Units: the probe's `utilization` (0 to 1) is stored as percent 0 to 100 with one decimal
-   before any rule runs.
+8. Units: the probe's `utilization` (0 to 1, a value above 1 counting as 1) is stored as percent
+   0 to 100 with one decimal before any rule runs.
 9. A protected account also needs a 5-hour window and
    `fiveHour used + expectedRunPercent < limitedAtPercent`, so a worker cannot lock the user out
    of the main account until the 5-hour reset. A window with a use and no reset time is present.
@@ -1557,7 +1607,7 @@ short scrubbed text the menu shows as is.
 | `duplicate_login` | two configured accounts report one email | error | "Logged in as the same account as pool-a. Log one folder into its own account." |
 | `settings_changed` | a link of a folder account is broken, or a hook entry recorded at link time is gone or changed (5.7); or, after `init`, the hook record is missing or unreadable (4A.5); or, for `run`, the saved verdict is missing or older than the file, or the settings path is a link that goes nowhere or is not a file | error on every affected account, shown as one banner | "Settings changed. Run `agent-balancer link --accept-source-change` in Terminal." For `run`, with no verdict that matches the file's stamp: "Settings changed since the last check. Run `agent-balancer doctor` in Terminal." For a settings path that no reader can fix, the texts of 4A.5 that name the repair |
 | `plan_changed` | `planTier` differs from `expectedPlanTier` | error | "Plan is max_5x, expected max_20x." |
-| `account_ended` | `endsAt` passed; or, for an account marked `endingSoon`, the first sign-in check that placed the expected account's sign-in, for its current email (10.1), where `planTier` differs from `expectedPlanTier` or is missing. Once ended that way it stays ended until the flag is cleared (`config set <label> ending-soon false`, `ends <date>` or `ends none`) | ended | "Account ended." |
+| `account_ended` | `endsAt` passed; or, for an account marked `endingSoon`, the first sign-in check that placed the expected account's sign-in, for its current email (10.1), where `planTier` differs from `expectedPlanTier` or is missing. Once ended that way it stays ended until the flag is cleared (`config set <label> ending-soon false`, `ends <date>` or `ends none`) or the account's email changes (7.1) | ended | "Account ended." |
 | `check_failed` | a sign-in that reports no email for an account with an expected email (5.7), probe timeout, no `rate_limit_event`, unparsable output, `claude` missing, a reply with no weekly use (or no 5-hour use when one is named or stored), a bad value in any window with a valid name | error | "Check failed: probe timed out after 60 s." |
 | `limited` | probe status not `allowed`, or weekly or 5-hour use at or above `limitedAtPercent`; a full Fable sub-cap alone is the warning below | limited | "Limited until Wed 4:00 PM." |
 | `fable_limited` (warning) | Fable use is readable and at or above `limitedAtPercent` of the Fable cap; only Fable picks skip the account | ok | "Fable limited until Thu 9:00 AM." |
@@ -1656,8 +1706,10 @@ Field rules:
   `launchAllowed` is true.
 - `fiveHour` is null when the stored reading holds no 5-hour window, whether or not the plan has
   one (7.2).
-- `stateSince` is when the tool first saw the current `state` with its error code (null before the
-  first reading of an account that is `ok`).
+- `stateSince` is when the tool first saw the current `state` with its error code. It is null for
+  an `ok` account until a rebuild has read a reading of it or dated a probe's rejection of it
+  (section 4), so an account whose rejection was recorded before its first reading, such as a
+  `folder` account that `login` then signs in again, shows it with no reading.
   `limited` is null unless `state` is `limited`; then it is
   `{ "window": "weekly" | "fiveHour", "since": ..., "until": ... }`, where `since` is
   when the tool first saw the account limited and `until` is that window's `resetsAt`. The sample
@@ -1834,7 +1886,9 @@ The record of state changes. It answers "what changed since I last looked": the 
   writes none and a label removed and added again for another account writes both. The rebuild
   that an email change or a token save runs writes no `limit_cleared` for the reading it deleted,
   as a removed account's writes none; another rebuild that runs during the command, such as during
-  the email change's own sign-in check or the token save's first check, can write one (6.3).
+  the email change's own sign-in check or the token save's first check, can write one, and so can
+  the next rebuild after a command that stopped once it had deleted the reading, such as an email
+  change that the registry save refused (6.3).
 - `seq` rises by one per event. A damaged record (a line in the middle that does not parse, a
   `seq` that does not rise, or a missing header) is set aside as `events-damaged-<time>.jsonl`,
   starts a new `recordId`, and `seq` restarts at 1; there is no counter file. A line with a value
@@ -1877,9 +1931,9 @@ The record of state changes. It answers "what changed since I last looked": the 
 - `--label` must match the label pattern of 5.2 and is never used to build a path otherwise;
   `--limit` is 1 to 1000. The same holds for `history` (10.4).
 - `at` is when the tool first saw the change. `notBefore` is the time of the last reading that
-  still showed the old state (or of the rebuild that recorded a rejection without one, section 4),
-  or null. The real change lies between the two, so "limited since" is only as exact as the
-  readings are frequent.
+  still showed the old state (or, after a probe's rejection, the time that rejection is dated to,
+  section 4), or null. The real change lies between the two, so "limited since" is only as exact
+  as the readings are frequent.
 - `window` and `resetsAt` are set on `limited` and `limit_cleared` only. `login_expiring` is
   written once per expiry date.
 - Events come oldest first, at most `--limit` (default 200). `text` is scrubbed like every status
@@ -2050,8 +2104,9 @@ empty lists, and the events record keeps only each label's newest line.
     account's last check or probe says `login_rejected`, `check_failed` or `wrong_account`, so a
     doubt that the row's own code hides (under `account_ended`, or under a code ranked above it)
     still counts. A probe's `login_rejected` stays until the status sees a stored reading newer
-    than the latest one it had seen (section 4) or records a probe that works with a newer
-    reading, which `refresh` keeps trying even while the reading is fresh (6.2), or until `login`
+    than the time the rejection is dated to (section 4) or, with no stored reading it can read,
+    records a probe that works with a newer reading, which `refresh` keeps trying even while the
+    reading is fresh (6.2), or until `login`
     completes a new sign-in (the folder was signed out before the run, or `claude auth login`
     exited 0); a check that sees only the old sign-in, such as the one a refused
     `login <label> --browser` records, leaves it, so the folder does not read "Signed in" in
@@ -2197,7 +2252,12 @@ empty lists, and the events record keeps only each label's newest line.
   from the stored one, compared without letter case as the sign-in check compares them, also
   forgets the recorded plan (`expectedPlanTier`, 7.1) in the same write that saves the new email,
   and deletes the label's stored reading just before that write (6.3), under the pick lock and the
-  label's probe lock. A refused change and the same email again keep both; once the new email is saved, the
+  label's probe lock. A change refused before that delete, such as one whose value is not an email
+  address or one that cannot have the probe lock, and the same email again keep both. A change
+  that the registry save refuses, such as while another folder account's folder is wider than
+  0700, keeps the email and the plan but has deleted the reading, and it runs no status rebuild,
+  so the next probe reads the account anew and the next rebuild can record `limit_cleared` (6.3).
+  Once the new email is saved, the
   old reading and plan are gone whatever the sign-in check that follows reports, and when that
   check places the new sign-in it records the new plan. A rename of a `login` account moves its
   reading and its open leases to the new label once the registry is saved, so a rename that the

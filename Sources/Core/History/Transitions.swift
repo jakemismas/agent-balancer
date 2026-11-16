@@ -210,6 +210,9 @@ public struct StatusObservations: Sendable {
     /// Labels whose stored reading the command deleted because the sign-in the label stands for
     /// changed. Their rebuild records no `limit_cleared`, as a removed account's records none.
     public var readingDropped: Set<String> = []
+    /// Labels whose token the command saved and whose first probe of it the rebuild folds while
+    /// the command still holds the label's probe lock.
+    public var newToken: Set<String> = []
     /// What the duplicate check found for each token account a probe of this command read.
     public var duplicates: [String: DuplicateCheck] = [:]
 
@@ -306,10 +309,12 @@ enum Transitions {
 
     /// The entry with this run's observations folded in. The state fields are not touched.
     /// `storedReadAt` is the time of the account's stored reading as this rebuild read it.
+    /// `newToken` says `probe` is the first probe of a token the command saved, folded under the
+    /// label's probe lock.
     static func observed(
         _ previous: CurrentEntry?, account: Account, auth: AuthObservation?,
         probe: ProbeObservation?, duplicate: DuplicateCheck = .notRun, storedReadAt: Date? = nil,
-        now: Date
+        newToken: Bool = false, now: Date
     ) -> CurrentEntry {
         var entry =
             previous
@@ -358,9 +363,12 @@ enum Transitions {
             // A probe that fails for another reason says nothing new about the sign-in, and one
             // whose reading the status had already seen may be older than the rejection, so only
             // a probe that works with a newer reading ends a probe's rejection.
+            // A stored reading read here decides above; one older than the probe's means doubt.
+            // A new token's first probe is newer than every rejection, whatever the clock read.
             let stands =
                 entry.probeError?.code == StateCode.loginRejected.rawValue
-                && !probe.worked(after: entry.lastReadingAt)
+                && !(newToken && probe.worked(after: nil))
+                && (storedReadAt != nil || !probe.worked(after: entry.lastReadingAt))
             if !stands {
                 entry.probeError = probe.error.map {
                     IssueRecord(Issue($0.code, $0.severity, clean($0.text)))

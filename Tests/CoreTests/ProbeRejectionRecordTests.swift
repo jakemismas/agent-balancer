@@ -119,7 +119,7 @@ import Testing
             ("after seen", .after(seen), false),
             ("after newer", .after(seen.addingTimeInterval(1)), true),
         ]
-        // A rebuild that could not read the stored reading, or that read the one it had seen.
+        // Only a rebuild that could not read the stored reading goes by the probe's own time.
         for stored in [nil, seen] as [Date?] {
             for (name, readAt, ends) in times {
                 let folded = Transitions.observed(
@@ -127,7 +127,7 @@ import Testing
                     probe: ProbeObservation(error: nil, readAt: readAt), storedReadAt: stored,
                     now: Date())
                 #expect(
-                    (folded.probeError == nil) == ends,
+                    (folded.probeError == nil) == (ends && stored == nil),
                     "\(name), \(stored == nil ? "no stored reading" : "the seen one stored")")
             }
         }
@@ -393,18 +393,158 @@ import Testing
         }
     }
 
+    // MARK: the time a standing rejection keeps
+
+    @Test func whileAProbesRejectionStandsNoRebuildMovesItsTimeBack() throws {
+        // The rejection's rebuild read a reading, or had none and was dated to its own second.
+        let seen = labReading(secondsAgo: 300)
+        let rebuiltAt = seen.readAt.addingTimeInterval(120.5)
+        for hadReading in [true, false] {
+            let t = try TestHome()
+            try ConfigStore(context: t.context).save(Config(accounts: [lab]))
+            let store = ReadingStore(context: t.context)
+            if hadReading { try store.save(seen, label: "lab") }
+            try StatusBuilder.rebuild(
+                context: t.context,
+                observations: StatusObservations(probe: ["lab": ProbeObservation(error: rejection)]
+                ),
+                now: rebuiltAt)
+            let dated = try #require(StatusBuilder.probeRejection(context: t.context, account: lab))
+            let second = Date(timeIntervalSince1970: floor(rebuiltAt.timeIntervalSince1970))
+            #expect(dated == (hadReading ? seen.readAt : second), "\(hadReading)")
+            // A copy an hour older is put in place, and rebuilds read it.
+            var older = seen
+            older.readAt = seen.readAt.addingTimeInterval(-3600)
+            try store.save(older, label: "lab")
+            try StatusBuilder.rebuild(context: t.context, now: rebuiltAt.addingTimeInterval(60))
+            try StatusBuilder.rebuild(context: t.context)
+            #expect(
+                StatusBuilder.probeRejection(context: t.context, account: lab) == dated,
+                "\(hadReading)")
+            // So the reading the rejection saw, put back, does not end it either.
+            try store.save(seen, label: "lab")
+            try StatusBuilder.rebuild(context: t.context)
+            #expect(
+                StatusBuilder.probeFoundSignInRejected(context: t.context, account: lab),
+                "\(hadReading)")
+        }
+    }
+
+    @Test func aRejectionIsDatedNoEarlierThanTheLatestReadingTheStatusHadSeen() throws {
+        // The rejection's rebuild read an older copy, or none with its clock set back before it.
+        let seen = labReading(secondsAgo: 300)
+        for hadReading in [true, false] {
+            let t = try TestHome()
+            try ConfigStore(context: t.context).save(Config(accounts: [lab]))
+            let store = ReadingStore(context: t.context)
+            try store.save(seen, label: "lab")
+            try StatusBuilder.rebuild(context: t.context, now: seen.readAt)
+            if hadReading {
+                var older = seen
+                older.readAt = seen.readAt.addingTimeInterval(-3600)
+                try store.save(older, label: "lab")
+            } else {
+                try store.delete(label: "lab")
+            }
+            try StatusBuilder.rebuild(
+                context: t.context,
+                observations: StatusObservations(probe: ["lab": ProbeObservation(error: rejection)]
+                ),
+                now: seen.readAt.addingTimeInterval(-30))
+            #expect(
+                StatusBuilder.probeRejection(context: t.context, account: lab) == seen.readAt,
+                "\(hadReading)")
+            // The reading the status had seen, back in place, does not end the rejection.
+            try store.save(seen, label: "lab")
+            try StatusBuilder.rebuild(context: t.context)
+            #expect(
+                StatusBuilder.probeFoundSignInRejected(context: t.context, account: lab),
+                "\(hadReading)")
+            // A reading a second newer does.
+            var newer = seen
+            newer.readAt = seen.readAt.addingTimeInterval(1)
+            try store.save(newer, label: "lab")
+            try StatusBuilder.rebuild(context: t.context)
+            #expect(
+                !StatusBuilder.probeFoundSignInRejected(context: t.context, account: lab),
+                "\(hadReading)")
+        }
+    }
+
+    @Test func aLoginOrFolderAccountsRejectionWithNoUsableReadingIsDatedToItsRebuild() throws {
+        let main = Account(
+            label: "main", kind: Kind.login, role: Role.pool, email: "main@example.com")
+        func rejected(_ label: String) -> StatusObservations {
+            StatusObservations(probe: [label: ProbeObservation(error: rejection)])
+        }
+        // The rejection's rebuild ran partway through a second, with no usable reading.
+        let seen = labReading(secondsAgo: 600)
+        let rebuiltAt = seen.readAt.addingTimeInterval(480.75)
+        let second = seen.readAt.addingTimeInterval(480)
+        let firstReads: [(String, Date, Bool)] = [
+            ("dated before", seen.readAt.addingTimeInterval(300), false),
+            ("same second", second, false), ("a second later", second.addingTimeInterval(1), true),
+        ]
+        for other in [main, account] {
+            for unreadable in [false, true] {
+                for (name, dated, ends) in firstReads {
+                    let form = "\(other.kind), \(unreadable ? "cannot be read" : "none"), \(name)"
+                    let t = try TestHome()
+                    try ConfigStore(context: t.context).save(Config(accounts: [other]))
+                    let store = ReadingStore(context: t.context)
+                    if unreadable {
+                        try store.save(seen, label: other.label)
+                        try StatusBuilder.rebuild(context: t.context, now: seen.readAt)
+                        try whileReadingCannotBeRead(t, other.label) {
+                            try StatusBuilder.rebuild(
+                                context: t.context, observations: rejected(other.label),
+                                now: rebuiltAt)
+                        }
+                    } else {
+                        try StatusBuilder.rebuild(
+                            context: t.context, observations: rejected(other.label),
+                            now: rebuiltAt)
+                    }
+                    // A rebuild with no usable reading that records no rejection keeps that time.
+                    if !unreadable {
+                        try StatusBuilder.rebuild(
+                            context: t.context, now: rebuiltAt.addingTimeInterval(60))
+                    }
+                    #expect(
+                        StatusBuilder.probeRejection(context: t.context, account: other) == second,
+                        "\(form)")
+                    var reading = seen
+                    reading.readAt = dated
+                    try store.save(reading, label: other.label)
+                    try StatusBuilder.rebuild(context: t.context)
+                    #expect(
+                        StatusBuilder.probeFoundSignInRejected(context: t.context, account: other)
+                            == !ends, "\(form)")
+                }
+            }
+        }
+    }
+
     // MARK: a stored reading the rejection's rebuild cannot read
+
+    /// Runs `body` while the stored reading of `label` exists but cannot be read, then makes it
+    /// readable again, pass or fail.
+    func whileReadingCannotBeRead(_ t: TestHome, _ label: String, _ body: () throws -> Void)
+        throws
+    {
+        let path = t.context.dataRoot.appendingPathComponent("state/readings/\(label).json").path
+        try #require(chmod(path, 0) == 0)
+        defer { chmod(path, 0o600) }
+        #expect(throws: (any Error).self) {
+            try ReadingStore(context: t.context).load(label: label)
+        }
+        try body()
+    }
 
     /// Runs `body` while lab's stored reading exists but cannot be read, then makes it readable
     /// again, pass or fail.
     func whileLabReadingCannotBeRead(_ t: TestHome, _ body: () throws -> Void) throws {
-        let path = t.context.dataRoot.appendingPathComponent("state/readings/lab.json").path
-        try #require(chmod(path, 0) == 0)
-        defer { chmod(path, 0o600) }
-        #expect(throws: (any Error).self) {
-            try ReadingStore(context: t.context).load(label: "lab")
-        }
-        try body()
+        try whileReadingCannotBeRead(t, "lab", body)
     }
 
     @Test func aRejectionWhoseRebuildCannotReadTheStoredReadingEndsOnlyOnALaterReading() throws {

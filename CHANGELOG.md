@@ -18,7 +18,7 @@
 - Add the no-follow reader and writer, the fake `claude` and recorded auth fixtures for tests.
 - Add `refresh [--label <label>] [--force]`: a one-turn probe per `login` and `token` account that
   stores each reading (percent from 0 to 100, source `probe`) under `~/.agent-balancer/state/`,
-  with a lock per account, a fresh probe folder per probe and a Fable probe at most once a day.
+  with a lock per account, a fresh probe folder per probe and a Fable probe once a day.
   Add the `fable` and `picker.maxReadingAgeMinutes` settings, stream fixtures for the probe and
   the token file path builder.
 - Bound a probe's reset time to its window (5 hours, 7 days or 31 days from the probe, with
@@ -342,7 +342,9 @@
   under the removed label, which `add`, `init` or a rerun of `remove` deletes. The same email again
   keeps the reading. The command's own rebuild records no `limit_cleared` for the reading it
   deletes, as `remove` records none; another rebuild that runs during the command's sign-in check
-  or first probe can still record one.
+  or first probe can still record one, and so can the next rebuild after a change that stopped
+  once it had deleted the reading, such as an email change that the registry save refuses, which
+  keeps the email and the plan.
 - The email change also forgets the recorded plan in the same write. Its own check, or else the
   next `refresh` or folder `login`, records the new sign-in's plan once it places that sign-in, so
   no check reports `plan_changed` against the old plan. An ending-soon plan drop that a check of
@@ -358,7 +360,8 @@
   a pick made before the rename counts for it. A rename that the registry save refuses moves
   nothing. A launch file such a pick wrote stays under the old label while its lease is open: a
   token saved later under that label is never written into it, and `remove` of that label keeps it
-  as a tombstone while the lease is open. `pick` and `run` read the registry again under the pick lock and skip or refuse an
+  as a tombstone while the lease is open, unless the account removed there is a `folder` account,
+  whose remove deletes it. `pick` and `run` read the registry again under the pick lock and skip or refuse an
   account that it no longer holds under its label, so a pick that began before a rename never
   judges the renamed account by a reading of the account added under its old label.
   `history --json` lists an account's lines by its key, so they follow a rename and another
@@ -369,3 +372,32 @@
 - A token save writes the new token only into the label's launch files that already carry a token,
   so a launch file with no token, such as a renamed login account's, never gains one.
 - CI's check job stops after 20 minutes.
+- A probe reply whose usage value for a window is above 1, as the client reports once use runs
+  past a window's cap, counts as full use of that window (100 percent) instead of failing as
+  `check_failed`, so its other windows are read. A full `five_hour` or `seven_day` window shows the
+  account as `limited` until that window resets; a full Fable window, read while `fable.probe` is
+  on, gives the `fable_limited` warning, so only Fable picks skip the account; any other window
+  changes no state. A negative, infinite or non-number value still fails the whole reading, with
+  the text `Check failed: the probe gave a usage value that is negative or not a number.`
+- A Fable probe still running when its `pick` rebuilds the status, or when its command's process
+  ends, no longer counts as tried, so it stays due for the next Fable pick, and for the next
+  `refresh` once a day has passed since the last one counted, instead of waiting a day. A probe of a
+  pick that is still running at the deadline and ends with an auth error before the pick's status
+  rebuild is recorded as the account's `login_rejected`, also when the pick ends `pick busy`, and
+  when it ends so before the pick decides, the pick skips the account as `login rejected`: the pick
+  reads its own probes' results and other commands' recorded rejections after its sign-in checks
+  under the pick lock. `refresh` records what each account's probes found in the status as that
+  account's refresh ends, before it lets that account's probe lock go, so a refresh that the menu
+  ends after its 300 second timeout keeps what its finished probes found, except a result whose own
+  rebuild could not save `state/current.json`, which the refresh's last rebuild records instead.
+- A probe's rejection of a sign-in is dated no earlier than the latest reading the status had
+  seen, also when its rebuild reads an older reading or none, and while it stands no status
+  rebuild moves that time back. A working probe ends it through a stored reading newer than that
+  time, and through its own reading time only when the rebuild cannot read the stored reading. So
+  an older working probe whose rebuild lands late after a clock step, an older reading after the
+  clock was set back before a rejection recorded with no usable reading, and a reading file put
+  back in an older form no longer end a newer rejection, and `pick` and `run` keep the token out
+  until a probe that works stores a reading newer than the rejection. A `login` that saves a new
+  token ends a probe's rejection of the token it replaced once its first check works, also when
+  the rejection is dated ahead of the clock. The architecture document names the routes that
+  remain.

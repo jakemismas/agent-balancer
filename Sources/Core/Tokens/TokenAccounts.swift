@@ -51,7 +51,8 @@ public enum TokenAccounts {
     }
 
     /// How long a command waits for a label's probe lock: a refresh holds it through the plain
-    /// probe, the Fable probe and the sign-in checks around them.
+    /// probe, the Fable probe and the sign-in checks around them, and also through the status
+    /// rebuilds that record them, which this wait does not count.
     static func probeLockWait(_ config: Config?) -> TimeInterval {
         let probe = config?.probe.timeoutSeconds ?? ProbeSettings().timeoutSeconds
         let fable = config?.fable.probeTimeoutSeconds ?? FableSettings().probeTimeoutSeconds

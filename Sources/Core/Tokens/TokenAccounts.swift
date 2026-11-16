@@ -408,8 +408,12 @@ public enum TokenAccounts {
         /// Each may hold a launch file with a token.
         public let otherCase: Int
         /// Entries where a label's launch folder belongs that are a link, a file or another
-        /// user's folder, never followed. A launch file with a token may be behind each.
+        /// user's folder, or that `lstat` cannot check, never followed. A launch file with a token
+        /// may be behind each.
         public let notFollowed: Int
+        /// How many of `notFollowed` `lstat` cannot check, such as a folder whose access list
+        /// denies its owner.
+        public let unchecked: Int
     }
 
     /// `uninstall`'s first step, under the pick lock the caller holds (`takeLock`): every launch
@@ -417,7 +421,8 @@ public enum TokenAccounts {
     /// session record names it, an open lease holds it, it is younger than `leaseMinutes`, or the
     /// records cannot be read cleanly; every one is kept when the lease file is there and cannot
     /// be read or decoded. Then a read-back that no launch file holds a token: when one does, it
-    /// throws, and no token file or anything after it goes, so a rerun can finish.
+    /// throws `LaunchFiles.notClearedText`, which names the fix, and no token file or anything
+    /// after it goes.
     static func clearLaunchFilesForUninstall(
         context: ToolContext, leaseMinutes: Int, snapshot: SessionsSnapshot, now: Date
     ) throws -> LaunchCleared {
@@ -428,13 +433,12 @@ public enum TokenAccounts {
             context: context, snapshot: snapshot, leased: Set((open ?? []).map(\.id)),
             keepModifiedAfter: now.addingTimeInterval(-span), keepAll: open == nil)
         guard try LaunchFiles.tokenHolderCount(context: context) == 0 else {
-            throw ToolError(
-                "A launch file could not be cleared, so the token files were kept. Run `agent-balancer uninstall` again."
-            )
+            throw ToolError(LaunchFiles.notClearedText)
         }
         return LaunchCleared(
             deleted: launch.deleted, kept: launch.tombstoned, left: launch.skipped,
-            otherCase: launch.otherCase, notFollowed: launch.notFollowed)
+            otherCase: launch.otherCase, notFollowed: launch.notFollowed,
+            unchecked: launch.unchecked)
     }
 
     /// What `uninstall`'s token file step did.
@@ -475,15 +479,20 @@ public enum TokenAccounts {
         return LeftoversLeft(temporaries: temporaries, others: max(0, shaped - temporaries))
     }
 
-    /// What `uninstall` says when token files could not be deleted.
+    /// What `uninstall` says when token files could not be checked or deleted. An access list or
+    /// a lock on a file or on its folder can stop either, and a writable folder does not change
+    /// that. The token folder passed the folder checks, so `chmod -h -N` opens it; a file may be a
+    /// link, so `-h` keeps `chmod` on the entry itself, and `chmod -N` clears a file whose access
+    /// list denies its owner `read`, which `chmod -h -N` cannot open.
     public static func undeletedTokenFilesText(_ count: Int) -> String {
-        "\(count) token files could not be deleted and still hold a token. Make `~/.agent-balancer/tokens/` writable and run `agent-balancer uninstall` again."
+        "\(count) token files could not be checked or deleted and may still hold a token. On `~/.agent-balancer/tokens`, run `chmod -h -N` and `chmod -h 700`, and run `chmod -h -N` on each token file in it, or `chmod -N` where that says Permission denied. Run `chflags -h nouchg` first on any of them that is locked. Then run `agent-balancer uninstall` again."
     }
 
     /// What `uninstall` says when the writer's temporary files in the token or launch folders
-    /// could not be deleted.
+    /// could not be checked or deleted, for the same reasons as a token file. It names only the
+    /// folders that hold one and are not a link, so no command acts outside the data folder.
     public static func undeletedTemporariesText(_ count: Int) -> String {
-        "\(count) temporary files could not be deleted and may hold a token. Make `~/.agent-balancer/tokens/` and the launch folders writable and run `agent-balancer uninstall` again."
+        "\(count) temporary files could not be checked or deleted and may hold a token. On each folder that holds one, `~/.agent-balancer/tokens` or a label's folder in `~/.agent-balancer/\(LaunchFiles.folder)/` that is not a link, run `chmod -h -N` and `chmod -h 700`, and run `chmod -h -N` on each temporary file in it, or `chmod -N` where that says Permission denied. Run `chflags -h nouchg` first on any of them that is locked. Then run `agent-balancer uninstall` again."
     }
 
     /// What `uninstall` says about entries named like a token file or a label's launch folder

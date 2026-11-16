@@ -27,9 +27,12 @@ public enum Uninstall {
         /// token. None is opened or deleted.
         public var otherCaseEntries: Int
         /// Entries in the launch folder where a label's folder belongs that are a link, a file or
-        /// another user's folder. A launch file with a token may be behind each, so it may hold
-        /// one; none is followed or opened.
+        /// another user's folder, or that `lstat` cannot check. A launch file with a token may be
+        /// behind each, so it may hold one; none is followed or opened.
         public var launchEntriesNotFollowed: Int
+        /// How many of `launchEntriesNotFollowed` `lstat` cannot check, such as a label's folder
+        /// whose access list denies its owner. The listing gives their count on a line of its own.
+        public var launchEntriesUnchecked: Int
         public var launchFiles: Int
         /// Launch files a session record still names; at least this many when `recordsReadable`
         /// is false.
@@ -84,9 +87,12 @@ public enum Uninstall {
         /// left unopened. Each may hold a token. They are not in `entriesLeft`.
         public var otherCaseEntries = 0
         /// Entries in the launch folder where a label's folder belongs that are a link, a file or
-        /// another user's folder, never followed. A launch file with a token may be behind each.
-        /// They are not in `entriesLeft`.
+        /// another user's folder, or that `lstat` cannot check, never followed. A launch file with
+        /// a token may be behind each. They are not in `entriesLeft`.
         public var launchEntriesNotFollowed = 0
+        /// How many of `launchEntriesNotFollowed` `lstat` cannot check. The closing text gives
+        /// their count on a line of its own.
+        public var launchEntriesUnchecked = 0
         /// True when nothing was left in the data folder, so it went too.
         public var dataFolderRemoved = false
     }
@@ -115,12 +121,14 @@ public enum Uninstall {
         func present(_ name: String) -> Bool { takeFile(writer, [], name, dryRun: true) }
         func count(_ top: [String]) -> Int { sweep(writer, top, dryRun: true, now: now).files }
         let state = sweep(writer, Layout.stateFolders, dryRun: true, now: now)
+        let notFollowed = LaunchFiles.notFollowedEntryCount(context: context)
         return Plan(
             links: links.count, linksIntact: links.filter(hooks.isIntact).count,
             hasLinksFile: present(HookRecord.fileName), tokenFiles: inventory.tokenFiles,
             temporaries: TokenAccounts.temporariesForUninstall(context: context),
             otherCaseEntries: TokenAccounts.otherCaseEntryCount(context: context),
-            launchEntriesNotFollowed: LaunchFiles.notFollowedEntryCount(context: context),
+            launchEntriesNotFollowed: notFollowed.all,
+            launchEntriesUnchecked: notFollowed.unchecked,
             launchFiles: inventory.launchFiles, launchFilesNamed: inventory.launchFilesNamed,
             recordsReadable: inventory.recordsReadable, leasesReadable: inventory.leasesReadable,
             stateFiles: state.files, stateTemporariesInUse: state.inUse,
@@ -164,6 +172,7 @@ public enum Uninstall {
             result.entriesLeft += launch.left
             result.otherCaseEntries += launch.otherCase
             result.launchEntriesNotFollowed = launch.notFollowed
+            result.launchEntriesUnchecked = launch.unchecked
             try afterStep(.launchFiles)
 
             let tokens = try TokenAccounts.deleteTokenFilesForUninstall(context: context)

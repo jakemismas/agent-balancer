@@ -361,7 +361,8 @@
   nothing. A launch file such a pick wrote stays under the old label while its lease is open: a
   token saved later under that label is never written into it, and `remove` of that label keeps it
   as a tombstone while the lease is open, unless the account removed there is a `folder` account,
-  whose remove deletes it. `pick` and `run` read the registry again under the pick lock and skip or refuse an
+  whose remove deletes it unless a session record names it or the session records cannot be read
+  cleanly. `pick` and `run` read the registry again under the pick lock and skip or refuse an
   account that it no longer holds under its label, so a pick that began before a rename never
   judges the renamed account by a reading of the account added under its old label.
   `history --json` lists an account's lines by its key, so they follow a rename and another
@@ -377,8 +378,10 @@
   `check_failed`, so its other windows are read. A full `five_hour` or `seven_day` window shows the
   account as `limited` until that window resets; a full Fable window, read while `fable.probe` is
   on, gives the `fable_limited` warning, so only Fable picks skip the account; any other window
-  changes no state. A negative, infinite or non-number value still fails the whole reading, with
-  the text `Check failed: the probe gave a usage value that is negative or not a number.`
+  changes no state. A negative or non-number value, minus infinity included, still fails the
+  whole reading, with the text `Check failed: the probe gave a usage value that is negative or not
+  a number.`; a number too large to read, such as `1e999`, leaves its reply line unread, as any
+  line that does not parse.
 - A Fable probe still running when its `pick` rebuilds the status, or when its command's process
   ends, no longer counts as tried, so it stays due for the next Fable pick, and for the next
   `refresh` once a day has passed since the last one counted, instead of waiting a day. A probe of a
@@ -389,7 +392,12 @@
   under the pick lock. `refresh` records what each account's probes found in the status as that
   account's refresh ends, before it lets that account's probe lock go, so a refresh that the menu
   ends after its 300 second timeout keeps what its finished probes found, except a result whose own
-  rebuild could not save `state/current.json`, which the refresh's last rebuild records instead.
+  rebuild was skipped, saved no `state/current.json` or failed, which only the refresh's last
+  rebuild would record, and one whose own rebuild had not finished when the menu ended the
+  refresh. The menu's end stops the last rebuild, so both are lost from the status, though a
+  reading a working probe stored shows at the next rebuild and a token account's rejection that
+  its own rebuild recorded still keeps the token out; any other error waits for the account's
+  next probe.
 - A probe's rejection of a sign-in is dated no earlier than the latest reading the status had
   seen, also when its rebuild reads an older reading or none, and while it stands no status
   rebuild moves that time back. A working probe ends it through a stored reading newer than that
@@ -398,6 +406,34 @@
   clock was set back before a rejection recorded with no usable reading, and a reading file put
   back in an older form no longer end a newer rejection, and `pick` and `run` keep the token out
   until a probe that works stores a reading newer than the rejection. A `login` that saves a new
-  token ends a probe's rejection of the token it replaced once its first check works, also when
-  the rejection is dated ahead of the clock. The architecture document names the routes that
+  token ends a probe's rejection recorded before its first check once that check works, also when
+  the rejection is dated ahead of the clock, in the status rebuild that records the check; when
+  that rebuild is skipped at its 30 second wait for the history lock, saves no
+  `state/current.json` or fails, a rejection dated ahead of the clock stands until another such
+  `login` or a stored reading newer than it. The architecture document names the routes that
   remain.
+- A login account's "Login rejected" text, and `login`'s refusal of a login account, say to run
+  `agent-balancer refresh` after you sign in again, not `agent-balancer doctor`, which records no
+  sign-in check and so left the error in place. `refresh` records the check and probes again an
+  account whose sign-in a probe found rejected.
+- `uninstall`'s refusal of a folder that cannot be opened or searched names `chmod -N <folder>`
+  and then `chmod 700 <folder>`, since `chmod 700` leaves an access list in place, and its
+  refusal of a folder that `lstat` cannot check, which may be a link, names `chmod -h -N <folder>`,
+  or `chmod -N <folder>` if that says Permission denied, and then `chmod -h 700 <folder>`. The
+  texts for token files and temporary files that could not be checked or deleted name
+  `chmod -h -N` and `chmod -h 700` on the folders that hold them and `chmod -h -N` on each file,
+  or `chmod -N` where that says Permission denied, with `chflags -h nouchg` first on one that is
+  locked, and a launch file that `uninstall` cannot clear, such as one whose access list denies
+  its owner `delete`, stops it with a text that names the same commands on each label's launch
+  folder that is not a link and on each file directly in it, instead of only a rerun. `-h` makes
+  `chmod` act on a link itself, not on what it points to, and plain `chmod -N` clears a list that
+  denies its owner `read`, where `chmod -h -N`, which opens the entry, cannot. Naming only the
+  label folders that are not a link keeps every command off a folder that a link there points to.
+  An entry where a label's launch folder belongs that `lstat` cannot check, such as a folder whose
+  access list denies its owner `readattr`, gets its own line in the listing and the closing text
+  instead of being called a link, a file or another user's folder.
+- The Manage window's ending-soon tip gives its two rules in two sentences. A pick whose chosen
+  account's weekly window has no reset time says `resets an unknown time` instead of a made-up
+  date. `docs/CONTRACT.md` names a token account's `login` among the commands that probe, and
+  section 10.1 of the architecture doc says that the status document's `next` keeps the main
+  account's probe-source rule.

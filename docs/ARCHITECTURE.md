@@ -252,7 +252,8 @@ newer than that time clears the rejection. A probe that works with a newer readi
 only when its rebuild has no stored reading it can read and decode: while it reads one, that
 reading decides, because a stored reading older than the probe's own puts the order in doubt (a
 clock set back, or a file put back). One probe clears it whatever the times: the first check of
-a token that `login` saves, when it works (4A.5). `refresh` probes again an account whose sign-in
+a token that `login` saves, when it works and the rebuild that records it saves
+`state/current.json` (4A.5). `refresh` probes again an account whose sign-in
 a probe found rejected, as the status records it, even when its reading is fresh (6.2).
 The app reads `status.json`, checks whether `config.json` exists (to choose the "no config yet"
 state), writes no file itself, and calls the CLI for actions.
@@ -535,7 +536,8 @@ stores a reading of the new token's reply alone, with nothing read under another
 first save after the token file went missing while the reading stayed, as after a restore from a
 backup that left out `tokens/`, which is excluded from backups (Where a token may be, below),
 deletes the old token's reading. When the first check works, it also ends a probe's rejection
-that stood for the label's earlier token, whatever the reading times (4A.5). Only a replace writes
+recorded before that check, whatever the reading times, once the status rebuild that records the
+check saves `state/current.json` (4A.5). Only a replace writes
 `token_replaced`.
 
 Removing: `remove <label>` never refuses because a session still names a launch file. Removing
@@ -627,7 +629,7 @@ file lands in it.
 | Kind | `pick` returns a recipe only when |
 |---|---|
 | `login` | `auth status` shows the default folder logged in as the configured email and plan |
-| `token` | The token file exists, is a regular file owned by the user with mode 0600, holds a token that parses, and its last probe did not end in an auth error. While its probe's `login_rejected` stands and the status has seen its latest reading (only a probe that works stores a newer one), it is skipped as `login rejected` before any probe, even on a fresh reading. `pick` and `run` read the rejection again under the pick lock right before they decide, `pick` after its sign-in checks there, and `pick` also skips the account when its own probe, still running at its deadline, ends with an auth error before the pick decides (6.4). A rejection whose command has not finished its status rebuild by then is not seen, nor is the pick's own probe while it still runs. The rejection ends once the status sees a stored reading newer than the time the rejection is dated to (section 4), or, when the rebuild has no stored reading it can read and decode, records a probe that works with a newer reading (a `refresh` probes it again, 6.2, and so does `login` when it saves a new token). A `login` that saves a new token also ends it once its first check of that token works, whatever the reading times: the rejection was of the token it replaced, and `login` records that check before it lets the label's probe lock go, so no later probe's rejection is ended by it. So a rejection dated to a reading stored while the wall clock ran ahead keeps the token out, once the clock is set right, until the clock passes that time, even when the token works again; a `login` with a new token whose first check works brings the account back at once. Otherwise the order of probes is judged by reading times, and no rebuild moves a standing rejection's time back, so neither a reading file put back in an older form nor an older working probe whose rebuild lands late after the wall clock is set back ends it while the stored reading can be read. Two routes remain. With the wall clock set back before a rejection, a reading or a working probe from before the step that no rebuild had seen can look newer than the rejection, when the stored reading cannot be read at the rebuild that records the rejection or at that probe's own late rebuild. And a process that runs as the user can write a reading newer than the rejection, or hide one no rebuild had seen while the rejection is recorded and put it back later (T16). A `state/current.json` that cannot be read, is of another schema version or is unsound counts as no rejection |
+| `token` | The token file exists, is a regular file owned by the user with mode 0600, holds a token that parses, and its last probe did not end in an auth error. While its probe's `login_rejected` stands and the status has seen its latest reading (only a probe that works stores a newer one), it is skipped as `login rejected` before any probe, even on a fresh reading. `pick` and `run` read the rejection again under the pick lock right before they decide, `pick` after its sign-in checks there, and `pick` also skips the account when its own probe, still running at its deadline, ends with an auth error before the pick decides (6.4). A rejection whose command has not finished its status rebuild by then is not seen, nor is the pick's own probe while it still runs. The rejection ends once the status sees a stored reading newer than the time the rejection is dated to (section 4), or, when the rebuild has no stored reading it can read and decode, records a probe that works with a newer reading (a `refresh` probes it again, 6.2, and so does `login` when it saves a new token). A `login` that saves a new token also ends it once its first check of that token works, whatever the reading times, in the status rebuild that records that check: the rejection was recorded before that check, of the token it replaced or of the new token by a probe that ran between the save and the check, and `login` holds the label's probe lock from that check until the rebuild has run, so no later probe's rejection is ended by it. So a rejection dated to a reading stored while the wall clock ran ahead keeps the token out, once the clock is set right, until the clock passes that time, even when the token works again; a `login` with a new token whose first check works brings the account back at once, once that rebuild saves `state/current.json`. When that rebuild is skipped at its 30 second wait for the history lock, saves no `state/current.json` or fails, nothing stored marks the check, so a rejection dated ahead of the clock stands, `pick` and `run` keep the token out, and the account comes back with another such `login` whose rebuild saves the file, or with a stored reading newer than the rejection once the clock passes its time; one dated at or before the clock ends at the next rebuild, which sees the check's newer stored reading. Otherwise the order of probes is judged by reading times, and no rebuild moves a standing rejection's time back, so neither a reading file put back in an older form nor an older working probe whose rebuild lands late after the wall clock is set back ends it while the stored reading can be read. Two routes remain. With the wall clock set back before a rejection, a reading or a working probe from before the step that no rebuild had seen can look newer than the rejection, when the stored reading cannot be read at the rebuild that records the rejection or at that probe's own late rebuild. And a process that runs as the user can write a reading newer than the rejection, or hide one no rebuild had seen while the rejection is recorded and put it back later (T16). A `state/current.json` that cannot be read, is of another schema version or is unsound counts as no rejection |
 | `folder` | `verify` passes (5.7): every link in the manifest is intact and no hook entry recorded at link time is gone. A folder account must be linked, always: a never-linked folder is refused with the reason `not linked`, because a folder without the shared settings runs with no hooks. A user with nothing to share still runs `link` once; it records an empty manifest |
 
 `init` always writes the hook record of the default folder, empty when there are no hooks. A
@@ -992,7 +994,7 @@ strings only, so editing the script a command points to is not seen.
 | Source | Gives | Cost | When |
 |---|---|---|---|
 | `claude auth status --json` | Logged in or not, email, `planTier`, `subscriptionType`, `loginExpiresAt`, `configDirectory` | Free (no model call) | Every refresh, every login and folder account |
-| One-turn probe | `rate_limit_event.rate_limit_info`: status, `unifiedWindows.five_hour` and `seven_day` utilization (0 to 1 on the wire, or above 1 once use runs past a window's cap, which counts as 1; a negative, infinite or non-number value, in any window with a valid name, is `check_failed`, 6.2) and `resetsAt` | About $0.008 API-equivalent | When the stored reading is older than `picker.maxReadingAgeMinutes`, or a stored five-hour or weekly reset time has passed (`pick`); on `refresh --force` and a token account's `login` (its first check); and on `refresh` for an account whose sign-in a probe found rejected, as the status records it |
+| One-turn probe | `rate_limit_event.rate_limit_info`: status, `unifiedWindows.five_hour` and `seven_day` utilization (0 to 1 on the wire, or above 1 once use runs past a window's cap, which counts as 1; a negative or non-number value, minus infinity included, in any window with a valid name, is `check_failed`, and a number too large to read leaves its line unread, 6.2) and `resetsAt` | About $0.008 API-equivalent | When the stored reading is older than `picker.maxReadingAgeMinutes`, or a stored five-hour or weekly reset time has passed (`pick`); on `refresh --force` and a token account's `login` (its first check); and on `refresh` for an account whose sign-in a probe found rejected, as the status records it |
 
 The probe reports utilization as a fraction from 0 to 1, or above 1 once use runs past a window's
 cap. The reader converts it once, at parse time, to percent from 0 to 100 with one decimal (0.456
@@ -1026,8 +1028,9 @@ claude -p "Reply with the single word OK." --model haiku --tools "" --disallowed
   command's process ends, is not counted, so it stays due for the next Fable pick, and for the
   next `refresh` once a day has passed since the last one counted.
 - The tool reads only `type == "rate_limit_event"` lines and the final `result` line's error
-  fields. Everything else is discarded unread. Captured stderr goes through the scrubber before
-  any log line.
+  fields. Everything else is discarded unread, a line that does not parse as JSON included, such
+  as one with a number too large to read. Captured stderr goes through the scrubber before any
+  log line.
 - `--safe-mode` keeps login and model selection working and stops CLAUDE.md, skills, plugins,
   hooks and MCP servers from loading. It is on only when `probe.safeMode` is true. If Claude Code
   does not know the flag, the row shows `check_failed` with the scrubbed error text; the probe
@@ -1183,8 +1186,8 @@ in place by hand, keeps the reading stored under the label, which then counts li
 The email change, the token save, the rename, `add` and `init` each hold the pick lock and, for
 each label whose reading they move or delete, that label's probe lock
 (`locks/probe-<label>.lock`), and let neither go until they have saved the change and moved or
-deleted the reading. A refresh holds a label's probe lock from a registry check it makes once it
-has the lock until it has saved its reading and run the status rebuild that records it (6.4), and
+deleted the reading. A `refresh` holds a label's probe lock from a registry check it makes once
+it has the lock until it has saved its reading and run the status rebuild that records it (6.4), and
 goes ahead only while the saved registry still
 holds the account it was given under that label, with the same `accountKey`, kind and email (the
 email compared without letter case), or while no registry is saved. So a probe already under way
@@ -1336,9 +1339,19 @@ The menu app runs `agent-balancer refresh` at launch when `status.json` is missi
 `agent-balancer status --cached` every 60 seconds so new readings show up. Every `refresh`
 rebuilds `status.json` (section 4) as each account's probes end, before it lets that account's
 probe lock go, and once more at its end with the sign-in checks and each result whose own rebuild
-did not save `state/current.json` (section 13), so a refresh that the menu ends after its 300
-second timeout keeps what its finished probes found, unless such a rebuild could not save that
-file. This version has no command that schedules `refresh` for
+did not finish with `state/current.json` saved (section 13), so a refresh that the menu ends after
+its 300 second timeout keeps what its finished probes found, unless such a rebuild was skipped at
+its 30 second wait for the history lock, saved no `state/current.json` or failed, or the menu
+ended the refresh after a probe finished but before that probe's own rebuild did. The menu's end
+stops the process, so the last rebuild does not run, and those results are lost from the status:
+a reading that a working probe stored shows at the next rebuild, a token account's rejection that
+its own rebuild recorded still keeps the token out, since that rebuild records it apart from
+`state/current.json`, and any other error is lost until the account's next probe. A failed plain
+probe leaves the reading as old as it was, so the next refresh probes the account again; a Fable
+probe whose own rebuild had not finished is not counted as tried (6.3), so the next refresh runs
+it again, while one whose own rebuild was skipped or saved no `state/current.json` was counted
+and runs again once a day has passed. Until then `pick` and `run` judge the account as they did
+before that probe. This version has no command that schedules `refresh` for
 people who use only the CLI: `schedule install` and `schedule remove`, which would manage a user
 LaunchAgent, are parked for a later release.
 
@@ -1762,9 +1775,11 @@ Field rules:
   `folder` account; null for `login` and `token` accounts).
 - The document carries a top-level `next` object (`label` is null when nothing fits),
   `{ "all": { "label", "reason" }, "fable": { "label", "reason" } }`, computed with the picker
-  rules but without leases and without the main account's probe-source and age rules, so the menu
-  header can show the next launch without running `pick`. `pick` confirms, and its answer can
-  differ while a lease is open or the main account's probe is old.
+  rules but without leases and without the age rule of `picker.maxReadingAgeMinutes`, the main
+  account's included, so the menu header can show the next launch without running `pick`. The
+  main account's probe-source rule stays: a main account whose reading is not a probe reading is
+  not picked for `next`. `pick` confirms, and its answer can differ while a lease is open or a
+  reading is old.
 - Error and warning texts are scrubbed of token-like strings, email addresses and ids before they
   are stored.
 
@@ -2106,7 +2121,8 @@ empty lists, and the events record keeps only each label's newest line.
     still counts. A probe's `login_rejected` stays until the status sees a stored reading newer
     than the time the rejection is dated to (section 4) or, with no stored reading it can read,
     records a probe that works with a newer reading, which `refresh` keeps trying even while the
-    reading is fresh (6.2), or until `login`
+    reading is fresh (6.2), or, for a token account, until `login` saves a new token whose first
+    check works and whose rebuild saves `state/current.json` (4A.5), or until `login`
     completes a new sign-in (the folder was signed out before the run, or `claude auth login`
     exited 0); a check that sees only the old sign-in, such as the one a refused
     `login <label> --browser` records, leaves it, so the folder does not read "Signed in" in
@@ -2333,15 +2349,40 @@ empty lists, and the events record keeps only each label's newest line.
   the closing text gives the count again and says to move the folder each link points to back in
   place of the link, delete a link that points nowhere and move any other entry out of the data
   folder, then run `agent-balancer uninstall` again.
+  On a line of its own it says how many entries in `launch/` where a label's folder belongs `lstat`
+  cannot check, such as a label's folder whose access list denies its owner `readattr`: the run
+  cannot tell what such an entry is, so it does not refuse it, and a launch file with a token may
+  be in it. `uninstall` counts each with the entries it does not follow and never opens it; the
+  closing text gives that count on its own and says to run `chmod -h -N` on each entry there, or
+  `chmod -N` where that says Permission denied, then run `agent-balancer uninstall` again. Such an
+  entry may be a link with an access list of its own, and `-h` makes `chmod` act on the link
+  itself, not on the folder it points to. `chmod -h -N` opens the entry, so it says Permission
+  denied where the access list also denies its owner `read` (`list` on a folder); plain
+  `chmod -N` does not open the entry and clears that list.
   Before it lists anything, and again before the removal starts, it refuses, removes nothing,
   follows nothing and exits 1 when the data folder, `tokens/` or `launch/` is there but is not a
   real folder of the user's that passes the folder checks (a link, a file, another user's folder,
-  or a folder wider than 0700 or one the user cannot open or search, such as one at 0600 or one
-  whose access list denies search), or when a label's folder in `launch/` is a folder of the
-  user's that is wider than 0700 or cannot be opened or searched, since a token file in it could
-  be neither counted nor deleted. The message names the folder, the problem and what to do, such
-  as moving the folder a link points to back in place of the link, or `chmod 700` on that folder. A
-  missing data folder has nothing to remove. It then removes its own files only after the typed word
+  an entry `lstat` cannot check, or a folder wider than 0700 or one the user cannot open or search,
+  such as one at 0600 or one whose access list denies its owner `list` or `search`), or when a
+  label's folder in `launch/` is a folder of the user's that is wider than 0700 or cannot be
+  opened or searched, since a token file in it could be neither counted nor deleted. The message
+  names the folder, the problem and what to do, such as moving the folder a link points to back in
+  place of the link, `chmod 700` on a folder wider than 0700, `chmod -N` and then `chmod 700` on
+  one that cannot be opened or searched, or, on an entry `lstat` cannot check, such as one whose
+  access list denies its owner `readattr`, `chmod -h -N`, or `chmod -N` if that says Permission
+  denied, and then `chmod -h 700`. `chmod -N` removes an access list, which `chmod 700` leaves in
+  place. A folder wider than 0700 or one that cannot be opened or searched is one `lstat` showed as
+  a real folder, never a link, so its commands need no `-h`, and plain `chmod -N` clears its list
+  without opening it. An entry `lstat` cannot check may be a link, so `-h` makes each command act
+  on the link itself; `-N` comes first because `chmod -h 700` fails as long as `lstat` cannot
+  check the entry, and `chmod -h -N` opens the entry, so where the access list also denies its
+  owner `read` it says Permission denied and plain `chmod -N` clears the list. Neither clears the
+  access list of a link whose own list denies its owner `read`: `chmod -h -N` cannot open it, and
+  `chmod -N` acts on what it points to, so the rerun stops again. Only a `chmod -h +a` on the link
+  itself makes such a link, since a new link takes no entry from its folder. A data folder in a
+  home the user cannot search cannot be checked either, and no command on the data folder reaches
+  it until the home can be searched again. A missing data folder has nothing to remove. It then
+  removes its own files only after the typed word
   `uninstall` in the user's own terminal (refused in a chat shell, 5.1). Once it holds the pick
   lock, the removal reads the session records and the config's `picker.leaseMinutes` again, so a
   session that started while the list was on screen keeps its launch file; the list may still show
@@ -2358,37 +2399,58 @@ empty lists, and the events record keeps only each label's newest line.
   files (such as at the read-back of step 1, or on a pick lock it cannot take), or when a token file
   or a temporary file that may hold a token could not be checked or deleted, or it left an entry
   that may hold one unopened (one named like a token file or a label's folder in other letter case,
-  or a link, a file or another user's folder where a label's folder belongs in `launch/`), after
-  the closing text says so. Entries it did not make, kept tombstones, temporary files in `state/` it
-  keeps (step 4) and other files it could not delete do not change the exit status; a `state/`
-  link does not either, since no token is ever written there. The steps, in this order:
+  or a link, a file, another user's folder or an entry `lstat` cannot check where a label's folder
+  belongs in `launch/`), after the closing text says so. Entries it did not make, kept
+  tombstones, temporary files in `state/` it keeps (step 4) and other files it could not delete
+  do not change the exit status; a `state/` link does not either, since no token is ever written
+  there. The steps, in this order:
   1. Under the pick lock, every launch file of every label is deleted, except a file that a
      session record still names, that an open lease holds, or that is younger than
      `picker.leaseMinutes`, and except every file when the session records cannot be read
      cleanly or the lease file is there and cannot be read or decoded. Each such file is
      overwritten with a token-free tombstone and kept, with its folders, exactly as `remove`
-     keeps one (4A.4). A read-back then proves that no launch file holds a token; when one does,
-     `uninstall` stops with exit 1 and deletes no token file and nothing after it, so a rerun can
-     finish. A launch file's name that `lstat` cannot check, such as in a label's folder that
-     stopped being searchable after the check, counts as one that does. A link, a file or
-     another user's folder where a label's folder belongs, and a folder named like a label only
-     in other letter case, are never followed or opened: each is counted on its own, the run
-     goes on, and it exits 1 at the end.
+     keeps one (4A.4). A read-back then proves that no launch file holds a token. When one does,
+     or a launch file cannot be overwritten with a tombstone, `uninstall` stops with exit 1 and
+     deletes no token file and nothing after it, and its text says, on each label's folder in
+     `launch/` that is not a link, to run `chmod -h -N` and `chmod -h 700`, and `chmod -h -N` on
+     each file directly in it, or `chmod -N` where that says Permission denied, with
+     `chflags -h nouchg` first on any of them that is locked. That clears a folder that is not
+     writable, a lock, and an access list that denies the owner, set on a file or a folder or
+     inherited from the folder, so a rerun gets past this step; a temporary file that a failed
+     tombstone write could not delete is counted in step 3 with its own text, and a label's
+     folder that cannot be searched is refused on the rerun with its own text, as above. Those
+     label folders passed the folder checks, so `chmod -h -N` opens them, and a link where a
+     label's folder belongs is counted on its own, so no command the text names acts on the
+     folder a link points to or on the files in it. A launch file's name that `lstat` cannot
+     check, such as a file whose access list denies its owner `readattr` or one in a label's
+     folder that stopped being searchable after the check, counts as one that does. A link, a
+     file, another user's folder or an entry `lstat` cannot check where a label's folder belongs,
+     and a folder named like a label only in other letter case, are never followed or opened:
+     each is counted on its own, the run goes on, and it exits 1 at the end.
   2. Every token file goes: a regular file owned by the user named `<label>.json` directly in
      `tokens/`. A token file that cannot be deleted, such as in a `tokens/` folder that is not
-     writable, still holds its token, and a token file's name that `lstat` cannot check may hold
-     one: each is counted on its own, the closing text says to make `tokens/` writable and run
-     `agent-balancer uninstall` again, the run exits 1, and the rerun lists it. An entry named
-     like one only in other letter case, and a folder in `launch/` named like a label only in
-     other letter case (step 1), stay unopened and are counted on their own.
+     writable or whose access list denies its owner `delete_child`, or one that is locked, still
+     holds its token, and a token file's name that `lstat` cannot check, such as a file whose
+     access list denies its owner `readattr`, may hold one: each is counted on its own, the
+     closing text says to run `chmod -h -N` and `chmod -h 700` on `tokens/`, and `chmod -h -N` on
+     each token file in it, or `chmod -N` where that says Permission denied, with
+     `chflags -h nouchg` first on any of them that is locked, then run `agent-balancer uninstall`
+     again, the run exits 1, and the rerun lists it. An entry named
+     like one only in other letter case, and a folder in `launch/`
+     named like a label only in other letter case (step 1), stay unopened and are counted on
+     their own.
   3. The writer's leftover temporary files (`.tmp-<16 hex>`) in `tokens/`, in the launch folders
      and directly in the data folder go, then each token or launch folder that is left empty. One
-     in `tokens/` or a launch folder may hold a token: when it cannot be deleted, or `lstat`
-     cannot check it, it is counted on its own, the closing text says what to do, the run exits
-     1, and a rerun lists it. One directly in the data folder comes from a save of `config.json`,
-     which holds the pick lock, or of `links.json`, which holds the links lock, so those go only
-     while the links lock is held too; when it cannot be had within 30 seconds they stay and are
-     counted.
+     in `tokens/` or a launch folder may hold a token: when it cannot be deleted, such as in a
+     folder whose access list denies its owner `delete_child`, or `lstat` cannot check it, such
+     as one whose access list denies its owner `readattr`, it is counted on its own, the closing
+     text says, on each folder that holds one, `tokens/` or a label's folder in `launch/` that is
+     not a link, to run `chmod -h -N` and `chmod -h 700`, and `chmod -h -N` on each temporary file
+     in it, or `chmod -N` where that says Permission denied, with `chflags -h nouchg` first on any
+     of them that is locked, the run exits 1, and a rerun lists it. One directly in the data
+     folder comes from a save of `config.json`, which holds the pick lock, or of `links.json`,
+     which holds the links lock, so those go only while the links lock is held too; when it
+     cannot be had within 30 seconds they stay and are counted.
   4. State, logs, backups and probe leftovers go, by these name rules, each taken from the code
      that writes the file:
      - `state/`: `status.json` and `current.json` (the status rebuild), `events.jsonl` and the
@@ -2456,11 +2518,11 @@ empty lists, and the events record keeps only each label's newest line.
   `invalid` and the account label, so a session that reads it fails to sign in instead of falling
   back to the stored login of the default folder, which is another account. After `uninstall` no
   launch file it can reach holds a token, whether or not a session record names it. It never
-  follows a link, opens a file or enters another user's folder where a label's folder belongs in
-  `launch/`, and never opens a folder there named like a label only in other letter case; a
-  launch file with a token may be behind any of them, so it counts each, says what to do and
-  exits 1. Only `agent-balancer uninstall` and `remove` delete token files in bulk, after the
-  typed word.
+  follows a link, opens a file, enters another user's folder or opens an entry `lstat` cannot
+  check where a label's folder belongs in `launch/`, and never opens a folder there named like a
+  label only in other letter case; a launch file with a token may be behind any of them, so it
+  counts each, says what to do and exits 1. Only `agent-balancer uninstall` and `remove` delete
+  token files in bulk, after the typed word.
 
 ## 13. Data folder layout and permissions
 
@@ -2780,8 +2842,8 @@ public copy.
    claude.ai skills asks with `--full-login`. Token accounts cannot give those.
 7. **Read state** with `agent-balancer status --json --cached` for every periodic read: it reads
    saved readings only, starts no child process and never spends a model call. Plain
-   `status --json` may run `auth status` and never probes (only `refresh` and `pick` probe). Never
-   parse the menu or logs.
+   `status --json` may run `auth status` and never probes (only `refresh`, `pick` and a token
+   account's `login` probe). Never parse the menu or logs.
 8. **What changed:** `agent-balancer events --json --after <cursor>`. Keep the `cursor` from each
    call and pass it back, and call again while `more` is true. A `recordId` you have not seen
    means the record was started over: treat it as a gap. On `gap: true`, read `status --json`

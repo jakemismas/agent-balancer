@@ -67,10 +67,13 @@ extension UninstallTests {
             }
             #expect(throws: refused) { _ = try run(t) }
             if mode & 0o100 == 0 {
-                // A folder in it that cannot be looked at is never read as missing.
+                // A folder in it that cannot be looked at is never read as missing: one the
+                // data folder opens for but `lstat` cannot check, or one it does not open for.
                 let entry = NoFollowWriter(root: root).placeEntry(
                     parent: [], name: TokenPaths.folderName)
-                #expect(entry == .problem(.cannotOpen), "\(mode)")
+                let problem: NoFollowWriter.FolderProblem =
+                    mode & 0o400 != 0 ? .cannotCheck : .cannotOpen
+                #expect(entry == .problem(problem), "\(mode)")
             }
             chmod(root.path, 0o700)
             #expect(tree(root) == before, "\(mode)")
@@ -91,8 +94,10 @@ extension UninstallTests {
         let before = tree(t.context.dataRoot)
         chmod(t.home.path, 0o000)
         defer { chmod(t.home.path, 0o700) }
-        // The data folder cannot even be looked at, which is not the same as missing.
-        let refused = refusal("The data folder", "~/.agent-balancer", 0o000)
+        // The data folder cannot even be looked at, which is not the same as missing: `lstat`
+        // cannot check it.
+        let refused = ToolError(
+            Messages.uninstallFolderRefused("The data folder", "~/.agent-balancer", .cannotCheck))
         #expect(throws: refused) { _ = try Uninstall.plan(context: t.context, leaseMinutes: 30) }
         #expect(throws: refused) { _ = try run(t) }
         chmod(t.home.path, 0o700)
@@ -202,9 +207,7 @@ extension UninstallTests {
         defer { chmod(folder.path, 0o700) }
         let listed = TokenAccounts.inventory(context: t.context, leaseMinutes: 30, snapshot: .empty)
         #expect(listed.launchFiles == 1)
-        let stopped = ToolError(
-            "A launch file could not be cleared, so the token files were kept. Run `agent-balancer uninstall` again."
-        )
+        let stopped = ToolError(Self.launchStop)
         #expect(throws: stopped) {
             _ = try TokenAccounts.clearLaunchFilesForUninstall(
                 context: t.context, leaseMinutes: 30, snapshot: .empty, now: Date())

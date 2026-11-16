@@ -68,9 +68,17 @@ struct UninstallCommand: ParsableCommand {
                 "\(plan.otherCaseEntries) entries in the token or launch folder are named like the tool's own in other letter case and may hold a token. They are left unopened, and the closing text says what to do."
             )
         }
-        if plan.launchEntriesNotFollowed > 0 {
+        // An entry `lstat` cannot check may be the user's own folder, so it is not called a link.
+        let unchecked = plan.launchEntriesUnchecked
+        let notFollowed = plan.launchEntriesNotFollowed - unchecked
+        if notFollowed > 0 {
             lines.append(
-                "\(plan.launchEntriesNotFollowed) entries in the launch folder where a label's folder belongs are a link, a file or another user's folder, and a launch file with a token may be behind them. They are not followed, and the closing text says what to do."
+                "\(notFollowed) entries in the launch folder where a label's folder belongs are a link, a file or another user's folder, and a launch file with a token may be behind them. They are not followed, and the closing text says what to do."
+            )
+        }
+        if unchecked > 0 {
+            lines.append(
+                "\(unchecked) entries in the launch folder where a label's folder belongs cannot be checked, and a launch file with a token may be in them. They are not opened, and the closing text says what to do."
             )
         }
         if plan.stateTemporariesInUse > 0 {
@@ -103,9 +111,12 @@ struct UninstallCommand: ParsableCommand {
         if done.otherCaseEntries > 0 {
             lines.append(TokenAccounts.otherCaseEntriesText(done.otherCaseEntries))
         }
-        if done.launchEntriesNotFollowed > 0 {
-            lines.append(LaunchFiles.notFollowedEntriesText(done.launchEntriesNotFollowed))
+        let unchecked = done.launchEntriesUnchecked
+        if done.launchEntriesNotFollowed - unchecked > 0 {
+            lines.append(
+                LaunchFiles.notFollowedEntriesText(done.launchEntriesNotFollowed - unchecked))
         }
+        if unchecked > 0 { lines.append(LaunchFiles.uncheckedEntriesText(unchecked)) }
         if done.launchFilesKept > 0 {
             lines.append(
                 "Kept \(done.launchFilesKept) launch files as tombstones. They hold no token, and a rerun of `agent-balancer uninstall` deletes them once nothing names them and \(rerunMinutes) minutes have passed since this run."

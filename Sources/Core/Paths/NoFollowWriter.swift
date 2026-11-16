@@ -556,18 +556,22 @@ extension NoFollowWriter {
         return (st.st_mode & S_IFMT) == S_IFDIR && st.st_uid == getuid() ? .folder : .other
     }
 
-    /// What keeps a real folder of the user's from passing the folder checks.
+    /// What keeps a folder of the user's from passing the folder checks, or keeps `lstat` from
+    /// telling what is there.
     public enum FolderProblem: Equatable, Sendable {
         /// Its group or others have some access.
         case widerThanPrivate
         /// It does not open for the user, such as one with no read or search access.
         case cannotOpen
+        /// `lstat` cannot check it, such as one whose access list denies its owner `readattr`,
+        /// so it may be a link, a file or a folder.
+        case cannotCheck
     }
 
     /// What keeps the real folder of the user's at `<root>/<parent...>/<name>` from passing the
     /// folder checks, the same checks as `placeEntry`, or nil when it passes, is missing, or is not
     /// a real folder of the user's (a link, a file or another user's folder, which callers count
-    /// and never open). An entry `lstat` cannot check there is `cannotOpen`.
+    /// and never open). An entry `lstat` cannot check there is `cannotCheck`.
     public func folderProblem(parent: [String], name: String) -> FolderProblem? {
         if case .problem(let problem) = placeEntry(parent: parent, name: name) { return problem }
         return nil
@@ -591,7 +595,7 @@ extension NoFollowWriter {
     public func rootEntry() -> PlaceEntry {
         var st = stat()
         guard lstat(root.path, &st) == 0 else {
-            return errno == ENOENT ? .missing : .problem(.cannotOpen)
+            return errno == ENOENT ? .missing : .problem(.cannotCheck)
         }
         return place(st, folders: [])
     }
@@ -605,7 +609,7 @@ extension NoFollowWriter {
         defer { close(dir) }
         var st = stat()
         guard fstatat(dir, name, &st, AT_SYMLINK_NOFOLLOW) == 0 else {
-            return errno == ENOENT ? .missing : .problem(.cannotOpen)
+            return errno == ENOENT ? .missing : .problem(.cannotCheck)
         }
         return place(st, folders: parent + [name])
     }

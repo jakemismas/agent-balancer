@@ -1719,6 +1719,9 @@ private final class Started: @unchecked Sendable {
         let cli = try setUp()
         defer { cli.cleanup() }
         try labAndASpare(cli)
+        // A fresh reading keeps main out of the first refresh's probes, so no reading save lands
+        // in the readings folder while it is moved away below.
+        #expect(try cli.run(["refresh", "--label", "main"]).status == 0)
         // An hour old, so the first refresh probes lab; the status sees that reading.
         try ageReading(cli, "lab")
         try ageReading(cli, "spare-a")

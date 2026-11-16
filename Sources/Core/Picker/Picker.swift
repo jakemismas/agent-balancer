@@ -45,6 +45,9 @@ public enum Picker {
         var index: Int
         var expiry: Date
         var expiryFromReset: Bool
+        /// The weekly reset time, nil when the reading has none; `expiry` then starts from the far
+        /// future.
+        var weeklyReset: Date?
         var room: Double
         var reason: String
         var fableNote: String?
@@ -106,7 +109,7 @@ public enum Picker {
         }
         let head =
             best.expiryFromReset
-            ? "Soonest weekly reset: resets \(shortTime(best.expiry))."
+            ? "Soonest weekly reset: resets \(shortTime(best.weeklyReset))."
             : "Soonest expiry: ends \(shortTime(best.expiry))."
         var reason = best.fableNote.map { head + " " + $0 } ?? head
         if !best.hasFiveHour {
@@ -220,7 +223,8 @@ public enum Picker {
         let note = five == nil ? " " + fiveHourUnknown : ""
         return .yes(
             Eligible(
-                index: index, expiry: expiry, expiryFromReset: fromReset, room: room,
+                index: index, expiry: expiry, expiryFromReset: fromReset,
+                weeklyReset: weekly.resetsAt, room: room,
                 reason: "Resets \(shortTime(weekly.resetsAt))." + note, fableNote: fableNote,
                 hasFiveHour: five != nil))
     }

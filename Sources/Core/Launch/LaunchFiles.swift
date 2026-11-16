@@ -409,26 +409,58 @@ extension LaunchFiles {
         /// Entries named like a label only in other letter case, never opened.
         var otherCase = 0
         /// Entries where a label's folder belongs that are not a real folder of the user's (a
-        /// link, a file or another user's folder), never followed or opened.
+        /// link, a file or another user's folder) or that `lstat` cannot check, never followed or
+        /// opened.
         var notFollowed = 0
+        /// How many of `notFollowed` `lstat` cannot check.
+        var unchecked = 0
     }
 
     /// How many entries in the launch folder have a label's name but are not a real folder of the
-    /// user's: a link, which may lead to the label's launch files, a file or another user's
-    /// folder. `lstat` only; nothing is followed or opened.
-    static func notFollowedEntryCount(context: ToolContext) -> Int {
+    /// user's: a link, which may lead to the label's launch files, a file, another user's folder,
+    /// or one `lstat` cannot check, which `unchecked` counts again. `lstat` only; nothing is
+    /// followed or opened.
+    static func notFollowedEntryCount(context: ToolContext) -> (all: Int, unchecked: Int) {
         let writer = NoFollowWriter(root: context.dataRoot)
         guard let names = try? writer.listNames(folders: [folder]),
             let real = try? writer.listFolders(folders: [folder])
-        else { return 0 }
+        else { return (0, 0) }
         let folders = Set(real)
-        return names.filter { ConfigValidator.isValidLabel($0) && !folders.contains($0) }.count
+        let entries = names.filter { ConfigValidator.isValidLabel($0) && !folders.contains($0) }
+        return (entries.count, entries.filter { isUnchecked(writer, $0) }.count)
+    }
+
+    /// Whether `lstat` cannot check `name` in the launch folder, such as a folder whose access
+    /// list denies its owner. Such an entry may be anything.
+    static func isUnchecked(_ writer: NoFollowWriter, _ name: String) -> Bool {
+        do {
+            _ = try writer.checkedInfo(folders: [folder], name: name)
+            return false
+        } catch {
+            return true
+        }
     }
 
     /// What `uninstall` says about entries where a label's folder belongs that it did not follow.
     public static func notFollowedEntriesText(_ count: Int) -> String {
         "\(count) entries in `~/.agent-balancer/launch/` where a label's folder belongs are a link, a file or another user's folder, so a launch file with a token may be behind them, and `uninstall` did not follow them. Move the folder each link points to back in place of the link, delete a link that points nowhere, and move any other entry out of `~/.agent-balancer`, then run `agent-balancer uninstall` again."
     }
+
+    /// What `uninstall` says about entries where a label's folder belongs that `lstat` could not
+    /// check, so it could not tell what they are. One may be a link with an access list of its
+    /// own, so `-h` keeps `chmod` off the folder it points to; `chmod -h -N` opens the entry, so
+    /// `chmod -N` clears one whose access list also denies its owner `read`.
+    public static func uncheckedEntriesText(_ count: Int) -> String {
+        "\(count) entries in `~/.agent-balancer/launch/` where a label's folder belongs could not be checked, so a launch file with a token may be in them, and `uninstall` did not open them. Run `chmod -h -N` on each entry there, or `chmod -N` where that says Permission denied, then run `agent-balancer uninstall` again."
+    }
+
+    /// What `uninstall` stops with when a launch file may still hold a token or could not be
+    /// overwritten: a folder that is not writable, a lock, or an access list that denies the owner
+    /// on a launch file or its folder, inherited or not, stops the step until the person clears
+    /// it. It names only the label folders that are real folders, which passed the folder checks
+    /// and so open for `chmod -h -N`; a link there is counted on its own.
+    public static let notClearedText =
+        "A launch file could not be cleared, so the token files were kept. On each label's folder in `~/.agent-balancer/launch/` that is not a link, run `chmod -h -N` and `chmod -h 700`, and run `chmod -h -N` on each file directly in it, or `chmod -N` where that says Permission denied. Run `chflags -h nouchg` first on any of them that is locked. Then run `agent-balancer uninstall` again."
 
     /// Whether `name` in the launch folder is a label only once its letter case is folded, such
     /// as `Pool-a`. On a volume that ignores case, a launch file for that label is written into
@@ -452,8 +484,9 @@ extension LaunchFiles {
     /// followed. An entry where a label's folder belongs that is not one, and one named like a
     /// label only in other letter case, may lead to launch files that hold a token: each is
     /// counted on its own and never followed or opened. A folder of the user's that is not
-    /// private stops the pass, before any token file goes. The writer's leftovers and the
-    /// folders stay for a later step. Callers hold the pick lock.
+    /// private stops the pass, before any token file goes, and so does a label's launch file that
+    /// cannot be cleared, with `notClearedText`. The writer's leftovers and the folders stay for
+    /// a later step. Callers hold the pick lock.
     static func clearForUninstall(
         context: ToolContext, snapshot: SessionsSnapshot, leased: Set<String>,
         keepModifiedAfter: Date, keepAll: Bool
@@ -479,11 +512,18 @@ extension LaunchFiles {
             }
             guard real.contains(name) else {
                 total.notFollowed += 1
+                if isUnchecked(writer, name) { total.unchecked += 1 }
                 continue
             }
-            let one = try clearFiles(
-                context: context, label: name, snapshot: snapshot, leased: leased,
-                keepModifiedAfter: keepModifiedAfter, keepAll: keepAll)
+            let one: RemovalCount
+            do {
+                one = try clearFiles(
+                    context: context, label: name, snapshot: snapshot, leased: leased,
+                    keepModifiedAfter: keepModifiedAfter, keepAll: keepAll)
+            } catch is ToolError {
+                // The writer's text names no fix, and the file may still hold its token.
+                throw ToolError(notClearedText)
+            }
             total.deleted += one.deleted
             total.tombstoned += one.tombstoned
             total.skipped += try strayCount(context: context, label: name)

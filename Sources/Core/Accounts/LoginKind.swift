@@ -18,12 +18,13 @@ public struct LoginKind: AccountKindHandler {
 
     /// Maps a reading to the codes of docs/ARCHITECTURE.md section 9 for a login account.
     public static func evaluate(_ status: AuthStatus, account: Account, now: Date) -> AccountCheck {
+        // `refresh` records a check and probes a probe's rejection again; `doctor` records none.
         guard status.loggedIn else {
             return AccountCheck(
                 issues: [
                     Issue(
                         .loginRejected, .error,
-                        "Login rejected. Run `claude` and sign in again, then run `agent-balancer doctor`."
+                        "Login rejected. Run `claude` and sign in again, then run `agent-balancer refresh`."
                     )
                 ], emailDigest: account.emailDigest)
         }

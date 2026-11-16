@@ -110,12 +110,8 @@ extension PersonCommandsCLITests {
         #expect(!output(done.stderr).contains("Error"))
         let shown = output(done.stdout)
         #expect(shown.contains("Deleted 0 token files"))
-        #expect(shown.contains(TokenAccounts.undeletedTokenFilesText(1)))
-        #expect(
-            shown.contains(
-                "1 token files could not be deleted and still hold a token. Make `~/.agent-balancer/"
-                    + TokenPaths.folderName
-                    + "/` writable and run `agent-balancer uninstall` again."))
+        #expect(shown.contains("\n" + TokenAccounts.undeletedTokenFilesText(1) + "\n"))
+        #expect(shown.contains("\n" + Self.tokenText(1) + "\n"))
         let again = output(try cli.run(["uninstall"], stdin: "no\n").stdout)
         #expect(again.contains("\n  token files: 1\n"))
     }
@@ -136,12 +132,9 @@ extension PersonCommandsCLITests {
         try #require(access(folder.path, W_OK) != 0)
         let done = try cli.run(["uninstall"], stdin: "uninstall\n")
         #expect(done.status == 1, "\(output(done.stderr))")
-        #expect(output(done.stdout).contains(TokenAccounts.undeletedTemporariesText(1)))
-        let said =
-            "1 temporary files could not be deleted and may hold a token. Make `~/.agent-balancer/"
-            + TokenPaths.folderName + "/` and the launch folders writable and run "
-            + "`agent-balancer uninstall` again."
-        #expect(output(done.stdout).contains(said))
+        #expect(
+            output(done.stdout).contains("\n" + TokenAccounts.undeletedTemporariesText(1) + "\n"))
+        #expect(output(done.stdout).contains("\n" + Self.temporariesText(1) + "\n"))
         let again = output(try cli.run(["uninstall"], stdin: "no\n").stdout)
         #expect(!again.contains("Nothing to remove"))
         #expect(again.contains("\n  temporary files that may hold a token: 1\n"))

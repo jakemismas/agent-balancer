@@ -92,7 +92,7 @@ public enum ManageTips {
     public static let tokenFile =
         "Saved in a private file under ~/.agent-balancer. Only you can read it."
     public static let endingSoon =
-        "Used up first unless it has no 5-hour reading, then treated as ended once its plan drops."
+        "Used up first unless it has no 5-hour reading. Treated as ended once its plan drops."
     public static let endsOn = "Set only a date you know, because launches stop after that day."
     public static let addFolder =
         "Full sign-in in its own folder. Needed for connectors and Remote Control."

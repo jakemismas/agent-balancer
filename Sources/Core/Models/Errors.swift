@@ -171,14 +171,26 @@ public enum Messages {
     }
 
     /// `uninstall` with a folder of the user's that fails the folder checks. `place` is the
-    /// folder's path as the person types it.
+    /// folder's path as the person types it. One wider than 0700, or one that cannot be opened or
+    /// searched, is a real folder whose mode `lstat` read, never a link, so its commands take no
+    /// `-h`, and `chmod -N` clears its access list without opening it. An entry `lstat` cannot
+    /// check may be a link, so `-h` keeps each command on the entry itself; `chmod -h -N` opens
+    /// the entry, so the text names `chmod -N` for one whose access list also denies its owner
+    /// `read`, and `-N` goes first because `chmod 700` fails while `lstat` does.
     public static func uninstallFolderRefused(
         _ subject: String, _ place: String, _ problem: NoFollowWriter.FolderProblem
     ) -> String {
-        let what =
-            problem == .widerThanPrivate ? "is wider than 0700" : "cannot be opened or searched"
-        return
-            "\(subject) `\(place)` \(what), so `uninstall` cannot check what the tool made in it. Nothing was removed. Run `chmod 700 \(place)`, then run `agent-balancer uninstall` again."
+        switch problem {
+        case .widerThanPrivate:
+            return
+                "\(subject) `\(place)` is wider than 0700, so `uninstall` cannot check what the tool made in it. Nothing was removed. Run `chmod 700 \(place)`, then run `agent-balancer uninstall` again."
+        case .cannotOpen:
+            return
+                "\(subject) `\(place)` cannot be opened or searched, so `uninstall` cannot check what the tool made in it. Nothing was removed. Run `chmod -N \(place)`, then `chmod 700 \(place)`, then run `agent-balancer uninstall` again."
+        case .cannotCheck:
+            return
+                "\(subject) `\(place)` cannot be checked, so `uninstall` cannot tell what it is or what the tool made in it. Nothing was removed. Run `chmod -h -N \(place)`, or `chmod -N \(place)` if that says Permission denied, then `chmod -h 700 \(place)`, then run `agent-balancer uninstall` again."
+        }
     }
 
     public static let trustStep =

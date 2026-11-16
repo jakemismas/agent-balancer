@@ -36,7 +36,7 @@ struct LoginCommand: ParsableCommand {
         }
         guard account.kind == Kind.token else {
             throw ToolError(
-                "'\(Display.safe(label))' is not a token or folder account. Sign in to it with `claude`, then run `agent-balancer doctor`."
+                "'\(Display.safe(label))' is not a token or folder account. Sign in to it with `claude`, then run `agent-balancer refresh`."
             )
         }
         guard !browser else {

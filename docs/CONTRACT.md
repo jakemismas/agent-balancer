@@ -104,8 +104,8 @@ not land where the recipe pointed: stop launching onto that account and report i
 
 `agent-balancer status --json --cached` reads saved readings only. It starts no child process and
 spends no model call, so it is the form for every periodic read. Plain `status --json` may check
-sign-in state. Only `refresh` and `pick` probe. The fields of `status --json` that its schema
-documents are stable in version 1.
+sign-in state. Only `refresh`, `pick` and a token account's `login` probe. The fields of
+`status --json` that its schema documents are stable in version 1.
 
 A `folder` account's row also carries `signInCheck`: what the last sign-in check of that folder that
 got an answer saw. `signed_in` is the expected account (any account when no email is set) signed in
@@ -124,7 +124,10 @@ account's `planTier` follows the same rule. These commands record a check: `stat
 each `login` and `folder` account whose reading did not fail, every time it runs), `init`,
 `login` for a folder account, `link <label>` (once its links are made) and
 `config set <label> email`. `refresh` also probes again an account whose sign-in a probe found
-rejected, as the status records it, even when its reading is fresh.
+rejected, as the status records it, even when its reading is fresh. When a row's `login_rejected`
+error names an `agent-balancer` command, it is one of these, to run once the account is signed in
+again: `refresh`, or `login <label>` for a `folder` account, which signs the folder in itself.
+`doctor` shows each sign-in but records no check.
 
 ## What changed
 
@@ -167,7 +170,8 @@ writes nothing, starts nothing and prints the line to type in your own terminal,
 is done or when there is nothing to remove, and 1 when it refuses, stops, is not confirmed, could
 not check or delete a token file or a temporary file that may hold a token, or leaves unopened an
 entry that may hold one: one named like a token file or a launch folder in other letter case, or a
-link, a file or another user's folder where a label's launch folder belongs.
+link, a file, another user's folder or an entry it cannot check where a label's launch folder
+belongs.
 
 Applying a link change (`link`, `link --repair`, `link --accept-source-change`, `unlink`) also needs a
 person at an interactive terminal who types the label (or `accept`) back. Input from a pipe is

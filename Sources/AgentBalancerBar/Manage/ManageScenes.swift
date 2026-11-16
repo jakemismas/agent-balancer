@@ -14,7 +14,7 @@ enum ManageScenes {
         { "schemaVersion": 1, "generatedAt": "2026-11-09T21:13:00Z", "banner": null,
           "accounts": [
             { "label": "main", "email": "main@example.com", "role": "main", "kind": "login",
-              "fullLogin": true, "state": "ok", "weekly": null },
+              "fullLogin": true, "planTier": "max_20x", "state": "ok", "weekly": null },
             { "label": "personal", "email": "personal@example.com", "role": "pool", "kind": "token",
               "fullLogin": false, "state": "ok", "weekly": null,
               "loginExpiresAt": "2027-10-27T10:00:00Z", "loginExpiresSource": "estimate" },
@@ -37,7 +37,7 @@ enum ManageScenes {
         { "schemaVersion": 1, "generatedAt": "2026-11-09T21:11:00Z", "banner": null,
           "accounts": [
             { "label": "main", "email": "main@example.com", "role": "main", "kind": "login",
-              "fullLogin": true, "state": "ok", "weekly": null },
+              "fullLogin": true, "planTier": "max_20x", "state": "ok", "weekly": null },
             { "label": "personal", "email": "personal@example.com", "role": "pool", "kind": "folder",
               "fullLogin": true, "configDir": "~/.agent-balancer/accounts/personal/.claude",
               "linked": true, "planTier": "max_20x", "signInCheck": "signed_in", "state": "ok",
@@ -202,7 +202,7 @@ enum ManageScenes {
         { "schemaVersion": 1, "generatedAt": "2026-11-09T21:11:00Z", "banner": null,
           "accounts": [
             { "label": "main", "email": "main@example.com", "role": "main", "kind": "login",
-              "fullLogin": true, "state": "ok", "weekly": null },
+              "fullLogin": true, "planTier": "max_20x", "state": "ok", "weekly": null },
             { "label": "personal", "email": "personal@example.com", "role": "pool", "kind": "folder",
               "fullLogin": true, "configDir": "~/.agent-balancer/accounts/personal/.claude",
               "linked": true, "planTier": "max_20x", "signInCheck": "signed_in", "state": "ok",

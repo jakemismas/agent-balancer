@@ -10,7 +10,7 @@ public struct LoginKind: AccountKindHandler {
     public func check(account: Account, runner: ClaudeRunner, now: Date) -> AccountCheck {
         switch AuthStatusReader.read(runner: runner) {
         case .failed(let issue):
-            return AccountCheck(issues: [issue])
+            return AccountCheck(issues: [issue], emailDigest: account.emailDigest)
         case .status(let status):
             return Self.evaluate(status, account: account, now: now)
         }

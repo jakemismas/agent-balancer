@@ -48,6 +48,8 @@ struct InitCommand: ParsableCommand {
         let registered = Account(
             label: chosen, kind: Kind.login, role: Role.pool, email: status.email,
             expectedPlanTier: status.planTier)
+        var probeLocks: [FileLock] = []
+        defer { for lock in probeLocks { lock.release() } }
         // Checked again and saved under the pick lock, so an `add` or `config set` that saves at
         // the same moment is kept.
         try TokenAccounts.setUpConfig(context: context) { current in
@@ -58,10 +60,15 @@ struct InitCommand: ParsableCommand {
             if config.account(chosen) != nil {
                 throw ToolError("Label '\(Display.safe(chosen))' is already used.")
             }
+            // A reading another account left under this label never starts this one.
+            probeLocks = try TokenAccounts.takeProbeLocks(
+                context: context, labels: [chosen], config: current)
+            try ReadingStore(context: context).delete(label: chosen)
             config.accounts.append(registered)
             if current == nil { config.probe.safeMode = true }
             return config
         }
+        for lock in probeLocks { lock.release() }
         try hooks.record(facts)
         var observations = StatusObservations()
         observations.settings = SettingsObservation(issue: nil, carriesKey: facts.carriesKey)

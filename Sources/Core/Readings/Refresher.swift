@@ -325,6 +325,10 @@ public struct Refresher: Sendable {
                         "Check failed: another probe of this account is still running."))
             }
             defer { lock.release() }
+            // A command that changes the sign-in a label stands for holds this lock while it does.
+            guard Self.registryStillHolds(account, context: context) else {
+                return AccountRefresh(label: account.label, status: .notStarted, fable: .notRun)
+            }
 
             // Another caller may have finished a probe while this one waited for the lock.
             now = clock()
@@ -417,6 +421,22 @@ public struct Refresher: Sendable {
             return true
         }
         return false
+    }
+
+    /// False when a saved registry no longer holds `account` under its label: the same account
+    /// key, kind and email, the email compared without letter case. With no registry saved there
+    /// is nothing to compare with, and one that cannot be read counts as changed.
+    static func registryStillHolds(_ account: Account, context: ToolContext) -> Bool {
+        let saved: Config?
+        do {
+            saved = try ConfigStore(context: context).load()
+        } catch {
+            return false
+        }
+        guard let saved else { return true }
+        guard let current = saved.account(account.label) else { return false }
+        return current.accountKey == account.accountKey && current.kind == account.kind
+            && current.email?.lowercased() == account.email?.lowercased()
     }
 
     /// The first error that says a login or folder account is not signed in as its own account, or

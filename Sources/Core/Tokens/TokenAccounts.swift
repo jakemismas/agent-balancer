@@ -50,10 +50,47 @@ public enum TokenAccounts {
         return lock
     }
 
-    /// Writes the token file and rewrites every live launch file of the label with the new token.
-    /// The label's launch files are listed again until a pass finds none it has not handled, so a
-    /// file that appeared during the rewrite is not missed. A tombstone stays a tombstone. The
-    /// writer's leftover temporary files in `tokens/` and the label's launch folder are deleted.
+    /// How long a command waits for a label's probe lock: a refresh holds it through the plain
+    /// probe, the Fable probe and the sign-in checks around them.
+    static func probeLockWait(_ config: Config?) -> TimeInterval {
+        let probe = config?.probe.timeoutSeconds ?? ProbeSettings().timeoutSeconds
+        let fable = config?.fable.probeTimeoutSeconds ?? FableSettings().probeTimeoutSeconds
+        return Double(probe + fable) + 60
+    }
+
+    /// The probe lock of each of `labels`, taken in name order, for a command that changes which
+    /// sign-in a label stands for, while it holds the pick lock. A refresh holds a label's probe
+    /// lock from its registry check to its saved reading, so with these held no probe of the old
+    /// sign-in saves a reading after the change, and one that waited checks the registry anew.
+    public static func takeProbeLocks(context: ToolContext, labels: [String], config: Config?)
+        throws -> [FileLock]
+    {
+        let writer = NoFollowWriter(root: context.dataRoot)
+        var held: [FileLock] = []
+        for label in Set(labels).sorted() {
+            guard
+                let lock = try writer.acquireLock(
+                    folders: Layout.locksFolders, name: Layout.lockName(label),
+                    wait: probeLockWait(config))
+            else {
+                for lock in held { lock.release() }
+                throw ToolError(
+                    "A check of '\(Display.safe(label))' is still running, so nothing was changed. Try again in a moment."
+                )
+            }
+            held.append(lock)
+        }
+        return held
+    }
+
+    /// Writes the token file and rewrites every live launch file of the label that carries a token
+    /// with the new one. The label's launch files are listed again until a pass finds none it has
+    /// not handled, so a file that appeared during the rewrite is not missed. A tombstone stays a
+    /// tombstone. The writer's leftover temporary files in `tokens/` and the label's launch folder
+    /// are deleted. Every save, a first one included, also takes the label's probe lock and then
+    /// deletes the label's stored reading before it writes the token file, so the next probe
+    /// stores a reading of the new token alone, also when the token file went missing while the
+    /// reading stayed.
     ///
     /// With `requireAccount`, what `login` passes, the registry must still hold `label` as a token
     /// account when the lock is held, right before the write; otherwise nothing is written, so a
@@ -69,14 +106,18 @@ public enum TokenAccounts {
         defer { lock.release() }
         try TokenStore.deleteWriterLeftovers(context: context)
         let existed = (try TokenPaths.facts(context: context, label: label)).exists
+        let config = requireAccount || existed ? try ConfigStore(context: context).load() : nil
         if requireAccount {
-            let config = try ConfigStore(context: context).load()
             guard config?.account(label)?.kind == Kind.token else {
                 throw ToolError(
                     "No account is labelled '\(Display.safe(label))' any more, so the token was not saved."
                 )
             }
         }
+        let probeLocks = try takeProbeLocks(context: context, labels: [label], config: config)
+        defer { for probeLock in probeLocks { probeLock.release() } }
+        // A reading taken under another token would judge this one.
+        try ReadingStore(context: context).delete(label: label)
         try TokenStore.save(context: context, label: label, token: token)
         let records = snapshot ?? SessionsReader.read(context: context)
         var handled = Set<String>()
@@ -120,10 +161,7 @@ public enum TokenAccounts {
         // account's files hold no token, so its remove drops them and the leases together.
         let open =
             keepsRecentPicks
-            ? Set(
-                leases.filter { $0.label == label && now.timeIntervalSince($0.at) < span }.map(\.id)
-            )
-            : []
+            ? Set(leases.filter { now.timeIntervalSince($0.at) < span }.map(\.id)) : []
         let launch = try LaunchFiles.removeAll(
             context: context, label: label,
             snapshot: snapshot ?? SessionsReader.read(context: context), leased: open)
@@ -182,13 +220,44 @@ public enum TokenAccounts {
             })
     }
 
-    /// Loads the config under the pick lock, applies `change` and saves the result before the
-    /// lock goes, so two commands that edit the registry at once never save over each other.
-    /// With no config it throws before taking the lock, so nothing is made before `init`.
-    /// Returns the config as saved.
+    /// What a rename moves from a `login` account's old label to its new one, under the pick lock
+    /// and both labels' probe locks the caller holds: its stored reading, which replaces any
+    /// reading stored earlier under the new label (none is left there when the account has none),
+    /// and its leases, so its open picks count for it. No reading stays under the old label. A
+    /// launch file stays where its pick wrote it. This call reads the reading and the leases, so a
+    /// file that cannot be read stops the rename before anything changes, and deletes a reading
+    /// stored earlier under the new label, which no account holds. The step it returns moves
+    /// them; the caller runs it once the registry holds the new label, so a refused save moves
+    /// nothing.
+    public static func moveLabel(context: ToolContext, from old: String, to new: String) throws
+        -> () throws -> Void
+    {
+        let store = ReadingStore(context: context)
+        let reading = try store.load(label: old)
+        let leases = LeaseStore(context: context)
+        let all = try leases.current(now: Date(), leaseMinutes: 525_600)
+        try store.delete(label: new)
+        return {
+            if let reading { try store.save(reading, label: new) }
+            try store.delete(label: old)
+            guard all.contains(where: { $0.label == old }) else { return }
+            try leases.save(
+                all.map { lease in
+                    var moved = lease
+                    if moved.label == old { moved.label = new }
+                    return moved
+                })
+        }
+    }
+
+    /// Loads the config under the pick lock, applies `change`, saves the result and then runs
+    /// `afterSave` before the lock goes, so two commands that edit the registry at once never
+    /// save over each other. With no config it throws before taking the lock, so nothing is made
+    /// before `init`. Returns the config as saved.
     @discardableResult
     public static func updateConfig(
-        context: ToolContext, backup: Bool = false, _ change: (inout Config) throws -> Void
+        context: ToolContext, backup: Bool = false, _ change: (inout Config) throws -> Void,
+        afterSave: () throws -> Void = {}
     ) throws -> Config {
         let store = ConfigStore(context: context)
         _ = try store.loadRequired()
@@ -197,6 +266,7 @@ public enum TokenAccounts {
         var config = try store.loadRequired()
         try change(&config)
         try store.save(config, backup: backup)
+        try afterSave()
         return config
     }
 

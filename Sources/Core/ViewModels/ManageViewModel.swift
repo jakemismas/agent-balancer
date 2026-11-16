@@ -836,7 +836,8 @@ public enum ManageBuilder {
     /// one that is not linked shows its link step with Sign in off.
     /// A token row has no such evidence, and any code could hide one that says otherwise
     /// (`account_ended` hides them all), so it counts only when it has no code at all. A login row
-    /// counts the same way, and also by its tier, as a folder row does, under `plan_changed` or
+    /// counts only by its tier, as a folder row does, which the status shows only from a check
+    /// made for the account's current email: with no code, or under `plan_changed` or
     /// `duplicate_login`, which say nothing against the sign-in.
     static func signInState(_ a: AccountSnapshot) -> SignIn {
         let folder = panelKind(a) == .folder
@@ -851,9 +852,11 @@ public enum ManageBuilder {
         if a.error?.code == StateCode.wrongAccount.rawValue { return .otherAccount }
         guard folder else {
             if a.state == "ended" { return .ended }
-            let tierCounts = panelKind(a) == .login && a.planTier != nil
+            let login = panelKind(a) == .login
+            let tierCounts = login && a.planTier != nil
             switch (a.state, a.error?.code) {
-            case ("ok", nil), ("limited", nil): return .signedIn
+            case ("ok", nil), ("limited", nil):
+                return !login || tierCounts ? .signedIn : .notConfirmed
             case ("error", "plan_changed"?), ("error", "duplicate_login"?):
                 return tierCounts ? .signedIn : .notConfirmed
             default: return .notConfirmed

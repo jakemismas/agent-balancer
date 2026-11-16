@@ -142,13 +142,16 @@ public struct FolderKind: AccountKindHandler {
     public init() {}
 
     public func check(account: Account, runner: ClaudeRunner, now: Date) -> AccountCheck {
+        let digest = account.emailDigest
         let dir: URL
         do {
             dir = try FolderPaths.configDir(context: runner.context, label: account.label)
         } catch let error as ToolError {
-            return AccountCheck(issues: [Issue(.checkFailed, .error, error.message)])
+            return AccountCheck(
+                issues: [Issue(.checkFailed, .error, error.message)], emailDigest: digest)
         } catch {
-            return AccountCheck(issues: [Issue(.checkFailed, .error, "Check failed.")])
+            return AccountCheck(
+                issues: [Issue(.checkFailed, .error, "Check failed.")], emailDigest: digest)
         }
         guard FolderPaths.state(context: runner.context, label: account.label) == .ready else {
             return AccountCheck(
@@ -157,11 +160,11 @@ public struct FolderKind: AccountKindHandler {
                         .checkFailed, .error,
                         "Account folder is missing or not yours. Run `agent-balancer remove \(Display.safe(account.label, limit: 32))`, then add it again."
                     )
-                ])
+                ], emailDigest: digest)
         }
         switch AuthStatusReader.read(runner: runner, configDir: dir) {
         case .failed(let issue):
-            return AccountCheck(issues: [issue])
+            return AccountCheck(issues: [issue], emailDigest: digest)
         case .status(let status):
             return Self.evaluate(status, account: account, folder: dir, now: now)
         }

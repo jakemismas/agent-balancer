@@ -135,7 +135,7 @@ import Testing
         #expect((answer["reason"] as? String)?.isEmpty == false)
     }
 
-    @Test func aLoginAccountRenamedToALabelWithNoReadingHasNoFiveHourWindow() throws {
+    @Test func aLoginAccountWhoseReadingAnEmailChangeDeletedHasNoFiveHourWindow() throws {
         let missing = "No 5-hour reading, which the main account needs."
         for role in [Role.pool, Role.main] {
             let cli = try setUp([
@@ -171,21 +171,31 @@ import Testing
             #expect(
                 try object(held)["reason"] as? String
                     == "No account has room. main: stale reading, refresh failed", "\(role)")
+            // A rename takes the reading along, window and all.
             #expect(try cli.run(["config", "set", "main", "label", "primary"]).status == 0)
-            let renamed = try cli.run(["pick", "--json", "--dry-run"])
-            let answer = try object(renamed)
+            let moved = try cli.run(["pick", "--json", "--dry-run"])
+            #expect(moved.status == 2, "\(role)")
+            #expect(
+                try object(moved)["reason"] as? String
+                    == "No account has room. primary: stale reading, refresh failed", "\(role)")
+            #expect(try store.load(label: "main") == nil, "\(role)")
+            #expect(try store.load(label: "primary")?.fiveHour != nil, "\(role)")
+            // An email change deletes it, so the next reply, which has no window, is stored.
+            try cli.fakeFixture("wrong_account")
+            #expect(
+                try cli.run(["config", "set", "primary", "email", "other@example.com"]).status == 0)
+            let changed = try cli.run(["pick", "--json", "--dry-run"])
+            let answer = try object(changed)
             let reason = answer["reason"] as? String ?? ""
             if role == Role.main {
-                #expect(renamed.status == 2)
+                #expect(changed.status == 2)
                 #expect(answer["label"] is NSNull)
                 #expect(reason == "No account has room. primary: " + missing)
             } else {
-                #expect(renamed.status == 0)
+                #expect(changed.status == 0)
                 #expect(answer["label"] as? String == "primary")
                 #expect(reason.hasSuffix(" 5-hour use unknown."))
             }
-            // The old label's reading keeps its window, and the new label's has none.
-            #expect(try store.load(label: "main")?.fiveHour != nil, "\(role)")
             #expect(try store.load(label: "primary")?.fiveHour == nil, "\(role)")
             #expect(try store.load(label: "primary")?.sevenDay?.usedPercent == 10, "\(role)")
         }

@@ -186,6 +186,9 @@ or launch file cleanup deletes it; `agent-balancer doctor` counts any that are l
 - A leaked token can make model requests on that subscription for up to a year. Treat the folder
   like a password store.
 - `agent-balancer login <label>` again replaces the token and rewrites that label's launch files.
+  Every `agent-balancer login <label>` of a token account first deletes the label's stored
+  reading, so that the reading its first check saves comes from the new token alone, also after
+  a restore from a backup that brought the reading back without the token file.
   `agent-balancer remove <label>` deletes the token file and the stored reading, and deletes the
   label's launch files except one a session may still read, which stays with no token in it.
 - No manual check has confirmed whether a new token ends the old one, or found a way to cancel

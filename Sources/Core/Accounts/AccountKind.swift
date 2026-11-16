@@ -13,7 +13,7 @@ public struct AccountCheck: Sendable {
     public var planTier: String?
     public var loginExpiresAt: Date?
     public var signedIn: Bool
-    /// `Account.emailDigest` of the account the check was made for, or nil when it read no status.
+    /// `Account.emailDigest` of the account the check was made for, also when it read no status.
     public var emailDigest: String?
 
     public init(

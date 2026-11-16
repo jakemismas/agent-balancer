@@ -54,6 +54,12 @@ case "$1" in
       sign_in
       exit 0
     fi
+    # The first check after the test staged a hold takes it, says so and waits until the test
+    # lets it go, at most five minutes; the rename hands the hold to one check only.
+    if [ -f "$dir/hold-auth" ] && mv "$dir/hold-auth" "$dir/held-auth" 2>/dev/null; then
+      n=0
+      while [ ! -f "$dir/go-auth" ] && [ "$n" -lt 3000 ]; do sleep 0.1; n=$((n + 1)); done
+    fi
     # A check of the default folder reads its own answer when a test staged one, so a login
     # account and a folder account can each be signed in at once.
     if [ -z "${CLAUDE_CONFIG_DIR+set}" ] && [ -f "$dir/auth-default.json" ]; then
@@ -82,26 +88,33 @@ case "$1" in
     pwd >> "$dir/cwd.log"
     stat -f %Lp . >> "$dir/cwd-mode.log"
     printf '%s\n' "$model" >> "$dir/models.log"
-    # A probe of an account the test holds says so and waits until the test lets it go, at most
-    # five minutes, so the test can order another command around it.
-    if [ -n "$acct" ] && [ -f "$dir/hold-$acct" ]; then
-      : > "$dir/held-$acct"
-      n=0
-      while [ ! -f "$dir/go-$acct" ] && [ "$n" -lt 3000 ]; do sleep 0.1; n=$((n + 1)); done
-    fi
-    # A probe with one model can take longer than the others.
-    if [ -f "$dir/delay-$model" ]; then sleep "$(cat "$dir/delay-$model")"; fi
-    if [ -f "$dir/unknown-option" ]; then
-      echo "error: unknown option '--safe-mode'" >&2
-      exit 1
-    fi
-    # A stream picked by the token the settings file holds, so a test can swap a token file.
+    # A stream picked by the token the settings file holds, so a test can swap a token file. It
+    # is read when the probe starts, as `claude` reads its settings then.
     bytoken=""
     if [ -n "$settings" ]; then
       for f in "$dir"/token-stream-*.token; do
         [ -f "$f" ] || continue
         if grep -qF -- "$(cat "$f")" "$settings" 2>/dev/null; then bytoken="${f%.token}.jsonl"; fi
       done
+    fi
+    # A probe of an account the test holds says so and waits until the test lets it go, at most
+    # five minutes, so the test can order another command around it. A token account is named by
+    # its token file, a folder account by its folder's label, and a login account `default`.
+    hold="$acct"
+    if [ -z "$hold" ] && [ -n "${CLAUDE_CONFIG_DIR+set}" ]; then
+      hold="$(basename "$(dirname "$CLAUDE_CONFIG_DIR")")"
+    fi
+    if [ -z "$hold" ]; then hold="default"; fi
+    if [ -f "$dir/hold-$hold" ]; then
+      : > "$dir/held-$hold"
+      n=0
+      while [ ! -f "$dir/go-$hold" ] && [ "$n" -lt 3000 ]; do sleep 0.1; n=$((n + 1)); done
+    fi
+    # A probe with one model can take longer than the others.
+    if [ -f "$dir/delay-$model" ]; then sleep "$(cat "$dir/delay-$model")"; fi
+    if [ -f "$dir/unknown-option" ]; then
+      echo "error: unknown option '--safe-mode'" >&2
+      exit 1
     fi
     if [ -n "$bytoken" ] && [ -f "$bytoken" ]; then
       cat "$bytoken"

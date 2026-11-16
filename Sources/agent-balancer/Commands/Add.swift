@@ -5,7 +5,8 @@ import Foundation
 struct AddCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "add",
-        abstract: "Add an account to the pool. It writes the registry entry and nothing else.",
+        abstract:
+            "Add an account to the pool. It writes the registry entry and deletes a reading another account left under the label.",
         discussion:
             "A token account gets its token from `agent-balancer login <label>`. A folder account (--kind folder) gets its own config folder, which you link and sign in to yourself."
     )
@@ -31,6 +32,8 @@ struct AddCommand: ParsableCommand {
 
     func run() throws {
         let context = ToolContext.current()
+        var probeLocks: [FileLock] = []
+        defer { for lock in probeLocks { lock.release() } }
         // Checked and saved under the pick lock, so a concurrent remove cannot drop this entry.
         try TokenAccounts.updateConfig(context: context, backup: true) { config in
             guard ConfigValidator.isValidLabel(label) else {
@@ -72,6 +75,10 @@ struct AddCommand: ParsableCommand {
                 throw ToolError(
                     "Use --ends or --ending-soon, not both: an account keeps one end marker.")
             }
+            // A reading another account left under this label never starts this one.
+            probeLocks = try TokenAccounts.takeProbeLocks(
+                context: context, labels: [label], config: config)
+            try ReadingStore(context: context).delete(label: label)
             if kind == Kind.folder {
                 // An empty folder, private to you. An older one with this name is kept as it is.
                 try NoFollowWriter(root: context.dataRoot).prepare(
@@ -82,6 +89,7 @@ struct AddCommand: ParsableCommand {
                     label: label, kind: kind, role: Role.pool, email: email, endsAt: ends,
                     endingSoon: endingSoon ? true : nil))
         }
+        for lock in probeLocks { lock.release() }
         if kind == Kind.folder {
             let dir = try FolderPaths.configDir(context: context, label: label)
             print("Added '\(Display.safe(label))' as a folder account in the pool.")

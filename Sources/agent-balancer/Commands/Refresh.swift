@@ -55,7 +55,7 @@ struct RefreshCommand: ParsableCommand {
             case .failed(let issue):
                 print("\(name): " + Shared.line(issue))
             case .notStarted:
-                print("\(name): not checked, the refresh ran out of time")
+                print("\(name): not checked: the account changed while the check waited")
             }
             switch result.fable {
             case .notRun: break

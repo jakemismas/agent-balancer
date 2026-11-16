@@ -177,11 +177,12 @@ extension ManageViewModelTests {
                 if shown == "login_rejected" { return .signedOut }
                 if shown == "wrong_account" { return .otherAccount }
                 if state == "ended" { return .ended }
-                // As a folder row does, a login row counts its tier under these two codes.
-                if shown == "plan_changed" || shown == "duplicate_login" {
+                // As a folder row does, a login row counts only by its tier, with no code or
+                // under these two.
+                if shown == nil || shown == "plan_changed" || shown == "duplicate_login" {
                     return tier != nil ? .signedIn : .notConfirmed
                 }
-                return shown == nil ? .signedIn : .notConfirmed
+                return .notConfirmed
             }
         }
     }
@@ -412,19 +413,21 @@ extension ManageViewModelTests {
         ).first { $0.id == 3 }
 
         // Never green unless the last check placed the expected sign-in (folders), or no code
-        // could hide or contradict it (token and login), or a login row's tier stands under a
-        // code that says nothing against it.
+        // could hide or contradict it (token), or a login row's tier stands with no code or
+        // under a code that says nothing against it.
         if panel.signedIn {
             if c.kind == Kind.folder {
                 #expect(
                     c.checks.last?.places == true && c.lastProbe != .rejected
                         && c.lastProbe != .failed && c.link == .ok,
                     "\(name): green without evidence")
-            } else {
+            } else if c.kind == Kind.login {
                 let tierUnder = ["plan_changed", "duplicate_login"].contains(row.error?.code)
                 #expect(
-                    row.error == nil || (c.kind == Kind.login && tierUnder && row.planTier != nil),
-                    "\(name): green with a code")
+                    row.planTier != nil && (row.error == nil || tierUnder),
+                    "\(name): green without a tier")
+            } else {
+                #expect(row.error == nil, "\(name): green with a code")
             }
         }
         if c.kind == Kind.folder {

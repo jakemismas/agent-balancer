@@ -225,9 +225,40 @@ extension ReadingHistory {
         if let label {
             labels = labels.contains(label) || onDisk.contains(label) ? [label] : []
         }
+        // A configured account's lines follow its key across every label it held, so a rename
+        // keeps them and another account's lines under the same label never show.
+        var byKey: [String: [(at: Date, order: Int, line: HistoryLine)]] = [:]
+        var refused: [(label: String, error: Error)] = []
+        if let config, labels.contains(where: { config.account($0) != nil }) {
+            var order = 0
+            for name in onDisk {
+                let lines: [HistoryLine]
+                do { lines = try read(label: name) } catch {
+                    refused.append((name, error))
+                    continue
+                }
+                for line in lines {
+                    byKey[line.accountKey, default: []].append((line.at, order, line))
+                    order += 1
+                }
+            }
+        }
         var accounts: [HistoryAccountOut] = []
         for name in labels {
-            let lines = try read(label: name).filter { $0.at >= since }
+            let all: [HistoryLine]
+            if let account = config?.account(name) {
+                // An unread file may hide lines of its label's account or a renamed login one.
+                if let failed = refused.first(where: {
+                    $0.label == name || account.kind == Kind.login
+                }) {
+                    throw failed.error
+                }
+                all = (byKey[account.accountKey] ?? [])
+                    .sorted { ($0.at, $0.order) < ($1.at, $1.order) }.map(\.line)
+            } else {
+                all = try read(label: name)
+            }
+            let lines = all.filter { $0.at >= since }
             accounts.append(
                 HistoryAccountOut(
                     label: name,

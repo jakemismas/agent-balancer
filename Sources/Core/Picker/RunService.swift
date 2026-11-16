@@ -174,6 +174,12 @@ extension PickService {
         defer { lock.release() }
 
         let now = clock()
+        // A rename or an add while this run waited can put another account under the label.
+        guard Refresher.registryStillHolds(account, context: context) else {
+            throw ToolError(
+                "The account labelled '\(Display.safe(label, limit: 32))' changed while this run waited, so nothing was started. Try again."
+            )
+        }
         // Another command may have recorded the token's rejection while this run waited.
         if account.kind == Kind.token, tokenRejectionStands(account) {
             throw ToolError(Messages.probeLoginRejected, code: .loginRejected)

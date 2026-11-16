@@ -11,7 +11,7 @@ import Testing
         { "schemaVersion": 1, "generatedAt": "2026-11-09T21:10:00Z", "banner": null,
           "accounts": [
             { "label": "main", "email": "main@example.com", "role": "main", "kind": "login",
-              "fullLogin": true, "state": "ok", "weekly": null },
+              "fullLogin": true, "planTier": "max_20x", "state": "ok", "weekly": null },
             { "label": "tok-ok", "email": "tok-ok@example.com", "role": "pool", "kind": "token",
               "state": "ok", "loginExpiresAt": "2027-10-27T10:00:00Z", "loginExpiresSource": "estimate" },
             { "label": "tok-out", "email": "tok-out@example.com", "role": "pool", "kind": "token",

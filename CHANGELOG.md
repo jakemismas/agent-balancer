@@ -170,8 +170,8 @@
   folder keeps its sign-in line, its list row's line ends with "ended Nov 1" once its end date has
   passed and with "ended" otherwise, and its panel shows the row's `account_ended` error along
   with any sign-in problem it reads as. A token account counts as signed in only while its
-  row has no code, and a login account the same way or by its plan tier under `plan_changed` or
-  `duplicate_login`: an ended one reads "Ended Nov 1" in the list, or "Ended" when no end date has
+  row has no code, and a login account only by the plan tier its row carries from a check of its
+  current email, with no code or under `plan_changed` or `duplicate_login`: an ended one reads "Ended Nov 1" in the list, or "Ended" when no end date has
   passed, and one with any other code but `login_rejected`, `token_missing` or `wrong_account`
   reads "Sign-in not confirmed", each with a red dot and the row's own error as the panel's
   reason. `login <label> --browser` on a folder that
@@ -248,8 +248,9 @@
   and no finished Add step 3 for such a folder. `link <label>`, once its links are made, and
   `config set <label> email <new>` check the folder or login account as `status` does, so
   the window reads what the folder holds. Only a check that placed the expected account's
-  sign-in in its own folder, for its current email, records the expected plan (in `refresh`
-  and `login`), the expiry and the ending-soon plan drop. A probe's `login_rejected`, a Fable
+  sign-in in its own folder, for its current email, records the expected plan (in `refresh`,
+  folder `login` and, after a new email, `config set <label> email`), the expiry and the
+  ending-soon plan drop. A probe's `login_rejected`, a Fable
   probe's too, stays until a probe works with a reading newer than the latest one the status had
   seen, or until `login` completes a new sign-in, and a check that sees only the old sign-in
   leaves it: while it stands, `login <label>` and
@@ -328,3 +329,43 @@
   earlier refuses it, the reason is `No 5-hour reading, which the main account needs.` A pool
   account without one is still judged on its weekly use but ranks after every account that has
   one, and when it is eligible, its reason ends with `5-hour use unknown.`
+- `config set <label> email <new>` on a `login` or `folder` account deletes the label's stored
+  reading when the new email differs from the stored one in more than letter case, and every
+  token save of `login` deletes it before the first check, a first save included, such as after a
+  restore from a backup that brought the reading back without the token file. So a main account is
+  not judged on the old subscription's use or weekly reset. The email change, the token save, the
+  rename, `add` and `init` hold the label's probe lock while they move or delete its reading: a
+  probe already under way saves its reading first and the command deletes or moves that one too.
+  After an email change, a rename, `add` or `init`, a probe that a `pick` or `refresh` began from
+  the registry as it was before the change runs no probe; after a token save, a waiting probe reads
+  the new token. `remove` takes only the pick lock, so a probe under way can still save a reading
+  under the removed label, which `add`, `init` or a rerun of `remove` deletes. The same email again
+  keeps the reading. The command's own rebuild records no `limit_cleared` for the reading it
+  deletes, as `remove` records none; another rebuild that runs during the command's sign-in check
+  or first probe can still record one.
+- The email change also forgets the recorded plan in the same write. Its own check, or else the
+  next `refresh` or folder `login`, records the new sign-in's plan once it places that sign-in, so
+  no check reports `plan_changed` against the old plan. An ending-soon plan drop that a check of
+  the old email marked goes with that email, so `status` no longer shows such an account as ended
+  while `pick` uses it. The same email again records no plan.
+- After a login account's email changes, by `config set` or by a hand edit of `config.json`, the
+  Manage window no longer reads it as "Signed in" until a check places the new email's sign-in. A
+  check made for the old email whose command saves its result after the change records nothing, so
+  it no longer clears the new email's `wrong_account`.
+- `config set <label> label <new>` on a `login` account moves the account's stored reading and
+  its open leases to the new label once the registry is saved, and leaves no reading under the old
+  one, so the account is judged by its own newest reading or by none, a rename back included, and
+  a pick made before the rename counts for it. A rename that the registry save refuses moves
+  nothing. A launch file such a pick wrote stays under the old label while its lease is open: a
+  token saved later under that label is never written into it, and `remove` of that label keeps it
+  as a tombstone while the lease is open. `pick` and `run` read the registry again under the pick lock and skip or refuse an
+  account that it no longer holds under its label, so a pick that began before a rename never
+  judges the renamed account by a reading of the account added under its old label.
+  `history --json` lists an account's lines by its key, so they follow a rename and another
+  account's lines under the same label never show; a history file that the reader refuses stops
+  only the listings whose lines it may hold, those of the account under its label and of the
+  login account, and every other listing goes on. `add` and `init` delete a reading another
+  account left under the label, so an account added under a label starts with no reading.
+- A token save writes the new token only into the label's launch files that already carry a token,
+  so a launch file with no token, such as a renamed login account's, never gains one.
+- CI's check job stops after 20 minutes.

@@ -125,6 +125,12 @@ public enum StatusBuilder {
             }
             var drafted = Transitions.event(
                 previous: known, account: account, evaluation: evaluation, now: now)
+            // The old sign-in's limit went with its reading; it did not clear.
+            if drafted?.type == EventType.limitCleared,
+                observations.readingDropped.contains(account.label)
+            {
+                drafted = nil
+            }
 
             var next = entry
             let code = evaluation.error?.code.rawValue

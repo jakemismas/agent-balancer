@@ -29,7 +29,8 @@ public struct CurrentEntry: Codable, Equatable, Sendable {
     public var probeError: IssueRecord?
     public var planTier: String?
     public var loginExpiresAt: Date?
-    /// An account marked `endingSoon` whose plan tier dropped. It stays set until the mark is off.
+    /// An account marked `endingSoon` whose plan tier dropped. It stays set until the mark is off
+    /// or the account's email changes.
     public var endedByPlan: Bool
     /// The expiry date a `login_expiring` event was written for.
     public var expiringNotified: String?
@@ -206,6 +207,9 @@ public struct StatusObservations: Sendable {
     public var settings: SettingsObservation?
     /// Labels whose token was replaced by the command that triggers this rebuild.
     public var tokenReplaced: Set<String> = []
+    /// Labels whose stored reading the command deleted because the sign-in the label stands for
+    /// changed. Their rebuild records no `limit_cleared`, as a removed account's records none.
+    public var readingDropped: Set<String> = []
     /// What the duplicate check found for each token account a probe of this command read.
     public var duplicates: [String: DuplicateCheck] = [:]
 
@@ -314,7 +318,8 @@ enum Transitions {
                 endedByPlan: false)
         entry.accountKey = account.accountKey
         let digest = account.emailDigest
-        if let auth {
+        // A check made for the email the account had before counts for nothing now.
+        if let auth, (auth.emailDigest ?? digest) == digest {
             entry.authError = auth.error.map {
                 IssueRecord(Issue($0.code, $0.severity, clean($0.text)))
             }
@@ -324,6 +329,8 @@ enum Transitions {
             let placed = auth.seen == .signedIn && (auth.emailDigest ?? digest) == digest
             entry.planTier = placed ? auth.planTier : nil
             if let seen = auth.seen {
+                // A plan drop marked for another email says nothing about this one.
+                if entry.emailDigest != digest { entry.endedByPlan = false }
                 entry.signInCheck = seen.rawValue
                 entry.emailDigest = auth.emailDigest ?? digest
             }
@@ -364,12 +371,13 @@ enum Transitions {
             }
         }
         // A check counts only for the email it was made for, so a changed email, by any means,
-        // leaves no tier, expiry or `signed_in` until a check of the new one.
+        // leaves no tier, expiry, `signed_in` or plan drop until a check of the new one.
         if entry.emailDigest != digest {
             entry.planTier = nil
             entry.loginExpiresAt = nil
             if entry.signInCheck == SignInSeen.signedIn.rawValue { entry.signInCheck = nil }
             entry.emailDigest = nil
+            entry.endedByPlan = false
         }
         switch duplicate {
         case .notRun: break

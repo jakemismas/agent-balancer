@@ -124,6 +124,13 @@ public struct PickService: Sendable {
         Upkeep.run(
             context: context, snapshot: SessionsReader.read(context: context), openLeases: leases,
             leaseMinutes: config.picker.leaseMinutes, keepDays: config.launch.keepDays, now: now)
+        // A rename or add since the registry was read can leave another account's reading here.
+        for account in config.accounts
+        where skips[account.label] == nil
+            && !Refresher.registryStillHolds(account, context: context)
+        {
+            skips[account.label] = "the account changed while the pick waited"
+        }
         // Another command may have recorded a token's rejection since the checks before the probes.
         for account in config.accounts
         where account.kind == Kind.token && skips[account.label] == nil

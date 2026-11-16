@@ -75,6 +75,8 @@ struct LoginCommand: ParsableCommand {
 
         var observations = StatusObservations()
         if captured.replaced { observations.tokenReplaced = [label] }
+        // Every save deleted the label's reading, so a limit it showed did not clear.
+        observations.readingDropped = [label]
         let result = Refresher(context: context, config: config)
             .refresh(account: config.accounts[index], force: true, fable: .none)
         observations.add([result])

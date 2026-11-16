@@ -183,10 +183,11 @@ extension LaunchFiles {
     }
 
     /// Writes the token of `label`, as the token store now holds it, into every live launch file of
-    /// the label that is not in `skipping`. A tombstone is never revived. A file that does not
-    /// parse never keeps the old token: one a session record names (or any, when the records
-    /// cannot be read cleanly) becomes a tombstone, and any other is deleted. Callers hold the
-    /// pick lock.
+    /// the label that is not in `skipping`. A tombstone is never revived, and a file that carries
+    /// no token, such as one a renamed `login` account's pick left under its old label, never
+    /// gains one. A file that does not parse never keeps the old token: one a session record names
+    /// (or any, when the records cannot be read cleanly) becomes a tombstone, and any other is
+    /// deleted. Callers hold the pick lock.
     static func rewriteToken(
         context: ToolContext, label: String, skipping: Set<String>, snapshot: SessionsSnapshot
     ) throws -> RewritePass {
@@ -206,6 +207,8 @@ extension LaunchFiles {
             }
             if isTombstone(object) { continue }
             var env = object["env"] as? [String: Any] ?? [:]
+            // A file with no token belongs to a session that runs on another sign-in.
+            guard env[ProtectedEnv.tokenVariable] != nil else { continue }
             env[ProtectedEnv.tokenVariable] = token
             object["env"] = env
             try put(object, context: context, label: label, name: name)

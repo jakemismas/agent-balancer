@@ -470,7 +470,8 @@ Adding: `add <label> [--email <address>] [--ends <date> | --ending-soon]` (kind 
 `--kind` says otherwise), then `login <label>`. `--ends` and `--ending-soon` together are refused
 and nothing is written: an account keeps one end marker (7.1).
 
-1. `add` writes the registry entry only. `--email` is a note for the person. The tool shows the
+1. `add` writes the registry entry, and deletes a reading another account left under the label
+   (6.3). `--email` is a note for the person. The tool shows the
    note and never checks it against a token. `add` refuses a label whose `tokens/<label>.json`
    is still there from an earlier account and says to run `remove <label>` first, so a new
    account never takes over a token it did not sign in with.
@@ -510,8 +511,10 @@ file's last change when the account has no `tokenCreatedAt`) as `loginExpiresAt`
 shows `login_rejected` when a probe gets an auth error.
 
 Replacing: `login <label>` on an account that already has a token. The new token replaces the file
-in one rename, every live launch file of that label is rewritten with it, and a `token_replaced`
-event is written. A tombstone (below) is never revived. A launch file that does not parse never
+in one rename, every live launch file of that label that carries a token is rewritten with it, and
+a `token_replaced` event is written. A tombstone (below) is never revived, and a launch file that
+carries no token, such as one that a pick of a renamed `login` account left under its old label
+(Renaming, below), never gains one. A launch file that does not parse never
 keeps the old token: one a session record names becomes a tombstone, and any other is deleted. The
 replace lists the label's launch files again under the pick lock before it finishes, so a file that
 a pick wrote during the rewrite is not missed, and the writer's leftover temporary files in
@@ -520,6 +523,14 @@ started with until its process restarts. The tool then says, every time, that th
 keep working until its year ends, because no way to cancel one is documented. Whether a new token
 ends the old one is not yet known; a manual check at the token-path checkpoint records the answer,
 and until then the text holds either way.
+
+Every token save, a first one included, deletes the label's stored reading, under the pick lock
+and the label's probe lock and before the token file is written, so the first check (step 3)
+stores a reading of the new token's reply alone, with nothing read under another token merged in
+(6.3). A first save after `add` finds none, since `add` deletes a reading left under the label. A
+first save after the token file went missing while the reading stayed, as after a restore from a
+backup that left out `tokens/`, which is excluded from backups (Where a token may be, below),
+deletes the old token's reading. Only a replace writes `token_replaced`.
 
 Removing: `remove <label>` never refuses because a session still names a launch file. Removing
 the main account needs a person at a terminal (5.1): with standard input not a terminal, `remove`
@@ -569,12 +580,25 @@ Renaming: `config set <label> label <new>` refuses on a token account, exits 1 a
 because its token file and launch files carry the label; remove the account and add it again under
 the new label. It refuses on a folder account the same way, because the account's folder is named
 for the label: "A folder account cannot be renamed: its folder is named for the label. Nothing was
-changed." On a `login` account it changes the label in the registry and moves no stored reading
-(6.3): the reading stays under the old label, and an account that later takes that label is
-judged by whatever reading is stored there, which can be the renamed account's. The renamed
-account is judged by whatever reading is stored under its new label, which may be none or an
-older one left there (7.2 rule 10). Open leases are kept by label too (7.2 rule 7), so a lease
-taken before the rename counts for the old label, not for the renamed account.
+changed." On a `login` account it changes the label in the registry and, under the pick lock and
+both labels' probe locks (6.3), moves what the tool keeps for the account under its label: its
+stored reading goes to the new label, where it replaces a reading stored there before (none is
+left there when the account has none), and none stays under the old label, so the account is
+judged by its own newest reading or by none, a rename back included; and its open leases go to the
+new label, so a pick made before the rename counts for the account (7.2 rule 7). Before it saves
+the registry, it reads the reading and the leases and deletes a reading stored under the new
+label, which no account holds; it moves the reading and the leases only once the registry is
+saved, so a rename that the save refuses, such as while another folder account's folder is wider
+than 0700, exits 1 and moves nothing. A reading file that it cannot read stops it before it changes
+anything, and it prints the reader's refusal, such as `Refused to read main.json: it is not a
+regular file.` for a folder where `main.json` belongs. A launch file that a pick made before the
+rename stays where it was written while its lease is open, and a session started from it keeps the
+old label in its environment. A token saved later under the old label is never written into such
+a file, which carries none (Replacing, above), and `remove <old label>` keeps it as a tombstone
+while its lease is open, as it keeps the label's own (Removing, above), so a session that starts
+from it after that fails to sign in. The account's history lines follow its `accountKey` (10.4),
+and an account added later under the old label starts with no reading, no lease and none of those
+lines.
 
 Where a token may be: the token file, the launch files of that label, and nowhere else, except a
 writer's temporary file that a write killed before its rename leaves in `tokens/` or
@@ -1001,9 +1025,9 @@ claude -p "Reply with the single word OK." --model haiku --tools "" --disallowed
   is the one under the account's current label, as the cache reads it (6.3). While it holds a
   5-hour window, a reply without one is refused, so if the service stops sending `five_hour` for
   an account, every probe of that account gives `check_failed`. When it holds none, whatever the
-  cause (for example none was ever stored, `remove` deleted the reading, a `login` account was
-  renamed to a label with no stored reading, or the stored file does not decode as a reading or
-  holds a 5-hour use outside 0 to 100, 6.3), a reply without one is stored. A stored file that
+  cause (for example none was ever stored, an email change or a token save deleted the
+  reading, a `login` account that had none was renamed, or the stored file does not decode as a
+  reading or holds a 5-hour use outside 0 to 100, 6.3), a reply without one is stored. A stored file that
   cannot be read at all fails every refresh of the account instead (6.3).
 - Fable probe check, recorded on 2026-11-10 with the exact probe form above and a Fable model. A
   first, cold run with a 0.05 USD cap spent 0.099 USD in about 4 seconds and was cut off
@@ -1105,18 +1129,58 @@ fails. `refresh --force` does not lift that limit.
 None of those keys names an account: readings are kept by label. `state/readings/<label>.json`
 holds the reading last saved under that label, and everything that reads one for an account (the
 checks of 6.2, the merge and the age rule below, `pick` and `status`) reads the one under the
-account's current label. A rename (`config set <label> label <new>`, 4A.4) moves, copies, checks
-and clears no reading file, and neither `add` nor `init` checks for one. So after a rename the
-account is judged by whatever reading is stored under its new label, which may be none or an older
-one left under that label (a rename back to a label it held before can find the reading it left
-there), and an account that later takes the old label is judged by whatever reading is stored
-there, which can be the one the renamed account left. A reading left under a label counts like any
-stored one: until it is older than `picker.maxReadingAgeMinutes` (15 minutes by default) or a
-5-hour or weekly reset time in it passes, `pick` runs no plain probe and judges the account by it,
-its 5-hour window included, so a main account can be picked on a 5-hour use that is older and
-lower than its newest one, or on another account's use. After that, the account's own replies
-merge into it by the rule below, and while it holds a 5-hour window, a reply without one is
-refused (6.2), so an account whose replies carry no 5-hour window is then skipped (7.2 rule 10).
+account's current label. So each command that changes which account or sign-in a label stands
+for moves or deletes that reading under the locks it saves the change under. A rename (`config set
+<label> label <new>`, a `login` account only, 4A.4) moves the account's reading to its new label
+once the registry holds that label, where it replaces a reading stored there before (or deletes
+that one when the account has none), and leaves none under the old label, so the account is judged
+by its own newest reading or by none, a rename back included; a rename that the registry save
+refuses moves nothing, and only a reading stored earlier under the new label, which no account
+holds, is gone. `add` and `init` delete a reading another account left under the label they
+give a new account, so its own replies set its reset times. `config set <label> email <new>` on a
+`login` or `folder` account deletes the label's reading when the new email differs from the
+stored one, compared without letter case as the sign-in check compares them, just before it saves
+the new email (12); the same email again, in any letter case, keeps the reading. Every token save
+of a token account's `login`, a first one included, deletes the label's reading before it writes
+the token file (4A.4), so a reading that stayed while the token file went missing, as after a
+restore from a backup that left out `tokens/`, never judges the new token. `remove` deletes the
+reading with the account, and `uninstall` deletes every reading (4A.4, 12). Nothing else moves or
+deletes a reading: an email or label changed by a hand edit of `config.json`, or a token file put
+in place by hand, keeps the reading stored under the label, which then counts like any stored one
+(section 14, T16).
+
+The email change, the token save, the rename, `add` and `init` each hold the pick lock and, for
+each label whose reading they move or delete, that label's probe lock
+(`locks/probe-<label>.lock`), and let neither go until they have saved the change and moved or
+deleted the reading. A refresh holds a label's probe lock from a registry check it makes once it
+has the lock until it has saved its reading, and goes ahead only while the saved registry still
+holds the account it was given under that label, with the same `accountKey`, kind and email (the
+email compared without letter case), or while no registry is saved. So a probe already under way
+when one of those commands starts saves its reading first, and the command then moves or deletes
+that one too. After an email change, a rename, an `add` or an `init`, a probe that waited for the
+lock, or that a `pick` or `refresh` began from a registry read before the change, runs no probe and
+saves nothing (`refresh` prints `not checked: the account changed while the check waited`). A token
+save leaves the registry holding the same account, so a probe that waited for its lock goes ahead
+and reads the token file as the save left it, with the new token. No reading taken for the old
+account, sign-in or token is saved under the label after the change: the next probe there starts
+from the moved reading or from none, at `pick` or `refresh` after a rename or an email change, and
+at the first check of a token save. `pick` and `run` read the registry again once they hold the
+pick lock, and neither judges nor starts an account that it no longer holds under its label
+(7.2 rule 7). `remove` and `uninstall` take only the pick lock: a probe under way during `remove`
+can save a reading under the removed label after `remove` ends; `add`, `init` and a rename onto
+that label delete it before an account starts on it, and so does a rerun of `remove <label>`. A
+command waits for a probe lock, while it holds the pick lock, up to the probe timeout plus the
+Fable probe timeout plus 60 seconds, 140 seconds with the defaults, so a `pick` or `run` that
+starts meanwhile can stop at the pick lock (7.2 rule 7); when the command cannot have the probe
+lock, it changes nothing and says
+`A check of '<label>' is still running, so nothing was changed. Try again in a moment.`
+
+The rebuild that an email change or a token save runs records no `limit_cleared` for the label
+whose reading it deleted, as a removed account's records none (10.3): that limit belonged to the
+old sign-in or token and did not clear. Another rebuild that runs while one of these commands
+works, such as one during the email change's own sign-in check or the token save's first check,
+does not know of the delete and can record one. A rename moves the reading, so the account's state
+stays as it was.
 
 `status` shows the age; the menu greys a row whose
 reading is older than twice the refresh interval. `pick` refreshes any candidate whose reading is
@@ -1135,7 +1199,10 @@ the same way: the merge keeps the stored use, and discards every reading with an
 time, until that reset time has passed. For `five_hour`, `seven_day` and the Fable window, the
 windows a pick reads, a held window keeps its reset time but never less use than the newest reply
 gives: a higher use in a discarded reading still raises it, with that reading's `readAt`, so a
-hold can make an account look busier than the reply says, never freer. When one reply names one
+hold never shows less use than the reply says. The reset time it keeps still counts: a main
+account's reserve line (7.2 rule 2) reads the days to the held weekly reset, so a held reset
+sooner than the reply's can give a higher line than the reply's own reset would, by up to 40
+points on the standard reserve, until it passes. When one reply names one
 of these windows more than once, its entries merge by the same rule, and because they were read
 at one moment the highest use among them stands, in any order, with one exception, also in any
 order: an entry whose reset time had passed when the reply was read is left out when another
@@ -1278,7 +1345,13 @@ saves a token (4A.4). It is optional, so a config from before it stays valid at 
 Every account also carries `expectedPlanTier` and `accountKey`. `init` records the tier
 `auth status` shows; for an added account the first `refresh`, or folder `login`, whose sign-in
 check placed the expected account's sign-in in its own folder, for the email the account has when
-the plan is saved, records it (10.1).
+the plan is saved, records it (10.1). `config set <label> email <new>` on a `login` or `folder`
+account forgets the tier in the same write that saves a new email, and records the new sign-in's
+when its own check places it; otherwise the next such `refresh` or folder `login` does, so the
+first check that places the new sign-in reports no `plan_changed` and ends no account marked
+`endingSoon` by plan. An ending-soon plan drop that a check of the old email marked (10.1) ends with
+that email: the first status rebuild after the email changes, the email change's own included,
+clears it, so `status` and `pick` agree on such an account.
 `accountKey` is a random id that `init` and `add` make. It is no secret, and it goes on every
 history and events line and into `status`, so a label removed and added again for another account
 is never mixed with the old one.
@@ -1331,7 +1404,16 @@ the last point at which a launch may start. A validator refuses any point above 
    `picker.expectedRunPercent` (default 5) to that account's weekly used and 5-hour used before
    rules 2 to 4, so an account near its limit is not handed out again seconds later. Rule 5 still
    ranks the soonest expiry first within each group, so two callers picking seconds apart can land
-   on the same account. `pick --dry-run` takes the lock but writes no lease.
+   on the same account. `pick --dry-run` takes the lock but writes no lease. Once it holds the
+   lock, `pick` reads the registry again and skips, as `the account changed while the pick
+   waited`, every account that the saved registry no longer holds under its label with the same
+   `accountKey`, kind and email (the email compared without letter case), so a rename and an `add`
+   under the old label made while its probes ran never get the renamed account judged by the new
+   account's reading; `run <label>` refuses such an account the same way and starts nothing. A
+   command that changes which sign-in a label stands for can hold the lock while it waits for that
+   label's probe lock, up to 140 seconds with the default timeouts (6.3), so a `pick` that starts
+   then can exit 1 with `pick busy` after its 30 seconds, and `run` with `Another pick is running.
+   Try again in a moment.`
 8. Units: the probe's `utilization` (0 to 1) is stored as percent 0 to 100 with one decimal
    before any rule runs.
 9. A protected account also needs a 5-hour window and
@@ -1351,17 +1433,19 @@ the last point at which a launch may start. A validator refuses any point above 
     refused (6.2), so once the reading is stale or its window has reset, the account is skipped as
     `stale reading, refresh failed` or `window reset, refresh failed` until a reply carries the
     window or the stored reading no longer holds one. When the stored reading holds no 5-hour
-    window, whatever the cause (for example the service never reported one, `remove` deleted the
-    reading, a `login` account was renamed to a label with no stored reading, or the stored file
-    does not decode as a reading or holds a 5-hour use outside 0 to 100, 6.3), the next reply
+    window, whatever the cause (for example the service never reported one, an email change or a
+    token save deleted the reading, a `login` account that had none was renamed, or the stored
+    file does not decode as a reading or holds a 5-hour use outside 0 to 100, 6.3), the next reply
     without the window is stored, and the account is judged as one with no 5-hour reading. A
     stored file that cannot be read at all fails every refresh instead, so the account is skipped
     as `no weekly reading` until it can be read (6.3). So when the service never reports a 5-hour
     window for an account, no reply adds one, and the account is judged as one with no 5-hour
-    reading unless a reading left under its label holds one (6.3). In that case the account is
-    judged by that reading, its 5-hour window included, while the reading is fresh (younger than
-    `picker.maxReadingAgeMinutes`, 15 minutes by default), so a main account can be picked on it,
-    and is skipped once the reading is stale or its window has reset. A reply that names
+    reading unless the reading stored under its label holds one, which only a hand edit under
+    `~/.agent-balancer/` (of `config.json` or a token file, section 14, T16) or an earlier version
+    of the tool can have left there (6.3). In that case the
+    account is judged by that reading, its 5-hour window included, while the reading is fresh
+    (younger than `picker.maxReadingAgeMinutes`, 15 minutes by default), so a main account can be
+    picked on it, and is skipped once the reading is stale or its window has reset. A reply that names
     `five_hour` with no value fails the probe. `init` and `add` make pool accounts; of the
     commands, only `config set-main` makes a main one. The reason: with no 5-hour reading the tool
     cannot show that a run leaves the user room on the main account, and a lockout until the reset
@@ -1596,7 +1680,10 @@ Field rules:
   account's own digest differs, after `config set <label> email`, an edit of `config.json`, or
   `remove` and `add` of the same label, the row has no `planTier`, no `loginExpiresAt` from a
   check and no `signed_in` until a check of the new email. An entry with no digest, as an
-  earlier version wrote it, reads the same way. These commands record a check: `status` (not
+  earlier version wrote it, reads the same way. A check made for the email the account had
+  before, whose command saves its result after the email changed, whether or not it read a
+  status, records nothing at all, so it never clears what a check of the new email found, such as
+  `wrong_account`. These commands record a check: `status` (not
   `--cached`), `pick`, `run` (once it has written its launch file), `verify`, `refresh` (for each
   `login` and `folder` account whose reading did not fail, every time it runs), `init`,
   `login` for a folder account (the check of a folder it refuses as signed in already, and the
@@ -1604,7 +1691,8 @@ Field rules:
   `config set <label> email`. Only a check that placed the expected sign-in, for the current
   email, feeds `expectedPlanTier` (7.1), `loginExpiresAt` and the ending-soon plan drop
   (section 9). The row leaves it null while the account's last check or probe says
-  `login_rejected`, `check_failed` or `wrong_account`.
+  `login_rejected`, `check_failed` or `wrong_account`. A plan drop marked for an earlier email
+  goes with that email, as its tier does (7.1).
 - `signInCheck` is on `folder` rows only (login and token rows have no such key): the result of
   the last sign-in check of the folder that read an answer from `auth status`. `signed_in` is the
   expected account (any account when none is expected) signed in in the account's own folder;
@@ -1743,7 +1831,10 @@ The record of state changes. It answers "what changed since I last looked": the 
   event per account in one rebuild, chosen in this order: a new error code (`error`), a cleared
   error (`recovered`), `limited`, `limit_cleared`, then `login_expiring`. `account_added` and
   `account_removed` come from comparing `accountKey`s with `state/current.json`, so a renamed label
-  writes none and a label removed and added again for another account writes both.
+  writes none and a label removed and added again for another account writes both. The rebuild
+  that an email change or a token save runs writes no `limit_cleared` for the reading it deleted,
+  as a removed account's writes none; another rebuild that runs during the command, such as during
+  the email change's own sign-in check or the token save's first check, can write one (6.3).
 - `seq` rises by one per event. A damaged record (a line in the middle that does not parse, a
   `seq` that does not rise, or a missing header) is set aside as `events-damaged-<time>.jsonl`,
   starts a new `recordId`, and `seq` restarts at 1; there is no counter file. A line with a value
@@ -1821,8 +1912,16 @@ from that account's last line, at most one line per 15 minutes unless the state 
 means nothing was read. An append also compares the line with the last line in the account's
 file and writes nothing when the account, the numbers, the reset times, the state and the source
 are the same, so appends are idempotent: a rebuild that runs again after a failed step (section
-13) never writes a reading twice. `--since` defaults to 24 hours back and `--limit` to 500
-readings per account (the newest ones, listed oldest first). `--since` takes an ISO 8601 time or a span such as
+13) never writes a reading twice. Lines are written under the account's label at the time, each
+with its `accountKey`, and a configured account lists its own lines from every label's file, by
+that key, oldest first: after a rename it keeps the lines from before it, and it never lists
+another account's lines, such as those of an account removed from its label or the one that held
+its old label; a label no account holds lists its file as it is. A history file that the reader
+refuses, such as a link, stops only the listings whose lines it may hold: that of the account under
+its label and that of the `login` account, the one kind a rename moves. `history --json` then
+exits 1 when such a listing is asked for, and a listing of any other account, such as
+`--label <label>` for a token account, goes on without that file. `--since` defaults to 24 hours
+back and `--limit` to 500 readings per account (the newest ones, listed oldest first). `--since` takes an ISO 8601 time or a span such as
 `30m`, `24h` or `7d`. Lines older than `history.retentionDays` (default 35, five weekly windows)
 are dropped (section 13). Retention counts back from the earlier of the clock and the newest
 stored reading of a configured account that has a `five_hour` or `seven_day` reset time at most
@@ -1991,10 +2090,14 @@ empty lists, and the events record keeps only each label's newest line.
     such evidence (its row carries no tier), and any code on its row could hide one that says it
     is signed out or unconfirmed: `account_ended` hides every other code, and every other code
     the tool writes ranks above `check_failed`. A token account therefore counts as signed in
-    only while its row is `ok` or `limited` with no code. A login account counts the same way,
-    and also by its plan tier, as a folder row does, while its row shows `plan_changed` or
-    `duplicate_login`, which say nothing against the sign-in; that tier follows the email rule
-    above. Otherwise the panel reads "Account ended" for an ended row, whose list row reads
+    only while its row is `ok` or `limited` with no code. A login account counts only by its
+    plan tier, as a folder row does, while its row is `ok` or `limited` with no code or shows
+    `plan_changed` or `duplicate_login`, which say nothing against the sign-in; that tier follows
+    the email rule above, so after its email changes, by `config set` or by a hand edit of
+    `config.json`, a login row never reads as signed in until a check places the new email's
+    sign-in. Such a login row with no tier reads "Sign-in not confirmed" in the list and the
+    panel, and its panel shows no problem when the row has no code. Otherwise the panel reads
+    "Account ended" for an ended row, whose list row reads
     "Ended Nov 1" once its end date has passed and "Ended" before then, and the list and the
     panel read "Signed out" for `login_rejected` or `token_missing`, "Signed in as another
     account" for `wrong_account`, and "Sign-in not confirmed" for any other code, `check_failed`
@@ -2069,11 +2172,12 @@ empty lists, and the events record keeps only each label's newest line.
   1. `agent-balancer init [--label <label>]` creates `~/.agent-balancer/` (0700), reads the
      default folder with `auth status`, asks for that account's label (`--label` is required when
      not interactive), records the email `auth status` shows as its expected email, and writes
-     `config.json` with that account as a `login` account with role `pool`. It also always writes
-     the hook record (5.7).
+     `config.json` with that account as a `login` account with role `pool`, deleting a reading
+     another account left under that label (6.3). It also always writes the hook record (5.7).
   2. `agent-balancer refresh`, then open the app: the first account shows at once.
   3. `agent-balancer add <label> [--email <address>] [--ends <date> | --ending-soon]` writes the
-     registry entry of a `token` account and creates no folder (4A.4).
+     registry entry of a `token` account, deletes a reading another account left under the
+     label and creates no folder (4A.4).
   4. `agent-balancer login <label>`, in Terminal: it runs `claude setup-token`, the browser opens,
      the person approves once, and the tool keeps the token and runs one probe under it.
      `login <label> --paste` is the fallback form.
@@ -2089,7 +2193,15 @@ empty lists, and the events record keeps only each label's newest line.
   the first `/login` and that project's trust prompt happen together. It is allowed only while the
   folder is logged out, refuses when the folder is not linked, and afterwards runs `auth status`
   and says whether the folder holds the expected email. `config set <label> email|ends|ending-soon|label <value>`
-  changes one field with a dated backup. The tool never logs in for the user.
+  changes one field with a dated backup. On a `login` or `folder` account, an email that differs
+  from the stored one, compared without letter case as the sign-in check compares them, also
+  forgets the recorded plan (`expectedPlanTier`, 7.1) in the same write that saves the new email,
+  and deletes the label's stored reading just before that write (6.3), under the pick lock and the
+  label's probe lock. A refused change and the same email again keep both; once the new email is saved, the
+  old reading and plan are gone whatever the sign-in check that follows reports, and when that
+  check places the new sign-in it records the new plan. A rename of a `login` account moves its
+  reading and its open leases to the new label once the registry is saved, so a rename that the
+  save refuses moves nothing (4A.4). The tool never logs in for the user.
 - **One account per folder, for good.** A folder is signed into one account and stays on it,
   because saved thinking from a model works only in the account that produced it, and a chat that
   meets a second sign-in loses it. `login <label>` runs only while the folder is logged out, or
@@ -2337,7 +2449,9 @@ empty lists, and the events record keeps only each label's newest line.
                                           stamp (4A.5); no env name and no value
   state/leases.json                0600   open leases (internal id, label, model, time), pruned
   probe/                           0700   one fresh temporary folder per probe, removed afterwards
-  locks/probe-<label>.lock        0600   one probe at a time per folder
+  locks/probe-<label>.lock        0600   one probe at a time per label, also held while an email
+                                          change, a token save, a rename, `add` or `init` moves
+                                          or deletes the label's reading (6.3)
   locks/pick.lock                  0600   one pick decision at a time (section 7.2 rule 7)
   locks/history.lock               0600   one writer at a time for the history and events files
   locks/links.lock                 0600   one writer at a time for links.json
@@ -2364,7 +2478,9 @@ owned by the user, the writer's own leftover temporary files there included. The
 is `uninstall`, which also deletes the tool's own files in `state/`, `logs/`, `backups/`, `probe/`
 and `locks/`, by the name rules of section 12, `links.json`, `config.json` and the writer's
 temporary files of those two, and nothing else. `remove` also deletes the label's stored reading and its empty launch folder through the
-same writer. A token file is written whole to a random temporary name in `tokens/` and renamed into
+same writer, and a token save, an email change on a `login` or `folder` account, `add` and
+`init` delete a label's stored reading, and a rename moves one, the same way (6.3).
+A token file is written whole to a random temporary name in `tokens/` and renamed into
 place, so a reader never sees half a token, and after a crash the token file is the old one or the
 new one. A crash between the write and the rename can also leave the temporary file, which may hold
 a whole token; the next `remove`, token replace or upkeep pass deletes it under the pick lock, and

@@ -107,22 +107,63 @@ struct ConfigCommand: ParsableCommand {
             let context = ToolContext.current()
             try Shared.requireOwnTerminal(context)
             var lines: [String] = []
+            var observations = StatusObservations()
+            var probeLocks: [FileLock] = []
+            defer { for lock in probeLocks { lock.release() } }
+            var signInChanged = false
+            var move: () throws -> Void = {}
             // Under the pick lock like every registry writer, so an add, remove or role change
             // saved at the same moment is kept and a remove never sees a rename half way.
             let config = try TokenAccounts.updateConfig(context: context, backup: true) { config in
+                let before = config.accounts.first { $0.label == words.first }
                 lines = try Self.change(words, in: &config)
+                guard let before,
+                    let after = config.accounts.first(where: { $0.accountKey == before.accountKey })
+                else { return }
+                if Self.changesSignIn(from: before, to: after) {
+                    probeLocks = try TokenAccounts.takeProbeLocks(
+                        context: context, labels: [before.label], config: config)
+                    // A reading taken for the old email would judge the new sign-in.
+                    try ReadingStore(context: context).delete(label: before.label)
+                    observations.readingDropped = [before.label]
+                    signInChanged = true
+                } else if after.label != before.label {
+                    probeLocks = try TokenAccounts.takeProbeLocks(
+                        context: context, labels: [before.label, after.label], config: config)
+                    move = try TokenAccounts.moveLabel(
+                        context: context, from: before.label, to: after.label)
+                }
+            } afterSave: {
+                // Only a saved rename moves the files, so a refused save leaves them in place.
+                try move()
             }
+            for lock in probeLocks { lock.release() }
             for line in lines { print(line) }
-            var observations = StatusObservations()
+            // What the check finds is recorded however the command ends, after any plan is saved.
+            defer { Shared.rebuildStatus(context, observations: observations) }
             // A new email is checked as `status` checks it, since no check of the old one counts.
             if words.count == 3, words[1] == "email", let account = config.account(words[0]),
                 let handler = AccountKinds.handler(for: account.kind)
             {
                 let check = handler.check(
                     account: account, runner: ClaudeRunner(context: context), now: Date())
-                observations.auth[account.label] = AuthObservation(check)
+                let observation = AuthObservation(check)
+                observations.auth[account.label] = observation
+                // The first check that places the new sign-in fixes the plan it is expected to keep.
+                if signInChanged, account.expectedPlanTier == nil, observation.seen == .signedIn,
+                    let tier = check.planTier
+                {
+                    try Shared.recordExpectedTiers(
+                        context: context, tiers: [account.label: (tier, check.emailDigest)])
+                }
             }
-            Shared.rebuildStatus(context, observations: observations)
+        }
+
+        /// Whether a change gives a `login` or `folder` account an email its sign-in check reads as
+        /// another one: it compares emails without letter case.
+        static func changesSignIn(from before: Account, to after: Account) -> Bool {
+            [Kind.login, Kind.folder].contains(before.kind)
+                && before.email?.lowercased() != after.email?.lowercased()
         }
 
         /// Applies one change to `config` and returns the lines to print.
@@ -153,7 +194,10 @@ struct ConfigCommand: ParsableCommand {
                 guard value.contains("@"), !value.contains(" ") else {
                     throw ToolError("That is not an email address.")
                 }
+                let old = account
                 account.email = value
+                // A plan recorded for the old sign-in says nothing about the new one.
+                if changesSignIn(from: old, to: account) { account.expectedPlanTier = nil }
             case "ends":
                 if value != "none" {
                     guard ConfigValidator.isTodayOrLater(value) else {

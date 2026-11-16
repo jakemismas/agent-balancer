@@ -1,0 +1,93 @@
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: The release version. It must equal Sources/Core/Version.swift, or that value plus -rcN when prerelease is on.
+        required: true
+        type: string
+      prerelease:
+        description: Publish as a prerelease.
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: macos-26
+    timeout-minutes: 45
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Require a commit on main
+        env:
+          REF: ${{ github.ref }}
+          SHA: ${{ github.sha }}
+        run: |
+          if [ "$REF" != "refs/heads/main" ]; then
+            echo "Releases run only from main." >&2
+            exit 1
+          fi
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$SHA" origin/main; then
+            echo "The commit is not on origin/main." >&2
+            exit 1
+          fi
+      - name: Check the inputs
+        env:
+          VERSION: ${{ inputs.version }}
+          PRERELEASE: ${{ inputs.prerelease }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          scripts/release-version.sh check "$VERSION" "$PRERELEASE"
+          scripts/release-notes.sh "$VERSION" >/dev/null
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            echo "Release v$VERSION already exists." >&2
+            exit 1
+          fi
+      - name: Record the toolchain
+        run: swift --version
+      - name: Install gitleaks
+        run: brew install gitleaks
+      - name: Check
+        run: scripts/check.sh
+      - name: Package
+        env:
+          VERSION: ${{ inputs.version }}
+          OWNER: ${{ github.repository_owner }}
+          REPO: ${{ github.repository }}
+        run: |
+          scripts/package-release.sh --version "$VERSION" --owner "$OWNER" \
+            --base-url "https://github.com/$REPO/releases/download/v$VERSION"
+      - name: Attest
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            build/release/AgentBalancerBar.zip
+            build/release/agent-balancer-*-arm64.tar.gz
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          PRERELEASE: ${{ inputs.prerelease }}
+          SHA: ${{ github.sha }}
+        run: |
+          scripts/release-notes.sh "$VERSION" > "$RUNNER_TEMP/release-notes.md"
+          flag=()
+          if [ "$PRERELEASE" = "true" ]; then flag=(--prerelease); fi
+          gh release create "v$VERSION" ${flag[@]+"${flag[@]}"} --target "$SHA" --title "v$VERSION" \
+            --notes-file "$RUNNER_TEMP/release-notes.md" \
+            build/release/AgentBalancerBar.zip \
+            build/release/agent-balancer-*-arm64.tar.gz \
+            build/release/SHA256SUMS \
+            build/release/agent-balancer.rb

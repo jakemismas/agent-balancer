@@ -123,17 +123,17 @@ import Testing
 
     // MARK: Every point the plan names
 
-    /// On macOS 14 the first open of the unsigned app is four steps, with these button names.
-    @Test func theInstallSectionGivesTheFourStepsThatOpenTheUnsignedApp() throws {
+    /// On macOS 14 the first open of the ad hoc signed app is four steps, with these button names.
+    @Test func theInstallSectionGivesTheFourStepsThatOpenTheAdHocSignedApp() throws {
         let install = Self.flat(try Self.section("Install", of: Self.read("README.md")))
         let steps = [
-            "The app is not signed yet", "On macOS 14 that open takes four steps",
+            "The app is ad hoc signed and not notarized", "On macOS 14 that open takes four steps",
             "1. Open the app.", "shows only an OK button. Choose OK.",
             "2. Open System Settings, then Privacy & Security.", "Under Security",
             "was blocked from use, choose Open Anyway.",
             "3. Enter an administrator's password when asked, and choose Modify Settings.",
             "4. macOS asks whether you are sure you want to open it. Choose Open.",
-            "Do these four steps again after each upgrade",
+            "Do these four steps again after each upgrade until the app is notarized.",
         ]
         let miss = Self.outOfOrder(steps, in: install)
         #expect(miss == nil, "\(miss ?? "")")

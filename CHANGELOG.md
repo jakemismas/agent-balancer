@@ -1,6 +1,12 @@
 # Changelog
 
-## Unreleased
+## 1.0.0
+
+- Add the release: `scripts/package-release.sh` (app zip, CLI archive, checksums and the filled
+  formula), the formula template `packaging/agent-balancer.rb` that installs the prebuilt tool,
+  the `release` workflow, a CI job that installs the formula from a local tap, and
+  `docs/RELEASING.md`. The README and the architecture document now call the app ad hoc signed and
+  not notarized.
 
 - Add the Swift package with the `Core` library and the `agent-balancer` command, which prints its
   version.

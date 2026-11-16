@@ -180,7 +180,7 @@ struct Collected {
     }
 
     @Test func detectorStaysQuietOnCleanText() {
-        let data = Data("agent-balancer 0.1.0 and nothing else".utf8)
+        let data = Data("agent-balancer 1.0.0 and nothing else".utf8)
         #expect(!LeakDetector.contains(data, canaries: Canary.all()))
     }
 
@@ -254,7 +254,7 @@ struct Collected {
         try collected.addFiles(under: home)
 
         #expect(result.status == 0)
-        #expect(String(decoding: result.stdout, as: UTF8.self).contains("0.1.0"))
+        #expect(String(decoding: result.stdout, as: UTF8.self).contains("1.0.0"))
         #expect(collected.leaks(of: canaries).isEmpty)
     }
 }

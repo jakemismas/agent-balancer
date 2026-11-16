@@ -161,6 +161,12 @@ agent-balancer/
   scripts/build-app.sh       build/AgentBalancerBar.app: release build, hand-made bundle, iconutil
                              icon, ad hoc signature, no Xcode; it refuses a written Info.plist
                              that declares a scripting, URL, service, document or extension key
+  scripts/package-release.sh the release files in build/release/: the app zip, the CLI archive,
+                             SHA256SUMS and the formula filled from packaging/agent-balancer.rb;
+                             `--dry-run` publishes nothing and points the formula at the folder
+  packaging/agent-balancer.rb  the formula template: prebuilt CLI, skill folder in the share folder
+  .github/workflows/release.yml  the release run started by hand (version input, prerelease switch)
+  docs/RELEASING.md          cutting a release and the install smoke
   scripts/render-views.sh    builds the app and the CLI, runs the render flag into
                              build/renders/ (an older render of a README picture is deleted
                              first), copies the three README pictures that run drew, light and
@@ -2233,8 +2239,14 @@ empty lists, and the events record keeps only each label's newest line.
 
 ## 12. Install, update, uninstall
 
-- **Install:** the CLI with Homebrew from the project's tap. The app ships as a zip attached to
-  the GitHub release; the README gives the unzip, drag to Applications and Open Anyway steps.
+- **Install:** the CLI with Homebrew from the project's tap. The formula installs the prebuilt CLI
+  from the release (`agent-balancer-<version>-arm64.tar.gz`) and never builds from source, because
+  building needs Swift tools 6.2 and the Command Line Tools of macOS 14 lack it. Its only
+  `depends_on` lines are `arch: :arm64` and `macos: :sonoma`, and the binary links only system
+  libraries, so a Mac with no developer tools installs it; `scripts/package-release.sh` fails on
+  any other linked library. The app ships as a zip attached to the GitHub release; the README
+  gives the unzip, drag to Applications and Open Anyway steps. `docs/RELEASING.md` holds the
+  release and install smoke steps.
 - **Skill file:** the formula installs the skill folder, `skill/agent-balancer/` with its
   `SKILL.md`, at `$(brew --prefix)/share/agent-balancer/skill/agent-balancer`. The README gives
   the one line the user runs to link that folder into `~/.claude/skills/`; the tool never writes
@@ -2293,9 +2305,9 @@ empty lists, and the events record keeps only each label's newest line.
   into a folder that already has chats. Add a new folder for the new account instead." A folder
   found on another account shows `wrong_account`, drops out of `pick`, and its fix text says to
   sign the expected account back in, not to relabel the folder.
-- **Unsigned app:** the README shows the unzip, drag and System Settings, Privacy & Security, Open
-  Anyway steps. The app needs Open Anyway after the first install and again after each upgrade
-  until it is signed.
+- **Ad hoc signed app:** the app carries an ad hoc signature and is not notarized. The README
+  shows the unzip, drag and System Settings, Privacy & Security, Open Anyway steps. The app needs
+  Open Anyway after the first install and again after each upgrade until it is notarized.
 - **Update:** `brew upgrade` for the CLI; the app is replaced from the new zip. Config carries
   `schemaVersion`; the CLI migrates forward and keeps a dated backup.
 - **Run:** `agent-balancer run <label> [--print-command] [-- <claude arguments>]` starts Claude Code
@@ -2798,11 +2810,13 @@ Threat numbers are not reused or renumbered.
   equal reset times, on any probe, and not otherwise; `token_missing` on a deleted or widened file.
 - **Safety tests:** no network APIs linked; no forbidden file names in the source; file modes are
   0600 and 0700 after every command.
-- **Human smoke list (each release):** install from the tap in a fresh macOS virtual machine or on
-  a second Mac, with Claude Code installed and one test account logged in; `init`; `add` an
-  account and log in; `status` shows it; log it out and see `login_rejected`; `pick` with and
-  without `--model fable`; the menu shows rows, meters and the error row in light and dark; the
-  Open Anyway steps match the README; the uninstall dry run lists everything.
+- **Release smoke list (each release):** agents run it in a fresh macOS 14 virtual machine after the
+  release commit lands, and the maintainer reviews the result before the release goes public. It
+  installs from a local tap built from the release files (`docs/RELEASING.md`), with Claude Code
+  installed and one test account logged in; `init`; `add` an account and log in; `status` shows
+  it; log it out and see `login_rejected`; `pick` with and without `--model fable`; the menu
+  shows rows, meters and the error row in light and dark; the Open Anyway steps match the README;
+  the uninstall dry run lists everything.
 
 ## 16. The contract callers use
 

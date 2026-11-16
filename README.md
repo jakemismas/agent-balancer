@@ -29,7 +29,8 @@ agent-balancer reads how much of each Claude Code subscription you have used and
 
 ## Install
 
-1. Install the command line tool with Homebrew:
+1. Install the command line tool with Homebrew. It installs a prebuilt tool, so your Mac needs no
+   developer tools:
 
    ```
    brew install <user>/tap/agent-balancer
@@ -42,15 +43,15 @@ agent-balancer reads how much of each Claude Code subscription you have used and
    ```
 
 3. Unzip it and drag `AgentBalancerBar.app` to Applications.
-4. The app is not signed yet, so macOS stops its first open. On macOS 14 that open takes four
-   steps (newer versions may word them differently):
+4. The app is ad hoc signed and not notarized, so macOS stops its first open. On macOS 14 that open
+   takes four steps (newer versions may word them differently):
    1. Open the app. macOS says it cannot open it and shows only an OK button. Choose OK.
    2. Open System Settings, then Privacy & Security. Under Security, below the line that says
       "AgentBalancerBar" was blocked from use, choose Open Anyway.
    3. Enter an administrator's password when asked, and choose Modify Settings.
    4. macOS asks whether you are sure you want to open it. Choose Open.
 
-   Do these four steps again after each upgrade until the app is signed.
+   Do these four steps again after each upgrade until the app is notarized.
 
 Upgrade the tool with `brew upgrade agent-balancer` and replace the app from the new zip.
 

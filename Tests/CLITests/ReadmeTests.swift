@@ -2,13 +2,15 @@ import Core
 import Foundation
 import Testing
 
-/// README.md and CONTRIBUTING.md hold every point the plan asks for, in its order; the README
-/// check fails on each thing it guards and the render script publishes only its own pictures; and
-/// the README pictures come from made-up accounts in states the status writer can produce.
+/// README.md, docs/GUIDE.md and CONTRIBUTING.md hold every point each must make, in its order;
+/// the README check fails on each thing it guards and the render script publishes only its own
+/// pictures; and the README pictures come from made-up accounts in states the status writer can
+/// produce.
 @Suite struct ReadmeTests {
     static let labels = ["main", "personal", "lab", "spare-a", "spare-b"]
     static let thinkingPage =
         "https://platform.claude.com/docs/en/build-with-claude/preserved-thinking"
+    static let guide = "docs/GUIDE.md"
 
     static func read(_ relative: String) throws -> String {
         try String(contentsOf: Support.root.appendingPathComponent(relative), encoding: .utf8)
@@ -40,6 +42,25 @@ import Testing
         return nil
     }
 
+    /// Heading anchors as GitHub makes them, with lines in fenced blocks skipped.
+    static func anchors(of text: String) -> Set<String> {
+        var found: Set<String> = []
+        var fence = false
+        for line in text.split(separator: "\n") {
+            if line.drop(while: { $0 == " " }).hasPrefix("```") {
+                fence.toggle()
+                continue
+            }
+            guard !fence, line.hasPrefix("#") else { continue }
+            found.insert(
+                "#"
+                    + line.drop { $0 == "#" }.trimmingCharacters(in: .whitespaces).lowercased()
+                    .filter { $0.isLetter || $0.isNumber || $0 == " " || $0 == "-" }
+                    .replacingOccurrences(of: " ", with: "-"))
+        }
+        return found
+    }
+
     static func expectPoints(_ points: [(String, [String])], in doc: String) throws {
         for (title, phrases) in points {
             let text = flat(try section(title, of: doc))
@@ -53,6 +74,38 @@ import Testing
             of: "sk-" + "ant-[A-Za-z0-9_-]*", with: "sk-ant-<cut>", options: .regularExpression)
     }
 
+    /// A picture of a Markdown file: the scene its light file names, the element, and the first
+    /// line of text after it.
+    struct Picture {
+        let scene: String
+        let text: String
+        let after: String
+    }
+
+    static func pictures(in doc: String) -> [Picture] {
+        doc.matches(of: /<picture>[\s\S]*?<\/picture>/).map { match in
+            let text = String(match.output)
+            let scene =
+                text.firstMatch(of: /src="docs\/media\/([a-z-]+)-light\.png"/).map {
+                    String($0.output.1)
+                } ?? ""
+            let after =
+                doc[match.range.upperBound...].split(separator: "\n")
+                .first { !$0.trimmingCharacters(in: .whitespaces).isEmpty }.map(String.init) ?? ""
+            return Picture(scene: scene, text: text, after: after)
+        }
+    }
+
+    /// One line of italic text, the way the README captions a picture.
+    static func isCaption(_ line: String) -> Bool {
+        line.count > 2 && line.hasPrefix("*") && line.hasSuffix("*") && !line.hasPrefix("**")
+    }
+
+    /// GitHub keeps align on a div but not style, and reads Markdown in it after a blank line.
+    static func centered(_ picture: Picture) -> String {
+        "<div align=\"center\">\n\(picture.text)\n\n\(picture.after)\n\n</div>\n"
+    }
+
     // MARK: The README's order
 
     @Test func theReadmeFollowsThePlannedOrder() throws {
@@ -63,29 +116,47 @@ import Testing
         let pitch = lines.dropFirst().first { !$0.isEmpty } ?? ""
         #expect(pitch.hasSuffix(".") && !pitch.dropLast().contains(". "), "one sentence of pitch")
 
-        // The three pictures, light and dark, come right after the pitch.
+        // One picture, the menu in a healthy state, and its caption come right after the pitch.
         let afterPitch = try #require(readme.range(of: pitch)).upperBound
         let firstHeading = try #require(readme.range(of: "\n## ")).lowerBound
-        var between = String(readme[afterPitch..<firstHeading])
-        let blocks = between.matches(of: /<picture>[\s\S]*?<\/picture>/).map { String($0.output) }
-        #expect(blocks.count == 3)
-        for (block, scene) in zip(blocks, ["menu", "manage-tokens", "manage-folders"]) {
-            #expect(
-                block.contains(
-                    "<source media=\"(prefers-color-scheme: dark)\" srcset=\"docs/media/\(scene)-dark.png\">"
-                ), "\(scene)")
-            #expect(block.contains("src=\"docs/media/\(scene)-light.png\""), "\(scene)")
+        let opening = String(readme[afterPitch..<firstHeading])
+        let hero = Self.pictures(in: opening)
+        #expect(hero.map(\.scene) == ["hero"])
+        var left = opening
+        for picture in hero {
+            left = left.replacingOccurrences(of: Self.centered(picture), with: "")
         }
-        for block in blocks { between = between.replacingOccurrences(of: block, with: "") }
-        #expect(between.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        let rest = left.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        #expect(rest.isEmpty && hero.map(\.after).allSatisfy(Self.isCaption), "\(rest)")
 
         let headings = lines.filter { $0.hasPrefix("## ") }.map { String($0.dropFirst(3)) }
         #expect(
             headings == [
-                "Requirements", "Install", "First five minutes", "How it picks", "How it works",
-                "What it does not do", "Privacy", "Where tokens live", "Limits", "Uninstall",
-                "Contributing", "License",
+                "How it works", "Quick start", "The app", "For scripts and orchestrators", "FAQ",
+                "Details", "Contributing", "License",
             ])
+
+        // Every picture names its light and dark file and has a one-line caption under it.
+        let pictures = Self.pictures(in: readme)
+        #expect(pictures.map(\.scene) == ["hero", "manage-tokens", "manage-folders", "menu"])
+        let captions = [
+            "hero": "*The menu with three made-up accounts.*",
+            "manage-tokens":
+                "*Manage accounts shows the `agent-balancer` command behind each change.*",
+            "manage-folders": "*A folder account: its own folder, linked to your shared settings.*",
+            "menu": "*A weekly limit and a rejected sign-in: the pick skips both.*",
+        ]
+        #expect(pictures.map(\.after) == pictures.map { captions[$0.scene] ?? "" })
+        for picture in pictures {
+            #expect(
+                picture.text.contains(
+                    "<source media=\"(prefers-color-scheme: dark)\" srcset=\"docs/media/\(picture.scene)-dark.png\">"
+                ), "\(picture.scene)")
+            #expect(picture.text.contains("src=\"docs/media/\(picture.scene)-light.png\""))
+            #expect(Self.isCaption(picture.after), "\(picture.scene): \(picture.after)")
+            #expect(readme.contains(Self.centered(picture)), "\(picture.scene)")
+        }
 
         let last = lines.last { !$0.isEmpty } ?? ""
         #expect(last.hasPrefix("> agent-balancer is an independent project."))
@@ -93,8 +164,104 @@ import Testing
         #expect(readme.hasSuffix(last + "\n"))
     }
 
+    /// How it works is three bullets and nothing else.
+    @Test func howItWorksIsThreeBullets() throws {
+        let section = try Self.section("How it works", of: Self.read("README.md"))
+        let lines = section.split(separator: "\n").filter {
+            !$0.trimmingCharacters(in: .whitespaces).isEmpty
+        }
+        #expect(lines.filter { $0.hasPrefix("- ") }.count == 3)
+        // A nested bullet or an ordered item is a point too.
+        #expect(
+            lines.filter { $0.prefixMatch(of: /\s*([-*+]|[0-9]+[.)])[ ]/) != nil }.count == 3,
+            "\(lines)")
+        #expect(lines.allSatisfy { $0.hasPrefix("- ") || $0.hasPrefix("  ") }, "\(lines)")
+    }
+
+    /// The quick start installs from the real tap with commands that work when copied, opens the
+    /// app, adds the accounts and shows what the status prints, in that order.
+    @Test func theQuickStartRunsFromTheInstallToTheStatus() throws {
+        let quick = try Self.section("Quick start", of: Self.read("README.md"))
+        let order = [
+            "macOS 14 or later on Apple silicon", "two or more Claude",
+            "`AgentBalancerBar.zip`", "   brew install jakemismas/tap/agent-balancer\n",
+            "   gh release download --repo jakemismas/agent-balancer --pattern AgentBalancerBar.zip\n",
+            "   gh attestation verify AgentBalancerBar.zip --repo jakemismas/agent-balancer\n",
+            "`AgentBalancerBar.app` to Applications", "[four steps](docs/GUIDE.md#install)",
+            "`agent-balancer login <label>` opens the browser",
+            "agent-balancer init --label main\n", "agent-balancer add personal\n",
+            "agent-balancer login personal\n", "agent-balancer config set-main main\n",
+            "agent-balancer refresh\n", "```text\n   $ agent-balancer status --cached\n",
+            "next for fable: lab\n", "`agent-balancer run <label>`", "$(brew --prefix)",
+            "`brew upgrade agent-balancer`", "[guide](docs/GUIDE.md)",
+        ]
+        let miss = Self.outOfOrder(order, in: quick)
+        #expect(miss == nil, "\(miss ?? "")")
+        #expect(!quick.contains("<user>") && !quick.contains("<owner>"))
+    }
+
+    /// The opening line and the FAQ name the problem in the words people use when they ask, in
+    /// plain sentences: each answer is one or two sentences, and nothing is hidden in a comment.
+    @Test func theOpeningAndTheFaqNameTheProblemInPlainWords() throws {
+        let readme = try Self.read("README.md")
+        let pitch = readme.split(separator: "\n").dropFirst().first.map(String.init) ?? ""
+        let faq = try Self.section("FAQ", of: readme)
+        let entries = faq.components(separatedBy: "\n\n").map(Self.flat).filter { !$0.isEmpty }
+        #expect(entries.count >= 4)
+        for entry in entries {
+            let answer = try #require(
+                entry.firstMatch(of: /^\*\*[^*]+\?\*\* (.+)$/).map { String($0.output.1) },
+                "\(entry)")
+            #expect(answer.hasSuffix("."), "\(entry)")
+            #expect(answer.dropLast().split(separator: /[.?!]\s/).count <= 2, "\(entry)")
+        }
+        let words = Self.flat(pitch + " " + faq)
+        for phrase in [
+            "several Claude Code accounts or subscriptions", "several Claude Code subscriptions",
+            "five-hour or weekly usage limits", "five-hour or weekly usage limit?",
+            "switch accounts", "CLAUDE_CONFIG_DIR",
+        ] {
+            #expect(words.contains(phrase), "\(phrase)")
+        }
+        #expect(!readme.contains("<!--"))
+    }
+
+    /// The rules on where `claude` must be and the modes of the tool's files sit in Details, near
+    /// the end, with the uninstall line.
+    @Test func detailsSaysWhereClaudeMustBeAndTheFileModes() throws {
+        let details = Self.flat(try Self.section("Details", of: Self.read("README.md")))
+        let order = [
+            "The tool looks for `claude` only at `~/.local/bin/claude`, `/opt/homebrew/bin/claude` and `/usr/local/bin/claude`, never at a path from its own files.",
+            "If yours is elsewhere, link it into `~/.local/bin`.",
+            "That file, and `~/.local/bin` when it is used, must be owned by you or root and not writable by group or others.",
+            "Its files are mode 0600 and its folders are mode 0700.",
+            "`agent-balancer uninstall`", "drag the app to the Trash",
+            "`brew uninstall agent-balancer`",
+        ]
+        let miss = Self.outOfOrder(order, in: details)
+        #expect(miss == nil, "\(miss ?? "")")
+    }
+
+    /// Under two minutes at 238 words a minute, the published mean silent reading rate for English
+    /// non-fiction (Brysbaert 2019); code blocks are left out because they are copied, not read.
+    @Test func theReadmeReadsInUnderTwoMinutes() throws {
+        var prose: [Substring] = []
+        var fence = false
+        for line in try Self.read("README.md").split(separator: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~") {
+                fence.toggle()
+                continue
+            }
+            if !fence { prose.append(line) }
+        }
+        let words = prose.joined(separator: " ").replacing(/<[^>]*>/, with: " ")
+            .split(whereSeparator: \.isWhitespace)
+        #expect(words.count <= 450, "\(words.count) words")
+    }
+
     @Test func theFirstFiveMinutesFollowTheFirstRunOrder() throws {
-        let steps = try Self.section("First five minutes", of: Self.read("README.md"))
+        let steps = try Self.section("First five minutes", of: Self.read(Self.guide))
         let order = [
             "agent-balancer init --label <label>", "agent-balancer refresh",
             "agent-balancer status", "Open the app",
@@ -116,6 +283,7 @@ import Testing
             "Never sign a different account into a folder that already has chats",
             "Add a new folder for the new account instead",
             "[preserved thinking](\(Self.thinkingPage))", "skills folder",
+            "If `~/.claude/skills` did not exist when you ran `agent-balancer link`, run `agent-balancer link --repair <label>` for each folder account; until then `agent-balancer pick` skips it.",
         ] {
             #expect(text.contains(phrase), "\(phrase)")
         }
@@ -125,8 +293,10 @@ import Testing
 
     /// On macOS 14 the first open of the ad hoc signed app is four steps, with these button names.
     @Test func theInstallSectionGivesTheFourStepsThatOpenTheAdHocSignedApp() throws {
-        let install = Self.flat(try Self.section("Install", of: Self.read("README.md")))
+        let install = Self.flat(try Self.section("Install", of: Self.read(Self.guide)))
         let steps = [
+            "[quick start](../README.md#quick-start)", "a prebuilt tool",
+            "your Mac needs no developer tools",
             "The app is ad hoc signed and not notarized", "On macOS 14 that open takes four steps",
             "1. Open the app.", "shows only an OK button. Choose OK.",
             "2. Open System Settings, then Privacy & Security.", "Under Security",
@@ -134,13 +304,14 @@ import Testing
             "3. Enter an administrator's password when asked, and choose Modify Settings.",
             "4. macOS asks whether you are sure you want to open it. Choose Open.",
             "Do these four steps again after each upgrade until the app is notarized.",
+            "`brew upgrade agent-balancer`", "replace the app from the new zip",
         ]
         let miss = Self.outOfOrder(steps, in: install)
         #expect(miss == nil, "\(miss ?? "")")
     }
 
     @Test func theLimitsSectionSaysEachPoint() throws {
-        let limits = try Self.section("Limits", of: Self.read("README.md"))
+        let limits = try Self.section("Limits", of: Self.read(Self.guide))
         let text = Self.flat(limits)
         for phrase in [
             "The tool's checks are advisory against code that runs as you",
@@ -159,28 +330,40 @@ import Testing
         #expect(limits.contains("\"Read(~/.agent-balancer/" + "lau" + "nch/**)\""))
     }
 
-    @Test func theReadmeStatesEveryPlannedPoint() throws {
+    @Test func theReadmeAndTheGuideStateEveryRequiredPoint() throws {
         let readme = try Self.read("README.md")
+        let guide = try Self.read(Self.guide)
         try Self.expectPoints(
             [
                 (
-                    "Requirements",
+                    "Quick start",
                     [
-                        "macOS 14 or later on Apple silicon", "Claude Code", "Two or more",
-                        "`~/.local/bin/claude`, `/opt/homebrew/bin/claude` or `/usr/local/bin/claude`",
-                        "looks for `claude` only in those three places",
-                        "reads no path to it from its own files",
-                        "and when it is in `~/.local/bin`, so must that folder",
+                        "macOS 14 or later on Apple silicon", "Claude Code signed in",
+                        "the GitHub CLI (signed in for the check)",
+                        "two or more Claude accounts", "brew install jakemismas/tap/agent-balancer",
+                        "gh attestation verify", "--repo jakemismas/agent-balancer",
+                        "Unzip it and drag", "to Applications",
                     ]
                 ),
                 (
-                    "Install",
+                    "For scripts and orchestrators",
                     [
-                        "brew install <user>/tap/agent-balancer", "gh attestation verify",
-                        "--repo <user>/agent-balancer", "Unzip it and drag", "to Applications",
-                        "Open Anyway", "after each upgrade",
+                        "`agent-balancer pick --json` before each launch",
+                        "[docs/ORCHESTRATORS.md](docs/ORCHESTRATORS.md)",
+                        "[docs/CONTRACT.md](docs/CONTRACT.md)",
                     ]
                 ),
+                (
+                    "Contributing",
+                    [
+                        "(CONTRIBUTING.md)", "(CODE_OF_CONDUCT.md)", "(SECURITY.md)",
+                        "report vulnerabilities as [SECURITY.md](SECURITY.md) describes",
+                    ]
+                ),
+            ], in: readme)
+        try Self.expectPoints(
+            [
+                ("Install", ["Open Anyway", "after each upgrade"]),
                 (
                     "How it picks",
                     [
@@ -198,7 +381,7 @@ import Testing
                         "never reads the Claude login, the Keychain or the credential files",
                         "the only credential it keeps is a setup-token that you make yourself",
                         "a reserve for a main account, a menu bar view and one launch recipe",
-                        "[docs/CONTRACT.md](docs/CONTRACT.md)",
+                        "[CONTRACT.md](CONTRACT.md)", "[ORCHESTRATORS.md](ORCHESTRATORS.md)",
                     ]
                 ),
                 (
@@ -244,9 +427,8 @@ import Testing
                         "run `agent-balancer unlink <label>` before you remove a folder account",
                     ]
                 ),
-                ("Contributing", ["(CONTRIBUTING.md)", "(CODE_OF_CONDUCT.md)", "(SECURITY.md)"]),
-            ], in: readme)
-        let uninstall = try Self.section("Uninstall", of: readme)
+            ], in: guide)
+        let uninstall = try Self.section("Uninstall", of: guide)
         let miss = Self.outOfOrder(
             [
                 "`agent-balancer uninstall`", "Drag the app to the Trash",
@@ -255,32 +437,76 @@ import Testing
         #expect(miss == nil, "\(miss ?? "")")
     }
 
-    /// Wordings that once said more than the code does stay out.
-    @Test func noReadmeClaimIsWiderThanTheCode() throws {
-        let readme = Self.flat(try Self.read("README.md"))
-        for wide in [
-            "never touches", "does not change your settings files", "Only `claude` talks",
-            "The only program that talks to the network", "cannot be cancelled",
-            "a line that falls", "not marked ended", "with the most room",
-            "build-with-claude/extended-thinking", "Saved thinking from a model",
-            "signed in as the expected person on the expected plan",
-            "and a session you start with `run`.", "the links it made in them go",
-            "inside a synced folder", "writes no file and", "spreads close launches out",
+    /// Nothing sets the description and topics before the public flip, so the draft must stay.
+    @Test func theReleasePageHoldsTheDraftDescriptionAndTopics() throws {
+        let page = try Self.read("docs/RELEASING.md")
+        let draft = Self.flat(try Self.section("Repository description and topics", of: page))
+        for phrase in [
+            "For anyone with several Claude Code accounts or subscriptions: agent-balancer reads each account's five-hour and weekly usage and picks the account for your next launch. A command line tool, a macOS menu bar app and a skill.",
+            "Topics: `claude-code`, `claude`, `usage-limits`, `rate-limits`, `multiple-accounts`, `account-switcher`, `load-balancer`, `orchestration`, `macos`, `menu-bar`, `cli`, `swift`.",
         ] {
-            #expect(readme.contains(wide) == false, "\(wide)")
+            #expect(draft.contains(phrase), "\(phrase)")
         }
     }
 
-    /// Every web address in README.md and CONTRIBUTING.md is the page the plan names for it:
-    /// only the preserved-thinking page, linked from the folder account rule.
+    /// Wordings that once said more than the code does stay out of the README and the guide.
+    @Test func noReadmeClaimIsWiderThanTheCode() throws {
+        for file in ["README.md", Self.guide] {
+            let text = Self.flat(try Self.read(file))
+            for wide in [
+                "never touches", "does not change your settings files", "Only `claude` talks",
+                "The only program that talks to the network", "cannot be cancelled",
+                "a line that falls", "not marked ended", "with the most room",
+                "build-with-claude/extended-thinking", "Saved thinking from a model",
+                "signed in as the expected person on the expected plan",
+                "and a session you start with `run`.", "the links it made in them go",
+                "inside a synced folder", "writes no file and", "spreads close launches out",
+            ] {
+                #expect(text.contains(wide) == false, "\(file): \(wide)")
+            }
+        }
+    }
+
+    /// The only web address in the README, the guide, the orchestrator page and CONTRIBUTING.md
+    /// is the preserved-thinking page, linked from the folder account rule in the guide.
     @Test func everyExternalLinkIsThePageItsSourceNames() throws {
         let address = try Regex(#"https?://[^\s)>"`]+"#)
         var links: [String] = []
-        for file in ["README.md", "CONTRIBUTING.md"] {
+        for file in ["README.md", "CONTRIBUTING.md", Self.guide, "docs/ORCHESTRATORS.md"] {
             let text = try Self.read(file)
             links += text.matches(of: address).map { "\(file) \(text[$0.range])" }
         }
-        #expect(links == ["README.md \(Self.thinkingPage)"])
+        #expect(links == ["\(Self.guide) \(Self.thinkingPage)"])
+    }
+
+    /// Each local link of the five pages names a file, and a heading of it when it has an anchor.
+    @Test func everyLocalLinkNamesAFileAndAHeadingThere() throws {
+        var count = 0
+        let pages = [
+            "README.md", Self.guide, "docs/ORCHESTRATORS.md", "SECURITY.md", "CONTRIBUTING.md",
+        ]
+        for page in pages {
+            let folder = Support.root.appendingPathComponent(page).deletingLastPathComponent()
+            for link in try Self.read(page).matches(of: /\]\(([^)\s]*)\)/) {
+                let target = String(link.output.1)
+                if target.hasPrefix("http://") || target.hasPrefix("https://") { continue }
+                count += 1
+                let parts = target.split(
+                    separator: "#", maxSplits: 1, omittingEmptySubsequences: false)
+                let file =
+                    parts[0].isEmpty
+                    ? Support.root.appendingPathComponent(page)
+                    : folder.appendingPathComponent(String(parts[0]))
+                guard FileManager.default.fileExists(atPath: file.path) else {
+                    Issue.record("\(page): \(target) names no file")
+                    continue
+                }
+                guard parts.count == 2 else { continue }
+                let text = try String(contentsOf: file, encoding: .utf8)
+                #expect(Self.anchors(of: text).contains("#" + parts[1]), "\(page): \(target)")
+            }
+        }
+        #expect(count >= 20)
     }
 
     @Test func contributingStatesEveryPlannedPoint() throws {
@@ -381,7 +607,8 @@ import Testing
         let files =
             [
                 "scripts/check-readme.sh", "README.md", "CONTRIBUTING.md", "CODE_OF_CONDUCT.md",
-                "SECURITY.md", "LICENSE", "docs/CONTRACT.md", "docs/ARCHITECTURE.md",
+                "SECURITY.md", "LICENSE", "docs/CONTRACT.md", "docs/ARCHITECTURE.md", guide,
+                "docs/ORCHESTRATORS.md",
             ] + LeakShapes.sceneSources + LeakShapes.picturePaths + extra
         for file in files {
             let to = root.appendingPathComponent(file)
@@ -456,9 +683,9 @@ import Testing
                 try Self.replace(old, with: new, in: file, under: $0)
             }
         }
-        // A fenced block put into the README just before a heading.
+        // A fenced block put into the guide just before a heading.
         func block(_ name: String, _ key: String, _ text: String) -> GuardCase {
-            edit(name, key, readme, "## How it picks", text + "\n\n## How it picks")
+            edit(name, key, guide, "## How it picks", text + "\n\n## How it picks")
         }
         // Text added at the end of the README, so a fence that a broken rule leaves open takes in
         // no other line of it.
@@ -469,14 +696,15 @@ import Testing
                 try (old + "\n" + text + "\n").write(to: url, atomically: true, encoding: .utf8)
             }
         }
-        // A fence left open just before a heading, and a misspelled command in a later section.
+        // A fence left open just before a heading of the guide, and a misspelled command in a later
+        // section.
         func leftOpen(_ name: String, _ key: String, _ text: String) -> GuardCase {
             GuardCase(name: name, key: key) {
                 try Self.replace(
-                    "## How it picks", with: text + "\n\n## How it picks", in: readme, under: $0)
+                    "## How it picks", with: text + "\n\n## How it picks", in: guide, under: $0)
                 try Self.replace(
                     "`agent-balancer refresh` reads each",
-                    with: "`agent-balancer refrsh` reads each", in: readme, under: $0)
+                    with: "`agent-balancer refrsh` reads each", in: guide, under: $0)
             }
         }
         let span = "is not an agent-balancer command"
@@ -487,32 +715,32 @@ import Testing
         let word = "has a word that is neither"
         return [
             edit(
-                "a bare `link --repairs`", span, readme, "`agent-balancer link <label> --repair`",
+                "a bare `link --repairs`", span, guide, "`agent-balancer link <label> --repair`",
                 "`link --repairs`"),
-            edit("a bare `eventz`", span, readme, "`agent-balancer events`", "`eventz`"),
+            edit("a bare `eventz`", span, guide, "`agent-balancer events`", "`eventz`"),
             edit("a bare flag", span, readme, "`agent-balancer pick --json`", "`--json`"),
             edit(
-                "a prompt line naming no command", command, readme,
+                "a prompt line naming no command", command, guide,
                 "agent-balancer login <label>\n   ```",
                 "agent-balancer login <label>\n   $ agent-balancer frobnicate <label>\n   ```"),
             edit(
-                "a renamed `events`", command, readme, "`agent-balancer events`",
+                "a renamed `events`", command, guide, "`agent-balancer events`",
                 "`agent-balancer eventz`"),
             edit(
-                "a renamed `unlink`", command, readme, "`agent-balancer unlink <label>` and",
+                "a renamed `unlink`", command, guide, "`agent-balancer unlink <label>` and",
                 "`agent-balancer unlinks <label>` and"),
             edit(
                 "a command --help does not list", command, readme, "`agent-balancer run <label>`",
                 "`agent-balancer launch <label>`"),
             edit(
                 "a config command --help does not list", "is not in agent-balancer config --help",
-                readme, "agent-balancer config set-main <label>",
+                guide, "agent-balancer config set-main <label>",
                 "agent-balancer config set-mains <label>"),
             edit(
-                "a flag --help does not list", option, readme, "link <label> --dry-run",
+                "a flag --help does not list", option, guide, "link <label> --dry-run",
                 "link <label> --dry-runs"),
             edit(
-                "a renamed `--repair`", option, readme, "`agent-balancer link <label> --repair`",
+                "a renamed `--repair`", option, guide, "`agent-balancer link <label> --repair`",
                 "`agent-balancer link <label> --repairs`"),
             edit(
                 "a short flag --help does not list", option, readme,
@@ -521,30 +749,33 @@ import Testing
                 "a misspelled first flag in brackets", option, readme,
                 "`agent-balancer pick --json`", "`agent-balancer pick [--jsn]`"),
             edit(
-                "a flag in plain text", "is in plain text: write it in code after", readme,
+                "a flag in plain text", "is in plain text: write it in code after", guide,
                 "or neither.", "or neither (see --ends)."),
             edit(
-                "a command in plain text", "sits in plain text", readme, "Open the app:",
+                "a command in plain text", "sits in plain text", guide, "Open the app:",
                 "Run agent-balancer status, then open the app:"),
+            edit(
+                "a command in plain text in the README", "sits in plain text", readme,
+                "Upgrade with", "Run agent-balancer refresh, then upgrade with"),
             edit(
                 "a code span across a line break", "runs across a line break", readme,
                 "`agent-balancer pick --json`", "`agent-balancer\n  pick --json`"),
             edit(
-                "an HTML code tag", "uses an HTML code tag", readme, "Open the app:",
+                "an HTML code tag", "uses an HTML code tag", guide, "Open the app:",
                 "Open the app (<code>eventz</code>):"),
             block("a pre block", "uses an HTML code tag", "<pre>\nagent-balancer status\n</pre>"),
             edit(
                 "a misspelled command in plain text",
-                "is neither a command in code nor a listed word", readme, "Open the app:",
+                "is neither a command in code nor a listed word", guide, "Open the app:",
                 "Run agent-balancer statuz, then open the app:"),
             edit(
                 "a misspelled command across a line break",
-                "is neither a command in code nor a listed word", readme,
+                "is neither a command in code nor a listed word", guide,
                 "swapping login tokens. agent-balancer never reads",
                 "swapping login tokens. agent-balancer\n  eventz reads"),
             edit(
                 "a misspelled command in an indented code block",
-                "is neither a command in code nor a listed word", readme, "## How it picks",
+                "is neither a command in code nor a listed word", guide, "## How it picks",
                 "    agent-balancer eventz\n\n## How it picks"),
             block(
                 "a tab inside a command in an indented code block",
@@ -599,7 +830,7 @@ import Testing
                 "`brew upgrade agent-balancer`",
                 "`brew upgrade agent-balancer && agent-balancer frobnicate`"),
             edit(
-                "a command in a $(...) substitution", command, readme, "`claude auth status`",
+                "a command in a $(...) substitution", command, guide, "`claude auth status`",
                 "`claude $(agent-balancer eventz)`"),
             block(
                 "a command in a backtick substitution", command,
@@ -611,7 +842,7 @@ import Testing
                 "a command written as a path to the tool", command,
                 "```sh\nagent-balancer status && /opt/homebrew/bin/agent-balancer eventz\n```"),
             edit(
-                "a flag after a choice in a usage line", option, readme,
+                "a flag after a choice in a usage line", option, guide,
                 "[--ends YYYY-MM-DD | --ending-soon]", "[--ends YYYY-MM-DD | --ending-soonn]"),
             edit(
                 "a command in parentheses", command, readme, "`agent-balancer pick --json`",
@@ -630,8 +861,48 @@ import Testing
                 "`agent-balancer pick --json`",
                 "`agent-balancer pick --json && agent-balancer\u{00A0}eventz`"),
             edit(
+                "a no-break space inside a command of the guide", "outside printable ASCII", guide,
+                "`agent-balancer pick --json`",
+                "`agent-balancer pick --json && agent-balancer\u{00A0}eventz`"),
+            edit(
                 "a linked file that does not exist", "' does not exist", readme,
                 "(docs/CONTRACT.md)", "(docs/CONTRACTS.md)"),
+            edit(
+                "a linked file of the guide that does not exist", "' does not exist", guide,
+                "(CONTRACT.md)", "(CONTRACTS.md)"),
+            GuardCase(name: "a missing guide", key: "is missing") {
+                try FileManager.default.removeItem(at: $0.appendingPathComponent(guide))
+            },
+            block(
+                "a text block with no prompt line", "does not start with a prompt line",
+                "```text\nnext: lab\n```"),
+            block(
+                "a text block of another command", "a command other than agent-balancer status",
+                "```text\n$ agent-balancer refresh\nnext: lab\n```"),
+            block(
+                "a line in a text block that is not status output",
+                "is not agent-balancer status output",
+                "```text\n$ agent-balancer status\nnext: lab\nall good\n```"),
+            block(
+                "an account outside the fixture in a text block",
+                "is not agent-balancer status output",
+                "```text\n$ agent-balancer status\nwork [token, pool] ok week 1.0% 5h n/a resets - in use 0\n```"
+            ),
+            block(
+                "an error line in a text block", "is not agent-balancer status output",
+                "```text\n$ agent-balancer status\n  error token_missing: Run agent-balancer eventz.\n```"
+            ),
+            block(
+                "a misspelled flag on the prompt line of a text block", option,
+                "```text\n$ agent-balancer status --cashed\nnext: lab\n```"),
+            block(
+                "a text block of status --json", "a command other than agent-balancer status",
+                "```text\n$ agent-balancer status --json\nnext: main\n```"),
+            block("an empty text block", "does not start with a prompt line", "```text\n```"),
+            edit(
+                "a changed state in the README's status example",
+                "is not agent-balancer status output", readme, "lab [token, pool] ok week",
+                "lab [token, pool] fine week"),
             edit(
                 "a srcset to a picture that does not exist", "' does not exist", readme,
                 "srcset=\"docs/media/menu-dark.png\"", "srcset=\"docs/media/menu-drk.png\""),
@@ -652,6 +923,11 @@ import Testing
             },
             GuardCase(name: "an iCCP chunk", key: "carries a compressed chunk") {
                 try Self.plant("iCCP", comment + [0, 1, 2, 3], in: picture, under: $0)
+            },
+            GuardCase(name: "an iTXt chunk in the hero", key: "carries a compressed chunk") {
+                try Self.plant(
+                    "iTXt", comment + [0, 0, 0, 0] + Array("x".utf8),
+                    in: "docs/media/hero-light.png", under: $0)
             },
             GuardCase(name: "a home path in a picture's metadata", key: path) {
                 try Self.plant(
@@ -794,11 +1070,11 @@ import Testing
     /// before a command, another program's flags after each separator of a chain, and a brew
     /// line that names the formula.
     @Test func theCheckScriptPassesWhatItDoesNotGuard() throws {
-        // A fenced block put into the README just before a heading.
+        // A fenced block put into the guide just before a heading.
         func block(_ text: String) -> (URL) throws -> Void {
             {
                 try Self.replace(
-                    "## How it picks", with: text + "\n\n## How it picks", in: "README.md",
+                    "## How it picks", with: text + "\n\n## How it picks", in: Self.guide,
                     under: $0)
             }
         }
@@ -844,10 +1120,18 @@ import Testing
                 "a link to a heading",
                 {
                     try Self.replace(
-                        "[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)",
-                        with: "[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#threat-model)",
-                        in: "README.md", under: $0)
+                        "[ARCHITECTURE.md](ARCHITECTURE.md)",
+                        with: "[ARCHITECTURE.md](ARCHITECTURE.md#threat-model)", in: Self.guide,
+                        under: $0)
                 }
+            ),
+            (
+                "a status transcript with a limited account",
+                block(
+                    "```text\n$ agent-balancer status --cached\n"
+                        + "spare-a [token, pool] limited week 100.0% 5h n/a resets Thu 2:00 PM in use 0\n"
+                        + "  limited (weekly) until Thu 2:00 PM\nnext: none\nnext for fable: none\n```"
+                )
             ),
             (
                 "a plain picture text chunk",
@@ -1105,7 +1389,7 @@ import Testing
 
     @Test func theReadmePicturesShowMadeUpAccountsInStatesTheWriterCanProduce() throws {
         let docs = try Self.fixture()
-        #expect(docs.map { $0.name } == ["menu", "manageTokens", "manageFolders"])
+        #expect(docs.map { $0.name } == ["hero", "menu", "manageTokens", "manageFolders"])
         let window = try Self.windowDocuments()
         #expect(window == ["manageTokens", "manageFolders"])
         for (name, text) in docs {
@@ -1117,7 +1401,8 @@ import Testing
             let generated = try #require(
                 (doc["generatedAt"] as? String).flatMap { ISO8601DateFormatter().date(from: $0) })
             let rows = try #require(doc["accounts"] as? [[String: Any]])
-            #expect(rows.compactMap { $0["label"] as? String } == Self.labels, "\(name)")
+            let labels = name == "hero" ? Array(Self.labels.prefix(3)) : Self.labels
+            #expect(rows.compactMap { $0["label"] as? String } == labels, "\(name)")
             for row in rows {
                 let label = row["label"] as? String ?? ""
                 #expect(row["email"] as? String == "\(label)@example.com", "\(name) \(label)")
@@ -1144,6 +1429,22 @@ import Testing
                 #expect(Self.used(row, "weekly") != nil, "\(name) \(key)")
             }
         }
+
+        // The first picture is healthy: no banner, three rows, each ok with no error or warning, and
+        // one account in use.
+        let hero = try #require(docs.first { $0.name == "hero" })
+        let heroDoc = try Self.object(hero.text)
+        #expect(heroDoc["banner"] is NSNull)
+        let heroRows = try #require(heroDoc["accounts"] as? [[String: Any]])
+        #expect(heroRows.count == 3)
+        for row in heroRows {
+            #expect(row["state"] as? String == "ok" && Self.code(row) == nil, "\(row)")
+            #expect(((row["warnings"] as? [Any]) ?? []).isEmpty, "\(row)")
+        }
+        let inUse = heroRows.filter {
+            (($0["inUse"] as? [String: Any])?["count"] as? Int ?? 0) > 0
+        }
+        #expect(inUse.count == 1)
 
         // The menu shows all three kinds, a limited row, an error row, a warning and the end badges.
         let menu = try #require(docs.first { $0.name == "menu" })

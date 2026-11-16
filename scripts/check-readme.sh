@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Checks README.md against the tool and keeps its pictures made up.
-# - Characters: README.md holds only printable ASCII and tabs.
+# Checks README.md and docs/GUIDE.md, the guide that holds the detail the README links to, against
+# the tool, and keeps the README pictures made up. The rules on characters, commands and links
+# apply to both files.
+# - Characters: each file holds only printable ASCII and tabs.
 # - Commands: every inline code span is code, and so is every line of a fenced code block (three
 #   or more backticks or tildes, closed only by a run of the same mark at least as long) except a
 #   json block, with one leading "$ " or "% " prompt dropped. A fence must close before the list
@@ -17,9 +19,14 @@
 #   it that starts the part, begins a command whose subcommand and flags must be in its --help.
 #   No flag may sit in plain text, and in plain text agent-balancer followed by spaces or tabs and
 #   a word fails unless that word is on the list below.
+# - Status transcripts: a fenced block whose info string is text shows what agent-balancer status
+#   prints. Its first line is a "$ " prompt and agent-balancer status, alone or with --cached, read
+#   as code, and every later line has the shape of a line the status table prints for one of the
+#   five made-up labels: an account row, a limited line or a next line. Any other line fails, an
+#   error or warning line, whose text is free, included.
 # - Links: each local file named by an inline link or picture, or by a src or srcset attribute,
-#   exists.
-# - Pictures: the six PNGs exist and carry no compressed chunk, and their metadata chunks hold no
+#   exists, read from the folder of the file that names it.
+# - Pictures: the eight PNGs exist and carry no compressed chunk, and their metadata chunks hold no
 #   absolute path of two or more parts (also right after a URL's scheme and host), home path (~/,
 #   ~user/ or $HOME/), address outside example.com, org id or token.
 # - Scene sources the pictures are drawn from: accounts named only by the five made-up labels,
@@ -90,17 +97,15 @@ subcommands() { sed -n '/^SUBCOMMANDS:/,$p' | awk 'NR>1 && /^  [a-z]/ {print $1}
 listed="$("$BIN" --help | subcommands)"
 config_listed="$("$BIN" config --help | subcommands)"
 
+# The files the rules on characters, commands and links read.
+DOCS="README.md docs/GUIDE.md"
+# The made-up labels: the only accounts a status transcript or a scene source may name.
+LABELS='main|personal|lab|spare-a|spare-b'
+
 # The words that may follow agent-balancer in plain text, where the README names the tool itself.
 PROSE_WORDS="is
 never
 reads"
-if grep -qiE '<(code|pre|kbd|samp|tt)[[:space:]>]' README.md; then
-  bad "README.md uses an HTML code tag: write code in Markdown"
-fi
-# Printable ASCII and tabs only, since a look-alike or invisible character could hide a command
-# from the rules below.
-nonascii="$(grep -n $'[^\t -~]' README.md | cut -d: -f1 | tr '\n' ' ' | sed 's/ $//' || true)"
-[ -z "$nonascii" ] || bad "README.md has a character outside printable ASCII and tabs on lines $nonascii"
 
 # Prints "ok" and then each key and each string of the value the JSON file named by its argument
 # parses to, one a line, with every character outside printable ASCII as a space. It prints
@@ -121,14 +126,17 @@ JSON_READER='function run(argv) {
   return out.join("\n");
 }'
 
-# The README's code, one item a line: "S <part>" for the first part of an inline code span or of
-# a line of a fenced block that is not json, "L <part>" for each later part of a chain, each
-# substitution and each part of a string in a json block, "P <flag>" for a flag in plain text,
-# "C <word>" for the word after agent-balancer in a paragraph of plain text, "W <line number>" for
-# a code span that runs across a line break, "U <line number>" for a fence that never closes and
-# "J <line number>" for a json block that does not parse. In code, quotes, backslashes and
-# parentheses read as spaces.
-code="$(AB_JSON_FILE="$JSON" AB_JSON_READER="$JSON_READER" awk -v q="'" '
+# The code of the Markdown file $1, one item a line: "S <part>" for the first part of an inline
+# code span or of a line of a fenced block that is not json, "L <part>" for each later part of a
+# chain, each substitution and each part of a string in a json block, "P <flag>" for a flag in
+# plain text, "C <word>" for the word after agent-balancer in a paragraph of plain text,
+# "W <line number>" for a code span that runs across a line break, "U <line number>" for a fence
+# that never closes and "J <line number>" for a json block that does not parse. A text block gives
+# "X <line number> <command>" for its prompt line, whose command is also read as an S part,
+# "Y <line number>" when it has no prompt line and "T <line number> <line>" for each later line,
+# its block indent taken off. In code, quotes, backslashes and parentheses read as spaces.
+read_code() {
+  AB_JSON_FILE="$JSON" AB_JSON_READER="$JSON_READER" awk -v q="'" '
   function flush() {
     rest = para
     while (match(rest, /[^A-Za-z0-9-]agent-balancer[ \t]+[A-Za-z][A-Za-z0-9-]*/)) {
@@ -207,7 +215,8 @@ code="$(AB_JSON_FILE="$JSON" AB_JSON_READER="$JSON_READER" awk -v q="'" '
       close(cmd)
       if (!ok) print "J " opened
     }
-    fence = ""; data = 0; json = ""
+    if (shown && first) print "Y " opened
+    fence = ""; data = 0; json = ""; shown = 0; first = 0
   }
   # A fence in a list item ends where the item ends, as Markdown renders it: a line that is not
   # blank and is indented less than the opening fence ends the fence unclosed and is read as usual.
@@ -224,6 +233,7 @@ code="$(AB_JSON_FILE="$JSON" AB_JSON_READER="$JSON_READER" awk -v q="'" '
       fence = mark; opened = NR; findent = indent($0)
       sub(/^[ \t]+/, "", info); sub(/[ \t]+$/, "", info)
       data = (info == "json")
+      shown = (info == "text"); first = 1
       next
     }
   }
@@ -236,6 +246,20 @@ code="$(AB_JSON_FILE="$JSON" AB_JSON_READER="$JSON_READER" awk -v q="'" '
       }
     }
     if (data) { json = json $0 "\n"; next }
+    # A status transcript: the prompt line is code, every later line is output.
+    if (shown) {
+      line = $0
+      for (i = 0; i < findent && substr(line, 1, 1) == " "; i++) line = substr(line, 2)
+      if (first) {
+        first = 0
+        if (line ~ /^[$] /) {
+          sub(/^[$] +/, "", line)
+          parts(line, 1)
+          print "X " opened " " line
+        } else print "Y " opened
+      } else print "T " NR " " line
+      next
+    }
     line = $0; sub(/^[ \t]+/, "", line); sub(/^[$%] +/, "", line)
     if (line ~ /[^ \t]/) parts(line, 1)
     next
@@ -261,7 +285,8 @@ code="$(AB_JSON_FILE="$JSON" AB_JSON_READER="$JSON_READER" awk -v q="'" '
   END {
     flush()
     if (fence != "") { print "U " opened; endfence() }
-  }' README.md)"
+  }' "$1"
+}
 
 # One command, its words from agent-balancer or a path to it on: its subcommand, a config
 # subcommand and each flag up to a lone `--` must be in --help. Brackets and an `=value` around a
@@ -342,38 +367,74 @@ check_part() {
   if [ "$start" -ge 0 ]; then check_command "${w[@]:start}"; fi
 }
 
-set -f
-while IFS= read -r item; do
-  [ -n "$item" ] || continue
-  text="${item#? }"
-  case "$item" in
-    S\ * | L\ *) check_part "${item%% *}" "$text" ;;
-    P\ *) bad "flag '$text' is in plain text: write it in code after its agent-balancer command" ;;
-    C\ *)
-      if listed_in "$listed" "$text"; then
-        bad "command 'agent-balancer $text' sits in plain text: write it in code"
-      elif ! listed_in "$PROSE_WORDS" "$text"; then
-        bad "'agent-balancer $text' in plain text is neither a command in code nor a listed word"
-      fi
-      ;;
-    W\ *) bad "the code span on README line $text runs across a line break: keep it on one line" ;;
-    U\ *) bad "the code fence that opens on README line $text never closes" ;;
-    J\ *) bad "the json block that opens on README line $text does not parse as JSON" ;;
-  esac
-done <<EOF
+# Whether $1 has the shape of a line that the status table prints for a made-up account: an
+# account row, a limited line or a next line (Sources/agent-balancer/Commands/Status.swift).
+STATUS_TIME='(-|(Mon|Tue|Wed|Thu|Fri|Sat|Sun) (1[0-2]|[1-9]):[0-5][0-9] (AM|PM))'
+STATUS_PERCENT='(n/a|(100|[1-9]?[0-9])\.[0-9]%)'
+status_line() {
+  printf '%s\n' "$1" | grep -qE \
+    -e "^($LABELS) \[(login|token|folder), (main|pool)\] (ok|limited|error|ended) week $STATUS_PERCENT 5h $STATUS_PERCENT resets $STATUS_TIME in use ([0-9]+|unknown)\$" \
+    -e "^  limited \((weekly|fiveHour)\) until $STATUS_TIME\$" \
+    -e "^next( for fable)?: ($LABELS|none)\$"
+}
+
+for doc in $DOCS; do
+  [ -f "$doc" ] || { bad "the doc $doc is missing"; continue; }
+  if grep -qiE '<(code|pre|kbd|samp|tt)[[:space:]>]' "$doc"; then
+    bad "$doc uses an HTML code tag: write code in Markdown"
+  fi
+  # Printable ASCII and tabs only, since a look-alike or invisible character could hide a command
+  # from the rules below.
+  nonascii="$(grep -n $'[^\t -~]' "$doc" | cut -d: -f1 | tr '\n' ' ' | sed 's/ $//' || true)"
+  [ -z "$nonascii" ] || bad "$doc has a character outside printable ASCII and tabs on lines $nonascii"
+
+  code="$(read_code "$doc")"
+  set -f
+  while IFS= read -r item; do
+    [ -n "$item" ] || continue
+    text="${item#? }"
+    case "$item" in
+      S\ * | L\ *) check_part "${item%% *}" "$text" ;;
+      P\ *) bad "flag '$text' is in plain text: write it in code after its agent-balancer command" ;;
+      C\ *)
+        if listed_in "$listed" "$text"; then
+          bad "command 'agent-balancer $text' sits in plain text: write it in code"
+        elif ! listed_in "$PROSE_WORDS" "$text"; then
+          bad "'agent-balancer $text' in plain text is neither a command in code nor a listed word"
+        fi
+        ;;
+      W\ *) bad "the code span on line $text of $doc runs across a line break: keep it on one line" ;;
+      U\ *) bad "the code fence that opens on line $text of $doc never closes" ;;
+      J\ *) bad "the json block that opens on line $text of $doc does not parse as JSON" ;;
+      X\ *)
+        case "${text#* }" in
+          "agent-balancer status" | "agent-balancer status --cached") ;;
+          *) bad "the text block that opens on line ${text%% *} of $doc shows a command other than agent-balancer status or agent-balancer status --cached" ;;
+        esac
+        ;;
+      Y\ *) bad "the text block that opens on line $text of $doc does not start with a prompt line" ;;
+      T\ *)
+        status_line "${text#* }" \
+          || bad "line ${text%% *} of $doc is in a text block but is not agent-balancer status output for a made-up account"
+        ;;
+    esac
+  done <<EOF
 $code
 EOF
-set +f
+  set +f
 
-# Local links and pictures. An anchor is not part of the file name.
-refs="$(grep -oE '(\]\(|srcset="|src=")[^)" ]+' README.md \
-  | sed -E 's/^(\]\(|srcset="|src=")//; s/#.*$//' | grep -vE '^(https?:|$)' || true)"
-for ref in $refs; do
-  [ -e "$ref" ] || bad "linked file '$ref' does not exist"
+  # Local links and pictures, read from the folder of the doc. An anchor is not part of the file
+  # name.
+  dir="$(dirname "$doc")"
+  refs="$(grep -oE '(\]\(|srcset="|src=")[^)" ]+' "$doc" \
+    | sed -E 's/^(\]\(|srcset="|src=")//; s/#.*$//' | grep -vE '^(https?:|$)' || true)"
+  for ref in $refs; do
+    [ -e "$dir/$ref" ] || bad "in $doc, linked file '$ref' does not exist"
+  done
 done
 
-# Pictures: six PNGs.
-for scene in menu manage-tokens manage-folders; do
+# Pictures: eight PNGs.
+for scene in hero menu manage-tokens manage-folders; do
   for mode in light dark; do
     f="docs/media/$scene-$mode.png"
     [ -f "$f" ] || { bad "missing picture $f"; continue; }
@@ -412,7 +473,6 @@ done
 # Scene sources: the pictures are drawn from the README fixture and the scene strings it reuses,
 # so every label, word, address and path in these files must be the fixture's. Hits are not
 # printed, so a real label or address never reaches a log; a word hit prints only line numbers.
-LABELS='main|personal|lab|spare-a|spare-b'
 FIXTURE_PATHS="^(~/\.agent-balancer/accounts/($LABELS)/\.claude|/Users/example|/opt/homebrew/bin/agent-balancer|/usr/local/bin/agent-balancer)$"
 README_SCENES="Sources/AgentBalancerBar/ReadmeScenes.swift"
 SCENES="$README_SCENES Sources/AgentBalancerBar/Manage/ManageScenes.swift Sources/AgentBalancerBar/RenderScenes.swift"
@@ -434,8 +494,8 @@ manage-folder manage-remove
 manage-states manage-token manage-token-run marginpercent max menu menu-refreshing menu-states
 menu-steps meter minute missing mock moment new next no none not nov null of ok on one only opt or
 other out over own path pictures place plan plantier pm poll pool possible
-possibleleftpercentofcap probe produce ran read readingsage readme readme-manage-folders
-readme-manage-tokens readme-menu reads real reason refresh rejected remove render reserve reset
+possibleleftpercentofcap probe produce ran read readingsage readme readme-hero
+readme-manage-folders readme-manage-tokens readme-menu reads real reason refresh rejected remove render reserve reset
 resets resetsat reuse right role room rounded row rows run s same scene schemaversion selected
 sessions set settings shared sheet show shows sign sign-in signed signed-in signincheck since so
 soon soonest source starts state statesince statesjson status stay stops terminal text the their

@@ -273,7 +273,7 @@ enum LeakShapes {
         .union([
             "/Users/example", "/opt/homebrew/bin/agent-balancer", "/usr/local/bin/agent-balancer",
         ])
-    static let picturePaths = ["menu", "manage-tokens", "manage-folders"].flatMap { scene in
+    static let picturePaths = ["hero", "menu", "manage-tokens", "manage-folders"].flatMap { scene in
         ["light", "dark"].map { "docs/media/\(scene)-\($0).png" }
     }
     static let sceneSources = [

@@ -182,7 +182,7 @@ extension AppSurfaceTests {
                         #expect(status == 0, "\(label)")
                         let files = try fm.contentsOfDirectory(
                             atPath: root.appendingPathComponent("repo/" + output).path)
-                        #expect(files.count == (flag == "--render" ? 40 : 10), "\(label)")
+                        #expect(files.count == (flag == "--render" ? 42 : 10), "\(label)")
                         if flag == "--render" {
                             // The README pictures scripts/render-views.sh copies, by these names.
                             let readme = LeakShapes.picturePaths.map {

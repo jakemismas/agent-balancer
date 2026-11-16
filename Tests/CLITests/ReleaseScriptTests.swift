@@ -171,7 +171,18 @@ import Testing
 
     @Test(arguments: [
         ("README.md", "AgentBalancerBar.zip --repo", "AgentBalancerBar.zip --rep0"),
-        ("README.md", "brew install <user>/tap/agent-balancer", "brew install <user>/tap/other"),
+        (
+            "README.md", "brew install jakemismas/tap/agent-balancer",
+            "brew install jakemismas/tap/other"
+        ),
+        (
+            "README.md", "brew install jakemismas/tap/agent-balancer",
+            "brew install someone/tap/agent-balancer"
+        ),
+        (
+            "README.md", "AgentBalancerBar.zip --repo jakemismas/agent-balancer",
+            "AgentBalancerBar.zip --repo someone/agent-balancer"
+        ),
         ("README.md", "`AgentBalancerBar.app`", "`Other.app`"),
         (".github/workflows/release.yml", "build/release/AgentBalancerBar.zip", "build/x.zip"),
         (".github/workflows/release.yml", "actions/attest-build-provenance@", "actions/other@"),
@@ -211,5 +222,64 @@ import Testing
         try text.replacingOccurrences(of: from, with: to)
             .write(to: url, atomically: true, encoding: .utf8)
         #expect(try Self.runCheck(in: root).status != 0)
+    }
+
+    // Far more than a pipe holds, so a writer into a reader that stops early is always cut off.
+    static func overAMegabyte(of line: String) -> String {
+        String(repeating: line, count: (1 << 20) / line.utf8.count + 1)
+    }
+
+    @Test func aQuickStartFarLargerThanAPipePasses() throws {
+        let fm = FileManager.default
+        let root = try Support.makeTempDir()
+        defer { try? fm.removeItem(at: root) }
+        try Self.copy(to: root)
+        let url = root.appendingPathComponent("README.md")
+        var text = try String(contentsOf: url, encoding: .utf8)
+        let start = try #require(text.range(of: "\n## Quick start\n"))
+        let end = try #require(text.range(of: "\n## ", range: start.upperBound..<text.endIndex))
+        text.insert(
+            contentsOf: Self.overAMegabyte(of: "A plain line with nothing in it to check.\n"),
+            at: end.lowerBound)
+        try text.write(to: url, atomically: true, encoding: .utf8)
+        let out = try Self.runCheck(in: root)
+        #expect(out.status == 0, "\(String(decoding: out.stderr, as: UTF8.self))")
+    }
+
+    @Test(arguments: [
+        "APP_ZIP=\"AgentBalancerBar.zip\"\n", "CLI_NAME=\"agent-balancer-$VERSION-arm64\"\n",
+    ])
+    func aPackagingScriptFarLargerThanAPipePasses(line: String) throws {
+        let fm = FileManager.default
+        let root = try Support.makeTempDir()
+        defer { try? fm.removeItem(at: root) }
+        try Self.copy(to: root)
+        let url = root.appendingPathComponent("scripts/package-release.sh")
+        let text = try String(contentsOf: url, encoding: .utf8)
+        #expect(text.contains("\n" + line))
+        try (text + Self.overAMegabyte(of: line)).write(to: url, atomically: true, encoding: .utf8)
+        let out = try Self.runCheck(in: root)
+        #expect(out.status == 0, "\(String(decoding: out.stderr, as: UTF8.self))")
+    }
+
+    @Test func anUnpinnedActionBeforeAMegabyteOfPinnedOnesFails() throws {
+        let fm = FileManager.default
+        let root = try Support.makeTempDir()
+        defer { try? fm.removeItem(at: root) }
+        try Self.copy(to: root)
+        let url = root.appendingPathComponent(".github/workflows/ci.yml")
+        var text = try String(contentsOf: url, encoding: .utf8)
+        let steps = try #require(text.range(of: "    steps:\n"))
+        let pinned = "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1\n"
+        text.insert(
+            contentsOf: "      - uses: actions/checkout@v4\n" + Self.overAMegabyte(of: pinned),
+            at: steps.upperBound)
+        try text.write(to: url, atomically: true, encoding: .utf8)
+        let out = try Self.runCheck(in: root)
+        let printed = String(decoding: out.stderr, as: UTF8.self)
+        #expect(out.status == 1, "\(printed)")
+        #expect(
+            printed.contains("FAIL release: .github/workflows/ci.yml has an action not pinned"),
+            "\(printed)")
     }
 }

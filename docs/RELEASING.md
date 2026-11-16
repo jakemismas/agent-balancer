@@ -71,7 +71,7 @@ needs the maintainer's yes.
 2. Run `git log --all -p`, every issue and pull request title, body and comment, and the release
    notes through the local banned-string list. Any hit blocks the flip.
 3. Confirm that no `CLAUDE.md` or `.claude/` file ever entered history, that
-   `git log --merges origin/main` prints nothing, and that `main` has 24 commits or fewer.
+   `git log --merges origin/main` prints nothing, and that `main` has 27 commits or fewer.
 4. Change the visibility to public.
 5. Enable secret scanning, push protection, private vulnerability reporting and the CodeQL
    default setup.
@@ -79,6 +79,21 @@ needs the maintainer's yes.
 7. Add a tag ruleset that limits creating, moving and deleting `v*` tags to the release workflow
    and the maintainer.
 8. Protect the tap repository's `main` the same way, and add Scorecard.
+
+## Repository description and topics
+
+A draft for the maintainer to set in the repository's About settings at the flip, with the other
+steps above. Nothing sets them before then. The words are the ones a person uses when they search
+for this problem, in plain sentences.
+
+Description:
+
+```
+For anyone with several Claude Code accounts or subscriptions: agent-balancer reads each account's five-hour and weekly usage and picks the account for your next launch. A command line tool, a macOS menu bar app and a skill.
+```
+
+Topics: `claude-code`, `claude`, `usage-limits`, `rate-limits`, `multiple-accounts`,
+`account-switcher`, `load-balancer`, `orchestration`, `macos`, `menu-bar`, `cli`, `swift`.
 
 ## After the flip
 
@@ -98,7 +113,7 @@ needs the maintainer's yes.
    The tool reports `1.0.0`, and the formula's test accepts that for the `1.0.0-rc1` formula.
    Download `AgentBalancerBar.zip` from the prerelease, run
    `gh attestation verify AgentBalancerBar.zip --repo <owner>/agent-balancer`, and open the app
-   the way the README's install section says.
+   the way the install section of `docs/GUIDE.md` says.
 4. Only then start the `release` workflow with version `1.0.0` and the prerelease switch off. It
    creates the `v1.0.0` tag and the release, with the `1.0.0` entry of `CHANGELOG.md` as notes,
    the checksums and the attestations.
@@ -108,8 +123,8 @@ needs the maintainer's yes.
 ## Install smoke
 
 Run this in a fresh macOS 14 virtual machine, or on a second Mac with its own Homebrew, with Claude
-Code installed and one test account signed in. Agents run it in the virtual machine (Phase 2 of
-the VM runbook), and the maintainer reviews the result before the first release goes public.
+Code installed and one test account signed in. The maintainer reviews the result before the
+first release goes public.
 
 1. Put the release files in a folder with no spaces in its path, for example `~/release`.
 2. Fill the formula for that folder. This makes `~/release/agent-balancer.rb` with `file://` URLs:
@@ -149,8 +164,8 @@ the VM runbook), and the maintainer reviews the result before the first release 
    info` shows the caveat to run `agent-balancer uninstall` before you remove the tool. The last
    command fails, because the tool writes nothing before `init`.
 5. Open the app the way a download opens it. Mark the zip as downloaded, unzip it, move the app to
-   Applications and follow the four steps of the README's install section. Check that they match
-   what macOS shows.
+   Applications and follow the four steps of the install section of `docs/GUIDE.md`. Check that
+   they match what macOS shows.
 6. Run the smoke list of section 15 of `docs/ARCHITECTURE.md`.
 7. Remove the formula with `brew uninstall local/ab/agent-balancer` and the tap with
    `brew untap local/ab`.

@@ -2,8 +2,9 @@
 # Draws each menu view with ImageRenderer at 2x, light and dark, into build/renders/. The panel
 # material is swapped for the flat token colors of design/render.html, so compare layout, tokens,
 # text and meter widths with design/screenshots/. Vibrancy and the real popover are checked only
-# in the manual smoke. Then it copies the README pictures this run drew into docs/media/ and runs
-# the README check.
+# in the manual smoke. The README's first picture shows the menu below a strip of menu bar on a
+# plain desktop: the strip and the desktop are framing the render draws, not the app. Then it
+# copies the README pictures this run drew into docs/media/ and runs the README check.
 set -euo pipefail
 
 # The real path: the app refuses an output path that names a link, and a checkout opened through
@@ -19,7 +20,7 @@ CLI="$(swift build --product agent-balancer --show-bin-path)/agent-balancer"
 
 # The README pictures, as the render names them. An older render of one is deleted first, so a
 # scene that no longer renders fails the copy instead of publishing a picture from an earlier run.
-PICTURES="menu-light menu-dark manage-tokens-light manage-tokens-dark manage-folders-light manage-folders-dark"
+PICTURES="hero-light hero-dark menu-light menu-dark manage-tokens-light manage-tokens-dark manage-folders-light manage-folders-dark"
 for name in $PICTURES; do rm -f "build/renders/readme-$name.png"; done
 
 mkdir -p build

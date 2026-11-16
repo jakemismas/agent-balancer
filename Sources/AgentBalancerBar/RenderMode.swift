@@ -4,7 +4,8 @@ import SwiftUI
 
 /// The render flags of the app binary, run by scripts/render-views.sh and scripts/build-app.sh.
 /// `--render <dir>` draws each view with `ImageRenderer` at 2x, light and dark, with the panel
-/// material swapped for the flat token colors. `--iconset <dir>` draws the app icon sizes. Both
+/// material swapped for the flat token colors, and the README's first picture below a strip of
+/// menu bar. `--iconset <dir>` draws the app icon sizes. Both
 /// write only into a folder that `RenderOutput` accepts (under the current folder's `build`
 /// folder, with no `..`, no link and no folder named `.claude` or `.agent-balancer` on its path
 /// below the current folder, and outside the home's `.claude` and `.agent-balancer` folders,
@@ -80,12 +81,69 @@ enum RenderMode {
                 try writer.put(data, name: "\(name)-\(suffix).png")
             }
         }
+        for (name, scene) in ReadmeScenes.underBar() {
+            for scheme in [ColorScheme.light, .dark] {
+                guard let data = png(MenuBarFrame(content: scene), scheme: scheme, scale: 2) else {
+                    throw ToolError("Could not draw \(name).")
+                }
+                let suffix = scheme == .dark ? "dark" : "light"
+                try writer.put(data, name: "\(name)-\(suffix).png")
+            }
+        }
         let bar = MenuBarStrip()
         for scheme in [ColorScheme.light, .dark] {
             if let data = png(bar, scheme: scheme, scale: 2) {
                 try writer.put(data, name: "menubar-\(scheme == .dark ? "dark" : "light").png")
             }
         }
+    }
+}
+
+/// A panel open below a strip of menu bar on a plain desktop, as the menu shows when its icon is
+/// clicked. The strip, the pressed icon and the desktop are framing that only the render tool
+/// draws; the panel is the app's own view.
+struct MenuBarFrame<Content: View>: View {
+    let content: Content
+    @Environment(\.colorScheme) private var scheme
+
+    /// The app's menu bar icon, drawn first into an 8-bit sRGB bitmap at 2x: drawn as the image
+    /// itself, it makes the renderer dither the whole picture.
+    private var icon: Image {
+        let side = 36
+        guard let space = CGColorSpace(name: CGColorSpace.sRGB),
+            let bitmap = CGContext(
+                data: nil, width: side, height: side, bitsPerComponent: 8, bytesPerRow: 0,
+                space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return Image(nsImage: MenuIcon.image()) }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: bitmap, flipped: false)
+        MenuIcon.image().draw(in: NSRect(x: 0, y: 0, width: side, height: side))
+        NSGraphicsContext.restoreGraphicsState()
+        guard let drawn = bitmap.makeImage() else { return Image(nsImage: MenuIcon.image()) }
+        return Image(decorative: drawn, scale: 2)
+    }
+
+    var body: some View {
+        let dark = scheme == .dark
+        let ink: UInt32 = dark ? 0xFFFFFF : 0x000000
+        VStack(spacing: 0) {
+            HStack(spacing: 0) {
+                Spacer(minLength: 0)
+                icon.renderingMode(.template).foregroundStyle(Palette.rgb(ink))
+                    .frame(width: 30, height: 22)
+                    .background(
+                        RoundedRectangle(cornerRadius: 5).fill(Palette.rgb(ink, dark ? 0.16 : 0.12))
+                    )
+                    .padding(.trailing, 40)
+            }
+            .frame(height: 26)
+            .background(Palette.rgb(0xFFFFFF, dark ? 0.06 : 0.55))
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(Palette.rgb(ink, 0.08)).frame(height: 0.5)
+            }
+            content.padding(.top, 6).padding(.horizontal, 16).padding(.bottom, 16)
+        }
+        .background(Palette.of(scheme).page)
     }
 }
 

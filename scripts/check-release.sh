@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Checks that the README's install section, docs/RELEASING.md, the release workflow and the
-# formula template agree with what scripts/package-release.sh makes: the formula name, the artifact
+# Checks that the README's quick start, docs/RELEASING.md, the release workflow and the formula
+# template agree with what scripts/package-release.sh makes: the formula name, the tap, the artifact
 # names, the attestation line and the skill path.
 # Usage: check-release.sh [root]
 set -euo pipefail
+# Under pipefail, a pipe into grep -q or head fails when its writer is cut off, so none is used.
 
 ROOT="${1:-$(cd "$(dirname "$0")/.." && pwd -P)}"
 cd "$ROOT"
@@ -22,8 +23,8 @@ for f in "$PKG" "$FORMULA" "$WORKFLOW" "$README" "$DOC"; do
 done
 
 # Names the packaging script makes.
-APP_ZIP="$(sed -n 's/^APP_ZIP="\(.*\)"$/\1/p' "$PKG" | head -n 1)"
-CLI_TEMPLATE="$(sed -n 's/^CLI_NAME="\(.*\)"$/\1/p' "$PKG" | head -n 1)"
+APP_ZIP="$(sed -n 's/^APP_ZIP="\(.*\)"$/\1/p' "$PKG" | sed -n 1p)"
+CLI_TEMPLATE="$(sed -n 's/^CLI_NAME="\(.*\)"$/\1/p' "$PKG" | sed -n 1p)"
 [ -n "$APP_ZIP" ] || bad "no APP_ZIP in $PKG"
 [ -n "$CLI_TEMPLATE" ] || bad "no CLI_NAME in $PKG"
 APP_BUNDLE="${APP_ZIP%.zip}.app"
@@ -36,15 +37,17 @@ grep -qE "^class $CLASS < Formula$" "$FORMULA" || bad "$FORMULA does not define 
 has "$PKG" 'agent-balancer.rb'
 case "$NAME" in agent-balancer) ;; *) bad "the formula is $NAME, not agent-balancer" ;; esac
 
-# README: formula name, artifact names and attestation line.
-install="$(awk '/^## Install$/ { on = 1; next } on && /^## / { exit } on { print }' "$README")"
-[ -n "$install" ] || bad "README has no Install section"
-printf '%s\n' "$install" | grep -qE "^ +brew install [^ ]+/[^ ]+/$NAME\$" \
-  || bad "the README install section does not run: brew install <owner>/<tap>/$NAME"
-printf '%s\n' "$install" | grep -qF "\`$APP_ZIP\`" || bad "the README install section does not name $APP_ZIP"
-printf '%s\n' "$install" | grep -qF "\`$APP_BUNDLE\`" || bad "the README install section does not name $APP_BUNDLE"
-printf '%s\n' "$install" | grep -qE "^ +gh attestation verify $APP_ZIP --repo <user>/agent-balancer\$" \
-  || bad "the README attestation line is not: gh attestation verify $APP_ZIP --repo <user>/agent-balancer"
+# README: the tap, formula name, artifact names and attestation line, in the quick start. The
+# commands name the real owner, so they work when copied.
+OWNER=jakemismas
+install="$(awk '/^## Quick start$/ { on = 1; next } on && /^## / { exit } on { print }' "$README")"
+[ -n "$install" ] || bad "README has no Quick start section"
+grep -qE "^ +brew install $OWNER/tap/$NAME\$" <<<"$install" \
+  || bad "the README quick start does not run: brew install $OWNER/tap/$NAME"
+grep -qF "\`$APP_ZIP\`" <<<"$install" || bad "the README quick start does not name $APP_ZIP"
+grep -qF "\`$APP_BUNDLE\`" <<<"$install" || bad "the README quick start does not name $APP_BUNDLE"
+grep -qE "^ +gh attestation verify $APP_ZIP --repo $OWNER/agent-balancer\$" <<<"$install" \
+  || bad "the README attestation line is not: gh attestation verify $APP_ZIP --repo $OWNER/agent-balancer"
 grep -qF "brew upgrade $NAME" "$README" || bad "the README does not name brew upgrade $NAME"
 grep -qF "brew uninstall $NAME" "$README" || bad "the README does not name brew uninstall $NAME"
 
@@ -75,7 +78,8 @@ for wf in .github/workflows/*.yml; do
   if grep -nE 'secrets\.|PERSONAL|(^|[^A-Za-z])PAT([^A-Za-z]|$)|TAP_TOKEN|HOMEBREW_TAP|\bpull_request_target\b' "$wf" >/dev/null; then
     bad "$wf references a secret, a personal token, a tap token or pull_request_target"
   fi
-  if grep -E '^[[:space:]]*-?[[:space:]]*uses:' "$wf" | grep -vqE 'uses: [^@ ]+@[0-9a-f]{40}( |$)'; then
+  uses="$(grep -E '^[[:space:]]*-?[[:space:]]*uses:' "$wf" || true)"
+  if [ -n "$uses" ] && grep -vqE 'uses: [^@ ]+@[0-9a-f]{40}( |$)' <<<"$uses"; then
     bad "$wf has an action not pinned by a 40-character SHA"
   fi
   if grep -E '^[[:space:]]*(write-all|.*: write)' "$wf" >/dev/null && [ "$wf" != "$WORKFLOW" ]; then

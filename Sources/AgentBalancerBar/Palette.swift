@@ -5,7 +5,9 @@ import SwiftUI
 struct Palette {
     let text1, text2, text3, sep, hover, accent, track, estimate, warn, warnInk, crit, good: Color
     let badgeBg, badgeMainBg, badgeMainInk, nextBg, panelBorder, cardBg, endsBg, errBg: Color
-    /// Stands in for the panel material in the flat render.
+    /// Stands in for the panel material in the flat render: the panel token of design/render.html
+    /// over the plain page backdrop. The running app draws no panel color of its own; the system
+    /// material of its menu bar window shows.
     let flatPanel: Color
     let page: Color
     /// The Manage accounts window tokens of design/render.html.
@@ -25,7 +27,7 @@ struct Palette {
         badgeBg: rgb(0x000000, 0.06), badgeMainBg: rgb(0xC4613D, 0.15),
         badgeMainInk: rgb(0x94431F), nextBg: rgb(0xC4613D, 0.10), panelBorder: rgb(0x000000, 0.14),
         cardBg: rgb(0xFBF8F4), endsBg: rgb(0xFAB219, 0.18), errBg: rgb(0xD03B3B, 0.10),
-        flatPanel: rgb(0xF8EAE2), page: rgb(0xEFE9E2),
+        flatPanel: rgb(0xF8F5F1), page: rgb(0xEFE9E2),
         winBg: rgb(0xF6F3EE), winSide: rgb(0xECE7E0), winBar: rgb(0xE9E4DD), fieldBg: rgb(0xFFFFFF),
         fieldBorder: rgb(0x000000, 0.17), btnBg: rgb(0xFFFFFF))
 
@@ -37,7 +39,7 @@ struct Palette {
         badgeBg: rgb(0xFFFFFF, 0.08), badgeMainBg: rgb(0xE57D55, 0.20),
         badgeMainInk: rgb(0xF2A385), nextBg: rgb(0xE57D55, 0.12), panelBorder: rgb(0xFFFFFF, 0.13),
         cardBg: rgb(0x221E1B), endsBg: rgb(0xFAB219, 0.18), errBg: rgb(0xD03B3B, 0.10),
-        flatPanel: rgb(0x2B2320), page: rgb(0x171412),
+        flatPanel: rgb(0x25211E), page: rgb(0x171412),
         winBg: rgb(0x2A2623), winSide: rgb(0x221F1C), winBar: rgb(0x34302C), fieldBg: rgb(0x1D1A18),
         fieldBorder: rgb(0xFFFFFF, 0.17), btnBg: rgb(0x3D3834))
 

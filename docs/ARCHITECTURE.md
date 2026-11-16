@@ -149,12 +149,15 @@ agent-balancer/
                              folder that comes to name it, stops the run. The render scenes
                              hold made-up data only: `RenderScenes.swift` and
                              `Manage/ManageScenes.swift` draw the frames of design/render.html,
-                             and `ReadmeScenes.swift` holds the three status documents the
+                             and `ReadmeScenes.swift` holds the four status documents the
                              README pictures are drawn from. Tests rebuild each row of
                              `Manage/ManageScenes.swift` and of the two documents the Manage window
                              draws through the status writer's own build, and the README test
-                             checks the menu document's rows against the writer's rules as it
-                             states them
+                             checks the rows of the two menu documents against the writer's
+                             rules as it states them. The README's first picture shows the menu
+                             below a strip of menu bar on a plain desktop; the render tool draws
+                             that strip and desktop, the app never does, and its flat panel
+                             color is the design's panel token over that plain desktop
   skill/agent-balancer/SKILL.md   the skill file for a user's Claude (4A.7)
   scripts/check.sh           the test command: typecheck, format lint, tests, the safety scan
                              (`scripts/check-safety.sh`), the README check, the secret scan
@@ -166,15 +169,25 @@ agent-balancer/
                              `--dry-run` publishes nothing and points the formula at the folder
   packaging/agent-balancer.rb  the formula template: prebuilt CLI, skill folder in the share folder
   .github/workflows/release.yml  the release run started by hand (version input, prerelease switch)
-  docs/RELEASING.md          cutting a release and the install smoke
+  docs/RELEASING.md          cutting a release, the install smoke and the draft repository
+                             description and topics for the public flip
+  docs/GUIDE.md              the user guide the README links: the first open of the app, the
+                             first run, how the pick works, what the tool does not do,
+                             privacy, where tokens live, its limits and uninstall
+  docs/ORCHESTRATORS.md      how a script or orchestrator picks an account with `pick --json`,
+                             launches on it and installs the skill; docs/CONTRACT.md is the
+                             full contract
   scripts/render-views.sh    builds the app and the CLI, runs the render flag into
                              build/renders/ (an older render of a README picture is deleted
-                             first), copies the three README pictures that run drew, light and
+                             first), copies the four README pictures that run drew, light and
                              dark, into docs/media/ and runs the README check with that CLI
-  scripts/check-readme.sh    the README check. README.md holds only printable ASCII and tabs. The
-                             check reads every inline code span of README.md and every line of a
+  scripts/check-readme.sh    the README check. Its rules on characters, code and links read
+                             README.md and docs/GUIDE.md, which holds the detail the README links
+                             to. Each holds only printable ASCII and tabs. The
+                             check reads every inline code span and every line of a
                              fenced code block (three or more backticks or tildes, closed only by
-                             a run of the same mark at least as long) except a json block, with a
+                             a run of the same mark at least as long) except a json block or a
+                             text block, with a
                              leading `$ ` or `% ` prompt dropped. A fence closes before the list
                              item that holds it ends: a line that is not blank and is indented
                              less than the opening fence ends it, and a fence that ends there or
@@ -182,7 +195,12 @@ agent-balancer/
                              JSON (read by `osascript` with JavaScript, which ships with macOS),
                              and each key and each string of the parsed value is read as a later
                              part of a chain, so a key that appears twice is read with its last
-                             value only. Each span or line is cut into parts at &&, ||, ;, & and |
+                             value only. A text block is a status transcript: its first line is
+                             a `$ ` prompt and `agent-balancer status`, alone or with `--cached`,
+                             read as code, and each later line has the shape of an account row, a
+                             limited line or a next line that the status table prints for one of
+                             the made-up labels; any other line fails. Each span or line is cut
+                             into parts at &&, ||, ;, & and |
                              (a | before a flag is a choice in a usage line), each $(...) or
                              backtick substitution is a part of its own, and quotes, backslashes
                              and parentheses read as spaces. The first part starts with
@@ -194,7 +212,8 @@ agent-balancer/
                              HTML tag is used, and no flag sits in plain text, where
                              agent-balancer followed by spaces or tabs and a word fails unless
                              that word is on the check's word list. Each local file that an
-                             inline link or picture, or a src or srcset attribute, names exists.
+                             inline link or picture, or a src or srcset attribute, names exists,
+                             read from the folder of the file that names it.
                              The pictures carry no compressed chunk, and their metadata chunks
                              hold no absolute path of two or more parts (also right after a URL's
                              scheme and host), home path (`~/`, `~user/` or `$HOME/`), address
@@ -744,7 +763,7 @@ rules of section 7.
    `--exclude`, `--full-login`, the fields stable in schema version 1, `events` and `history`, and
    the rule that information is not authority. It says `configDir` is not a contract field and
    names no orchestrator, guard or client.
-3. **A deny-rule snippet** in the README Limits section: permission deny rules for
+3. **A deny-rule snippet** in the Limits section of `docs/GUIDE.md`: permission deny rules for
    `~/.agent-balancer/tokens/` and `~/.agent-balancer/launch/`, for the user to paste into their
    own Claude Code settings. The tool never writes it. It narrows threat T26 and is advisory
    against code that runs as the user.
@@ -1041,7 +1060,7 @@ claude -p "Reply with the single word OK." --model haiku --tools "" --disallowed
   hooks and MCP servers from loading. It is on only when `probe.safeMode` is true. If Claude Code
   does not know the flag, the row shows `check_failed` with the scrubbed error text; the probe
   never falls back to normal mode silently. With `safeMode` off, each probe runs the folder's
-  hooks once, and `doctor` and the README privacy list say so.
+  hooks once, and `doctor` and the privacy list of `docs/GUIDE.md` say so.
 - A probe reply counts as a reading only when it carries a `seven_day` usage value, and also a
   `five_hour` usage value when it names `five_hour` (an entry with or without a value) or the
   stored reading holds one. Otherwise it gives `check_failed` (the reply carried no weekly, or
@@ -2252,8 +2271,8 @@ empty lists, and the events record keeps only each label's newest line.
   `depends_on` lines are `arch: :arm64` and `macos: :sonoma`, and the binary links only system
   libraries, so a Mac with no developer tools installs it; `scripts/package-release.sh` fails on
   any other linked library. The app ships as a zip attached to the GitHub release; the README
-  gives the unzip, drag to Applications and Open Anyway steps. `docs/RELEASING.md` holds the
-  release and install smoke steps.
+  gives the download, check, unzip and drag to Applications steps, and `docs/GUIDE.md` the Open
+  Anyway steps. `docs/RELEASING.md` holds the release and install smoke steps.
 - **Skill file:** the formula installs the skill folder, `skill/agent-balancer/` with its
   `SKILL.md`, at `$(brew --prefix)/share/agent-balancer/skill/agent-balancer`. The README gives
   the one line the user runs to link that folder into `~/.claude/skills/`; the tool never writes
@@ -2308,12 +2327,13 @@ empty lists, and the events record keeps only each label's newest line.
   rejected, when the run cannot show a new sign-in (a run without `--browser`, or a
   `claude auth login` that did not exit 0): the probe's `login_rejected` then stands. A plan
   other than the expected one is reported as `plan_changed` and leaves the exit status at 0.
-  `add`, `login` and the README print "Never sign a different account
+  `add` and `login` print, and `docs/GUIDE.md` says, "Never sign a different account
   into a folder that already has chats. Add a new folder for the new account instead." A folder
   found on another account shows `wrong_account`, drops out of `pick`, and its fix text says to
   sign the expected account back in, not to relabel the folder.
 - **Ad hoc signed app:** the app carries an ad hoc signature and is not notarized. The README
-  shows the unzip, drag and System Settings, Privacy & Security, Open Anyway steps. The app needs
+  shows the unzip and drag steps, and `docs/GUIDE.md` the System Settings, Privacy & Security,
+  Open Anyway steps. The app needs
   Open Anyway after the first install and again after each upgrade until it is notarized.
 - **Update:** `brew upgrade` for the CLI; the app is replaced from the new zip. Config carries
   `schemaVersion`; the CLI migrates forward and keeps a dated backup.
@@ -2744,7 +2764,7 @@ file deletion outside the no-follow writer.
 | T23 | Launch files pile up, each with a token, or one outlives its account | The upkeep rule in 4A.6; `remove` deletes every file of the label; a token replace rewrites them; `uninstall` removes both folders, or says what it left that may hold a token and exits 1; `doctor` prints the count and the oldest age, never a file's content |
 | T24 | Something in the caller's environment beats the recipe: a worker bills another account, or lands in a folder with no hooks | The ambient rule (4A.3): folder-only picks under an inherited `CLAUDE_CONFIG_DIR`, `backgroundOnly` under an inherited credential name, a refused typed line under a stored-login name or a hooks-off name, `unsetEnv` for launchers, and a person launch without the protected group. The post-launch check in section 16 item 4 catches a launch that landed in the wrong folder. The profile base folders `HOME` and `XDG_CONFIG_HOME` stay (6.2) |
 | T25 | A folder account with a missing link runs sessions with no hooks | `pick` runs `verify` on a folder account before every recipe and refuses on any broken or missing link, and a never-linked folder is always refused; `run` refuses the same way |
-| T26 | Any chat that can run `pick` learns the path of a file that holds a token, and can read it; a token session can print its own token | Not prevented by the tool, and said so. Same-user limit as T16 and T20: the user's own policy is the boundary. The README Limits section gives a deny-rule snippet for `~/.agent-balancer/tokens/` and `~/.agent-balancer/launch/` |
+| T26 | Any chat that can run `pick` learns the path of a file that holds a token, and can read it; a token session can print its own token | Not prevented by the tool, and said so. Same-user limit as T16 and T20: the user's own policy is the boundary. The Limits section of `docs/GUIDE.md` gives a deny-rule snippet for `~/.agent-balancer/tokens/` and `~/.agent-balancer/launch/` |
 
 Threat numbers are not reused or renumbered.
 
@@ -2822,7 +2842,8 @@ Threat numbers are not reused or renumbered.
   installs from a local tap built from the release files (`docs/RELEASING.md`), with Claude Code
   installed and one test account logged in; `init`; `add` an account and log in; `status` shows
   it; log it out and see `login_rejected`; `pick` with and without `--model fable`; the menu
-  shows rows, meters and the error row in light and dark; the Open Anyway steps match the README;
+  shows rows, meters and the error row in light and dark; the Open Anyway steps match
+  `docs/GUIDE.md`;
   the uninstall dry run lists everything.
 
 ## 16. The contract callers use

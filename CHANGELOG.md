@@ -448,3 +448,15 @@
   that failed because setup had not run, such as the launch refresh before `init`, stops showing
   its error at the first read that finds a valid `config.json`, with no new refresh; any other
   failed refresh shows its error until the next refresh.
+- The README is short and opens with what the tool is for, in the words people search with, and one
+  picture of the menu in a healthy state below a strip of menu bar. A three-point "How it works",
+  a quick start whose install commands name the real tap and work when copied, a real
+  `agent-balancer status` example, a caption under each picture, a short FAQ and a Details section
+  on where `claude` must be and the file modes follow. The rest moves to `docs/GUIDE.md`: the first
+  open of the app, the first run, how the pick works, what the tool does not do, privacy, where
+  tokens live, its limits and uninstall. `docs/ORCHESTRATORS.md` shows a script or orchestrator
+  picking an account with `pick --json`, launching on its recipe, handling exit 2 and installing
+  the skill, and `docs/RELEASING.md` holds a draft repository description and topic list for the
+  public flip. The README check reads the guide too and takes a `text` block only as status output
+  for the made-up accounts, and the render draws the menu panel over a plain backdrop, where its
+  flat stand-in for the panel material used to carry the peach of the design's desktop picture.

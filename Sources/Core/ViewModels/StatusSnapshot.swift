@@ -203,11 +203,18 @@ public struct StatusReader: Sendable {
         }
     }
 
+    /// `config.json` when it loads as a valid config, else nil.
+    func validConfig() -> Config? {
+        try? ConfigStore(context: context).load()
+    }
+
     /// `refresh.backgroundMinutes`, or the default of 60 when the config cannot be read.
     public func backgroundMinutes() -> Int {
-        guard let config = try? ConfigStore(context: context).load() else {
-            return RefreshSettings().backgroundMinutes
-        }
+        Self.backgroundMinutes(validConfig())
+    }
+
+    static func backgroundMinutes(_ config: Config?) -> Int {
+        guard let config else { return RefreshSettings().backgroundMinutes }
         return max(1, config.refresh.backgroundMinutes)
     }
 }

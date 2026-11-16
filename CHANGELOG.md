@@ -443,3 +443,8 @@
   date. `docs/CONTRACT.md` names a token account's `login` among the commands that probe, and
   section 10.1 of the architecture doc says that the status document's `next` keeps the main
   account's probe-source rule.
+- The menu panel redraws as the status changes on macOS 14, where it kept the content it read at
+  launch, such as the setup card or an old label and meters, until the app restarted. A refresh
+  that failed because setup had not run, such as the launch refresh before `init`, stops showing
+  its error at the first read that finds a valid `config.json`, with no new refresh; any other
+  failed refresh shows its error until the next refresh.

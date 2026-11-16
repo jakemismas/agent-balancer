@@ -71,10 +71,7 @@ struct AgentBalancerBarApp: App {
 
     var body: some Scene {
         MenuBarExtra {
-            PanelView(
-                screen: model.controller.screen, refreshState: model.controller.refreshState,
-                loginItemOn: model.loginItemOn, loginItemError: model.loginItemError,
-                actions: model.actions)
+            MenuPanel(model: model)
         } label: {
             Image(nsImage: MenuIcon.image())
         }
@@ -83,5 +80,17 @@ struct AgentBalancerBarApp: App {
             ManageWindowView(model: model.manage, copy: model.copy)
         }
         .windowResizability(.contentMinSize)
+    }
+}
+
+/// Reads the model in its own body, since on macOS 14 a scene body read left the panel stale.
+struct MenuPanel: View {
+    let model: AppModel
+
+    var body: some View {
+        PanelView(
+            screen: model.controller.screen, refreshState: model.controller.refreshState,
+            loginItemOn: model.loginItemOn, loginItemError: model.loginItemError,
+            actions: model.actions)
     }
 }

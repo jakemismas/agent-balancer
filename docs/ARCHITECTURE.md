@@ -2235,7 +2235,14 @@ empty lists, and the events record keeps only each label's newest line.
   command it runs, so a sheet follows a `link` run in Terminal. The timed reads stand in for a file
   watcher because the safety scan lets no source outside `Paths/` open a file. It writes
   no file and never runs `claude` itself. Open usage page goes through the SwiftUI `openURL`
-  action, and Open at login through `SMAppService`; the app keeps no preference store.
+  action, and Open at login through `SMAppService`; the app keeps no preference store. The panel
+  reads what it shows in its own view body: on macOS 14 the panel stayed stale while the app's
+  scene body read that state, and it redraws with the read in a view body. A refresh that failed
+  because setup had not run, where the tool exited with its "Setup has not run" error and
+  `config.json` was missing when the refresh began, stops showing that error at the first read
+  that finds a valid `config.json`, with or without a status file, and no refresh or probe runs
+  for it. Any other failed refresh, such as one whose tool is not found or is refused, one that
+  timed out or one with another error, shows its error until the next refresh.
 
 ## 12. Install, update, uninstall
 

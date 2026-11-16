@@ -28,6 +28,8 @@ public final class MenuController {
     @ObservationIgnored private let timing: MenuTiming
     @ObservationIgnored private let clock: @Sendable () -> Date
     @ObservationIgnored private var tasks: [Task<Void, Never>] = []
+    /// True after the setup error failed a refresh begun with no config, which setup makes stale.
+    @ObservationIgnored private var failedBeforeSetup = false
     /// Runs after each pass of the file loop, so an open Manage accounts window reads the same
     /// file on the same beat.
     @ObservationIgnored public var afterFileRead: (@MainActor () -> Void)?
@@ -47,12 +49,18 @@ public final class MenuController {
         reload()
     }
 
-    /// Reads the files and rebuilds the screen. Cheap, and safe to call often.
+    /// Reads the files and rebuilds the screen. Once `config.json` loads as a valid config, it also
+    /// clears a refresh that failed because setup had not run. Cheap, and safe to call often.
     public func reload() {
+        let config = reader.validConfig()
         let inputs = MenuInputs(
             configExists: reader.configExists(), cliFound: runner.isAvailable,
             cliTried: runner.triedPaths, status: reader.load(), now: clock(),
-            backgroundMinutes: reader.backgroundMinutes())
+            backgroundMinutes: StatusReader.backgroundMinutes(config))
+        if failedBeforeSetup && config != nil {
+            failedBeforeSetup = false
+            refreshState = .idle
+        }
         let next = MenuBuilder.screen(inputs)
         if next != screen { screen = next }
     }
@@ -119,7 +127,9 @@ public final class MenuController {
     /// error text.
     public func refreshNow() async {
         if refreshState == .running { return }
+        let beforeSetup = !reader.configExists()
         refreshState = .running
+        failedBeforeSetup = false
         let runner = self.runner
         let timeout = timing.refreshTimeoutSeconds
         let result = await Self.runOffMain { try runner.run(["refresh"], timeout: timeout) }
@@ -134,6 +144,8 @@ public final class MenuController {
                 let shown = Self.firstLine(text)
                 refreshState = .failed(
                     shown.isEmpty ? "Refresh failed (exit \(output.status))." : shown)
+                // The shown line decides, so a clear never hides another error's text.
+                failedBeforeSetup = beforeSetup && shown.contains(Messages.notSetUp)
             } else {
                 refreshState = .idle
             }

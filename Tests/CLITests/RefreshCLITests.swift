@@ -124,4 +124,15 @@ import Testing
         defer { bare.cleanup() }
         #expect(try bare.run(["refresh"]).status != 0)
     }
+
+    /// The menu app clears a failed refresh only when its first error line names this message.
+    @Test func refreshBeforeInitNamesTheSetupMessageOnItsFirstErrorLine() throws {
+        let cli = try CLIHome()
+        defer { cli.cleanup() }
+        let out = try cli.run(["refresh"])
+        #expect(out.status != 0)
+        let first = String(decoding: out.stderr, as: UTF8.self)
+            .split(whereSeparator: \.isNewline).first.map(String.init)
+        #expect(first?.contains(Messages.notSetUp) == true)
+    }
 }

@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import Testing
 
 @testable import Core
@@ -7,11 +8,25 @@ import Testing
 @Suite(.serialized) struct MenuControllerTests {
     /// A temporary home with a fake tool that logs each call and obeys a few files.
     final class Fake {
+        /// What the fake's refresh does before it prints its error and exits.
+        enum Step {
+            case none
+            /// Moves a valid config.json into place, as an `init` that ends during the run.
+            case setUp
+            /// Sleeps past any refresh timeout a test sets.
+            case hang
+            /// Once config.json is there, waits for `release()` and then succeeds.
+            case holdOnceSetUp
+        }
+
         let home: URL
         let tool: URL
         let log: URL
 
-        init(refreshExit: Int = 0, refreshError: String? = nil, mode: Int = 0o755) throws {
+        init(
+            refreshExit: Int = 0, refreshError: String? = nil, mode: Int = 0o755,
+            first step: Step = .none
+        ) throws {
             home = FileManager.default.temporaryDirectory
                 .appendingPathComponent("ab-menu-\(UUID().uuidString)")
             try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
@@ -19,12 +34,32 @@ import Testing
             log = home.appendingPathComponent("calls.log")
             try FileManager.default.createDirectory(
                 at: tool.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let root = context.dataRoot.path
+            let first: String
+            switch step {
+            case .none: first = ""
+            case .setUp: first = "mv '\(root)/staged.json' '\(root)/config.json'"
+            case .hang: first = "exec sleep 30"
+            case .holdOnceSetUp:
+                // Bounded, so a failed test leaves no fake behind.
+                first = """
+                    if [ -e '\(root)/config.json' ]; then
+                      n=0
+                      while [ ! -e '\(home.path)/go' ] && [ $n -lt 600 ]; do
+                        sleep 0.05
+                        n=$((n + 1))
+                      done
+                      exit 0
+                    fi
+                    """
+            }
             let err = refreshError.map { "echo '\($0)' >&2" } ?? ""
             let script = """
                 #!/bin/sh
                 echo "$*" >> "\(log.path)"
                 env | cut -d= -f1 | sort > "\(home.path)/env-names.txt"
                 if [ "$1" = "refresh" ]; then
+                  \(first)
                   \(err)
                   exit \(refreshExit)
                 fi
@@ -33,6 +68,7 @@ import Testing
             try script.write(to: tool, atomically: true, encoding: .utf8)
             try FileManager.default.setAttributes(
                 [.posixPermissions: mode], ofItemAtPath: tool.path)
+            if step == .setUp { try writeConfig(name: "staged.json") }
         }
 
         deinit { try? FileManager.default.removeItem(at: home) }
@@ -45,10 +81,20 @@ import Testing
                 .split(separator: "\n").map(String.init)
         }
 
-        func writeConfig() throws {
+        /// A valid config.json, or `data` in its place.
+        func writeConfig(_ data: Data? = nil, name: String = "config.json") throws {
             let writer = NoFollowWriter(root: context.dataRoot)
-            let data = try JSONEncoder().encode(Config())
-            try writer.put(data, folders: [], name: "config.json")
+            try writer.put(data ?? JSONEncoder().encode(Config()), folders: [], name: name)
+        }
+
+        /// The two files `init` leaves.
+        func writeConfigAndStatus() throws {
+            try writeConfig()
+            try writeStatus(generatedAt: Date())
+        }
+
+        func release() throws {
+            try Data().write(to: home.appendingPathComponent("go"))
         }
 
         func writeStatus(generatedAt: Date) throws {
@@ -149,6 +195,209 @@ import Testing
         let controller = MenuController(context: fake.context, runner: fake.runner)
         await controller.refreshNow()
         #expect(controller.refreshState == .failed("refresh failed: probe timed out"))
+    }
+
+    /// The first error line of the real tool's `refresh` before `init`.
+    static let setupError = "Error: \(Messages.notSetUp)"
+    static let probeError = "refresh failed: probe timed out"
+
+    @Test @MainActor func aRefreshThatFailedBeforeSetupClearsAtTheFirstReadThatFindsTheConfig()
+        async throws
+    {
+        let fake = try Fake(refreshExit: 1, refreshError: Self.setupError)
+        let controller = MenuController(context: fake.context, runner: fake.runner)
+        await controller.refreshNow()
+        #expect(controller.refreshState == .failed(Self.setupError))
+        try fake.writeConfig()
+        try fake.writeStatus(generatedAt: Date())
+        controller.reload()
+        #expect(controller.refreshState == .idle)
+        if case .accounts(let a) = controller.screen {
+            #expect(a.rows.map(\.label) == ["main"])
+        } else {
+            Issue.record("expected the account")
+        }
+    }
+
+    @Test @MainActor func aRefreshThatFailedWithTheConfigThereStaysFailedAfterARead()
+        async throws
+    {
+        // The setup text alone does not clear it: config.json was there when this refresh began.
+        let fake = try Fake(refreshExit: 1, refreshError: Self.setupError)
+        try fake.writeConfig()
+        let controller = MenuController(context: fake.context, runner: fake.runner)
+        await controller.refreshNow()
+        try fake.writeStatus(generatedAt: Date())
+        controller.reload()
+        #expect(controller.refreshState == .failed(Self.setupError))
+    }
+
+    @Test @MainActor func aRefreshThatFailedBeforeSetupStaysWhileTheConfigIsMissing()
+        async throws
+    {
+        let fake = try Fake(refreshExit: 1, refreshError: Self.setupError)
+        let controller = MenuController(context: fake.context, runner: fake.runner)
+        await controller.refreshNow()
+        try fake.writeStatus(generatedAt: Date())
+        controller.reload()
+        #expect(controller.refreshState == .failed(Self.setupError))
+    }
+
+    @Test @MainActor func aSetupFailureClearsWithOnlyTheConfigAndTheClearRunsNoTool()
+        async throws
+    {
+        let fake = try Fake(refreshExit: 1, refreshError: Self.setupError)
+        let controller = MenuController(context: fake.context, runner: fake.runner)
+        await controller.refreshNow()
+        #expect(controller.refreshState == .failed(Self.setupError))
+        try fake.writeConfig()
+        controller.reload()
+        #expect(controller.refreshState == .idle)
+        #expect(fake.calls() == ["refresh"])
+    }
+
+    @Test @MainActor func aSetupFailureStaysWhileTheConfigDoesNotLoad() async throws {
+        let fake = try Fake(refreshExit: 1, refreshError: Self.setupError)
+        let controller = MenuController(context: fake.context, runner: fake.runner)
+        await controller.refreshNow()
+        try fake.writeConfig(Data("{".utf8))
+        controller.reload()
+        #expect(controller.refreshState == .failed(Self.setupError))
+        try fake.writeConfig()
+        controller.reload()
+        #expect(controller.refreshState == .idle)
+    }
+
+    @Test @MainActor func aToolNotFoundBeforeSetupStaysOnceAValidConfigIsThere() async throws {
+        let fake = try Fake()
+        let runner = CLIRunner(
+            context: fake.context, candidates: [fake.home.appendingPathComponent("nope")])
+        let controller = MenuController(context: fake.context, runner: runner)
+        await controller.refreshNow()
+        #expect(controller.refreshState == .failed("agent-balancer was not found."))
+        try fake.writeConfigAndStatus()
+        controller.reload()
+        #expect(controller.refreshState == .failed("agent-balancer was not found."))
+    }
+
+    @Test @MainActor func aRefusedToolBeforeSetupStaysOnceAValidConfigIsThere() async throws {
+        let fake = try Fake(mode: 0o777)
+        let controller = MenuController(context: fake.context, runner: fake.runner)
+        await controller.refreshNow()
+        let refused = controller.refreshState
+        if case .failed(let text) = refused {
+            #expect(text.hasPrefix("Refused "))
+        } else {
+            Issue.record("expected the refusal")
+        }
+        try fake.writeConfigAndStatus()
+        controller.reload()
+        #expect(controller.refreshState == refused)
+    }
+
+    @Test @MainActor func aRefreshThatTimedOutBeforeSetupStaysOnceAValidConfigIsThere()
+        async throws
+    {
+        let fake = try Fake(first: .hang)
+        var timing = MenuTiming()
+        timing.refreshTimeoutSeconds = 0.5
+        let controller = MenuController(context: fake.context, runner: fake.runner, timing: timing)
+        await controller.refreshNow()
+        #expect(controller.refreshState == .failed("Refresh timed out."))
+        try fake.writeConfigAndStatus()
+        controller.reload()
+        #expect(controller.refreshState == .failed("Refresh timed out."))
+    }
+
+    @Test @MainActor func anotherErrorBeforeSetupStaysOnceAValidConfigIsThere() async throws {
+        let fake = try Fake(refreshExit: 1, refreshError: Self.probeError)
+        let controller = MenuController(context: fake.context, runner: fake.runner)
+        await controller.refreshNow()
+        #expect(controller.refreshState == .failed(Self.probeError))
+        try fake.writeConfigAndStatus()
+        controller.reload()
+        #expect(controller.refreshState == .failed(Self.probeError))
+    }
+
+    @Test @MainActor func aSetupMessageUnderAnotherErrorLineStaysOnceAValidConfigIsThere()
+        async throws
+    {
+        let fake = try Fake(refreshExit: 1, refreshError: "Error: crashed\n\(Self.setupError)")
+        let controller = MenuController(context: fake.context, runner: fake.runner)
+        await controller.refreshNow()
+        #expect(controller.refreshState == .failed("Error: crashed"))
+        try fake.writeConfigAndStatus()
+        controller.reload()
+        #expect(controller.refreshState == .failed("Error: crashed"))
+    }
+
+    @Test @MainActor func aRefreshThatOverlappedInitAndFailedForAnotherReasonShowsItsError()
+        async throws
+    {
+        let fake = try Fake(refreshExit: 1, refreshError: Self.probeError, first: .setUp)
+        let controller = MenuController(context: fake.context, runner: fake.runner)
+        await controller.refreshNow()
+        #expect(StatusReader(context: fake.context).configExists())
+        #expect(controller.refreshState == .failed(Self.probeError))
+        controller.reload()
+        #expect(controller.refreshState == .failed(Self.probeError))
+    }
+
+    @Test @MainActor func aSetupErrorFromARefreshThatOverlappedInitClearsAtTheNextRead()
+        async throws
+    {
+        let fake = try Fake(refreshExit: 1, refreshError: Self.setupError, first: .setUp)
+        let controller = MenuController(context: fake.context, runner: fake.runner)
+        await controller.refreshNow()
+        #expect(StatusReader(context: fake.context).configExists())
+        #expect(controller.refreshState == .idle)
+    }
+
+    @Test @MainActor func aReadDuringARefreshNowAfterASetupFailureAndInitKeepsItRunning()
+        async throws
+    {
+        let fake = try Fake(refreshExit: 1, refreshError: Self.setupError, first: .holdOnceSetUp)
+        let controller = MenuController(context: fake.context, runner: fake.runner)
+        await controller.refreshNow()
+        #expect(controller.refreshState == .failed(Self.setupError))
+        try fake.writeConfig()
+        let task = Task { await controller.refreshNow() }
+        let running = await Self.waitFor(5) { controller.refreshState == .running }
+        controller.reload()
+        #expect(running)
+        #expect(controller.refreshState == .running)
+        try fake.release()
+        await task.value
+        #expect(controller.refreshState == .idle)
+    }
+
+    @Test @MainActor func aStatusFileChangeAndAReloadNotifyAnObserverOfTheScreen() throws {
+        let fake = try Fake()
+        try fake.writeConfig()
+        let controller = MenuController(context: fake.context, runner: fake.runner)
+        let changes = Counter()
+        withObservationTracking {
+            _ = controller.screen
+        } onChange: {
+            changes.add()
+        }
+        try fake.writeStatus(generatedAt: Date())
+        controller.reload()
+        #expect(changes.value == 1)
+    }
+
+    @Test @MainActor func aRefreshNowNotifiesAnObserverOfTheRefreshState() async throws {
+        let fake = try Fake()
+        try fake.writeConfig()
+        let controller = MenuController(context: fake.context, runner: fake.runner)
+        let changes = Counter()
+        withObservationTracking {
+            _ = controller.refreshState
+        } onChange: {
+            changes.add()
+        }
+        await controller.refreshNow()
+        #expect(changes.value == 1)
     }
 
     @Test @MainActor func refreshNowWithNoToolReportsItAndTheScreenIsACard() async throws {

@@ -135,12 +135,15 @@ extension LaunchFiles {
     /// the file fails to sign in instead of falling back to the stored login.
     static let tombstoneValue = "invalid"
 
+    /// The most bytes of a launch file the tool reads.
+    static let launchFileLimit = 65_536
+
     /// The JSON object of one launch file, or nil when it cannot be read or does not parse.
     private static func object(context: ToolContext, label: String, name: String) -> [String: Any]?
     {
         guard
             let data = try? NoFollowReader(root: context.dataRoot).read(
-                folders: folders(label: label), name: name, limit: 65_536)
+                folders: folders(label: label), name: name, limit: launchFileLimit)
         else { return nil }
         return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
     }
@@ -182,16 +185,17 @@ extension LaunchFiles {
         var rewritten = 0
     }
 
-    /// Writes the token of `label`, as the token store now holds it, into every live launch file of
-    /// the label that is not in `skipping`. A tombstone is never revived, and a file that carries
-    /// no token, such as one a renamed `login` account's pick left under its old label, never
-    /// gains one. A file that does not parse never keeps the old token: one a session record names
-    /// (or any, when the records cannot be read cleanly) becomes a tombstone, and any other is
-    /// deleted. Callers hold the pick lock.
+    /// Writes `token`, the one the token store just saved for `label`, into every live launch file
+    /// of the label that is not in `skipping`. A tombstone is never revived, and a file that
+    /// carries no token, such as one a renamed `login` account's pick left under its old label,
+    /// never gains one. A file that does not parse never keeps the old token: one a session record
+    /// names (or any, when the records cannot be read cleanly) becomes a tombstone, and any other
+    /// is deleted. Callers hold the pick lock.
     static func rewriteToken(
-        context: ToolContext, label: String, skipping: Set<String>, snapshot: SessionsSnapshot
+        context: ToolContext, label: String, token secret: TokenSecret, skipping: Set<String>,
+        snapshot: SessionsSnapshot
     ) throws -> RewritePass {
-        let token = try TokenStore.read(context: context, label: label).reveal()
+        let token = secret.reveal()
         let writer = NoFollowWriter(root: context.dataRoot)
         var pass = RewritePass()
         for name in try ownFileNames(context: context, label: label) where !skipping.contains(name)
@@ -397,6 +401,95 @@ extension LaunchFiles {
                         "The launch folder", place + "/" + label, problem))
             }
         }
+    }
+
+    /// Throws the refusal of the launch folder or the label's folder in it when either is there
+    /// and fails the folder checks. A missing one passes, since a token save only rewrites the
+    /// launch files that are there.
+    static func requireOpenable(context: ToolContext, label: String) throws {
+        guard ConfigValidator.isValidLabel(label) else { throw ToolError("Label is not valid.") }
+        let dir = try NoFollowWriter.openFolder(
+            root: context.dataRoot, folders: folders(label: label), create: false)
+        if dir >= 0 { close(dir) }
+    }
+
+    /// The launch folder and the label's folder in it, when they are there, which a token save
+    /// opens before it deletes the stored reading (`requireOpenable`).
+    static func openTargets(context: ToolContext, label: String) -> [NoFollowWriter.Target] {
+        guard ConfigValidator.isValidLabel(label) else { return [] }
+        let writer = NoFollowWriter(root: context.dataRoot)
+        guard (try? writer.folderEntry(parent: [], name: folder)) != .missing else { return [] }
+        let labelFolder = try? writer.folderEntry(parent: [folder], name: label)
+        return [.folder([folder], [.open])]
+            + (labelFolder == .missing ? [] : [.folder(folders(label: label), [.open])])
+    }
+
+    /// What a token save does in the label's launch folder (`rewriteToken` and
+    /// `deleteWriterLeftovers`): each launch file of the tool's there now is replaced, or deleted
+    /// when it does not parse, and each of the writer's leftover temporary files is deleted. A
+    /// name of a launch file's shape that `lstat` cannot check is a target too, since its file
+    /// may hold the old token and the rewrite cannot reach it. A refusal names the folder, never
+    /// a launch file.
+    static func rewriteTargets(context: ToolContext, label: String) -> [NoFollowWriter.Target] {
+        guard ConfigValidator.isValidLabel(label) else { return [] }
+        let writer = NoFollowWriter(root: context.dataRoot)
+        let dir = folders(label: label)
+        let names = (try? writer.listNames(folders: dir)) ?? []
+        let place = NoFollowWriter.place(dir)
+        let shown = NoFollowWriter.Shown(
+            subject: "a launch file in `\(place)`", path: place + "/l-*.json")
+        var targets: [NoFollowWriter.Target] = []
+        for name in names where isFileName(name) {
+            let own: Bool
+            do {
+                let info = try writer.checkedInfo(folders: dir, name: name)
+                own = info.map { $0.isRegularFile && $0.ownedByUser } ?? false
+            } catch {
+                own = true
+            }
+            guard own else { continue }
+            var target = NoFollowWriter.Target.file(
+                dir, name, [.read, .replace, .delete], readLimit: launchFileLimit)
+            target.shown = shown
+            targets.append(target)
+        }
+        let leftovers = (try? writer.leftoverTemporaries(folders: dir)) ?? []
+        return targets + leftovers.map { .file(dir, $0, [.delete]) }
+    }
+
+    /// What `doctor` says about the launch folder and each label's folder in it when the folder
+    /// checks refuse it for its mode or its access list or it cannot be opened, searched or
+    /// checked, and about each label's folder that holds a launch file whose access list lets
+    /// another user or group in, cannot be read, or keeps `lstat` out, each with the commands
+    /// that clear it, and about each writer's temporary file there with such a list, by its
+    /// path, as in the token folder. What is in a folder refused for its mode or its list is
+    /// checked in the same run; what is in one that cannot be opened or checked, once it can. It
+    /// never names a launch file, whose name is a lease id.
+    public static func accessListProblems(context: ToolContext) -> [String] {
+        let writer = NoFollowWriter.forDoctor(root: context.dataRoot)
+        let place = NoFollowWriter.dataFolderPlace + "/" + folder
+        let top = writer.doctorVerdict(parent: [], name: folder)
+        var found = top.line.map { [$0] } ?? []
+        guard top.readable else { return found }
+        let names = (try? writer.listNames(folders: [folder])) ?? []
+        for label in names where ConfigValidator.isValidLabel(label) {
+            let verdict = writer.doctorVerdict(parent: [folder], name: label)
+            if let line = verdict.line { found.append(line) }
+            guard verdict.readable else { continue }
+            let inside = folders(label: label)
+            let files = (try? writer.listNames(folders: inside)) ?? []
+            let shared = files.contains { name in
+                isFileName(name) && writer.fileListProblem(folders: inside, name: name) != nil
+            }
+            if shared { found.append(Messages.doctorLaunchFilesShared(place + "/" + label)) }
+            for name in files where NoFollowWriter.isTemporaryName(name) {
+                guard let problem = writer.fileListProblem(folders: inside, name: name) else {
+                    continue
+                }
+                found.append(Messages.doctorFileProblem(place + "/" + label + "/" + name, problem))
+            }
+        }
+        return found
     }
 
     /// What `clearForUninstall` did, summed over every label.

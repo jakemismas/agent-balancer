@@ -8,8 +8,18 @@ final class TestHome {
     let home: URL
     let fixtures: URL
 
+    /// The folder homes go in: `TMPDIR` when it is set, so a run can keep them, and the access
+    /// lists some tests set on them, out of the system's temporary folder, which Foundation picks
+    /// whatever `TMPDIR` says.
+    static let temporaryFolder: URL = {
+        if let set = ProcessInfo.processInfo.environment["TMPDIR"], !set.isEmpty {
+            return URL(fileURLWithPath: set, isDirectory: true)
+        }
+        return FileManager.default.temporaryDirectory
+    }()
+
     init() throws {
-        home = FileManager.default.temporaryDirectory
+        home = Self.temporaryFolder
             .appendingPathComponent("ab-core-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
         fixtures = URL(fileURLWithPath: #filePath)

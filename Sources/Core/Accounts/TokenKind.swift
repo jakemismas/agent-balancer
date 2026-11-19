@@ -62,7 +62,10 @@ enum TokenKind {
         let facts = try TokenPaths.facts(context: context, label: account.label)
         // A file that is absent, not private or does not parse counts as no token, as in pick.
         guard facts.isPrivate, TokenStore.isUsable(context: context, label: account.label) else {
-            throw ToolError(Messages.tokenMissing(account.label), code: .tokenMissing)
+            let text =
+                TokenStore.blockedText(context: context, label: account.label)
+                ?? Messages.tokenMissing(account.label)
+            throw ToolError(text, code: .tokenMissing)
         }
         let path = try TokenPaths.fileURL(context: context, label: account.label).path
         return ProbeContext(

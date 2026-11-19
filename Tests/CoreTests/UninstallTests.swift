@@ -286,14 +286,22 @@ import Testing
             at: root.appendingPathComponent("backups"), withDestinationURL: outside)
         try FileManager.default.createSymbolicLink(
             at: root.appendingPathComponent("probe"), withDestinationURL: outside)
-        // A folder of the tool's that is not private is counted once and never opened.
+        // A folder of the tool's that is not private stops the run before anything goes.
         let wide = try plant(t, Layout.readingsFolders, "pool-a.json")
         chmod(wide.deletingLastPathComponent().path, 0o755)
+        defer { chmod(wide.deletingLastPathComponent().path, 0o700) }
         let stateFile = try plant(t, Layout.stateFolders, StatusBuilder.statusName)
+        let place = (["~/.agent-balancer"] + Layout.readingsFolders).joined(separator: "/")
+        let refused = ToolError(
+            Messages.uninstallFolderRefused("The folder", place, .widerThanPrivate))
+        #expect(throws: refused) { _ = try run(t) }
+        let token = try tokenFile(t)
+        #expect(exists(wide) && exists(stateFile) && exists(token))
+        chmod(wide.deletingLastPathComponent().path, 0o700)
         let done = try run(t)
         #expect(done.tokenFiles == 1)
-        #expect(done.entriesLeft == 4)
-        #expect(exists(wide) && !exists(stateFile))
+        #expect(done.entriesLeft == 3)
+        #expect(!exists(wide) && !exists(stateFile))
         #expect(text(root.appendingPathComponent("logs")) == "mine")
         #expect(isLink(root.appendingPathComponent("backups")))
         #expect(!exists(root.appendingPathComponent("config.json")))

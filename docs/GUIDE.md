@@ -141,7 +141,10 @@ Do these four steps again after each upgrade until the app is notarized. Upgrade
   `claude auth status`, which reads the login itself, and uses the answer, and
   `agent-balancer login` can start a sign-in that you finish yourself.
 - The only credential it keeps is a setup-token that you make yourself.
-- Its files are mode 0600 and its folders are mode 0700.
+- Its files are mode 0600 and its folders are mode 0700. A file it writes takes no access list
+  entry that lets another user or group in. It refuses a folder of its own whose access list lets
+  one in or cannot be read, and `agent-balancer doctor` names each such folder and file with the
+  command that clears it.
 - With safe mode off (`probe.safeMode` set to false), your hooks run in every probe the tool
   starts: in `agent-balancer refresh`, in `agent-balancer pick` and in the first check that
   `agent-balancer login` runs after it saves a token. Safe mode is on by default.
@@ -152,9 +155,11 @@ A token account uses a setup-token that you make yourself with `claude setup-tok
 lives only in `~/.agent-balancer/tokens/<label>.json` and in that label's launch files under
 `~/.agent-balancer/launch/`, which carry it to a session. Both are mode 0600 in folders with mode
 0700, both folders are marked as excluded from backups, and `agent-balancer doctor` warns when the
-data folder sits inside a known sync folder, such as iCloud Drive or Dropbox. A write cut off part
-way can leave a temporary copy in those folders until the next `agent-balancer remove`, replace
-or launch file cleanup deletes it; `agent-balancer doctor` counts any that are left.
+data folder sits inside a known sync folder, such as iCloud Drive or Dropbox. A token file whose
+access list lets another user or group in is not used, a token folder with such a list is
+refused, and `agent-balancer doctor` names each with the command that clears it. A write cut
+off part way can leave a temporary copy in those folders until the next `agent-balancer remove`,
+replace or launch file cleanup deletes it; `agent-balancer doctor` counts any that are left.
 
 - A leaked token can make model requests on that subscription for up to a year. Treat the folder
   like a password store.

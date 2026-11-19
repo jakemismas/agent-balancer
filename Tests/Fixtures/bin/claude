@@ -42,6 +42,8 @@ case "$1" in
     exit 0
     ;;
   setup-token)
+    # A change the test staged to happen while the person approves in the browser.
+    if [ -f "$dir/during-setup-token.sh" ]; then sh "$dir/during-setup-token.sh"; fi
     if [ -f "$dir/setup-token.out" ]; then cat "$dir/setup-token.out"; fi
     if [ -f "$dir/setup-token.err" ]; then cat "$dir/setup-token.err" >&2; fi
     if [ -f "$dir/setup-token.exit" ]; then exit "$(cat "$dir/setup-token.exit")"; fi

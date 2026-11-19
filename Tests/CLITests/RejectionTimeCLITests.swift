@@ -273,10 +273,25 @@ extension TokenAccountsCLITests {
             var info = stat()
             return stat(file, &info) == 0 ? info.st_ctimespec : nil
         }
-        let taken = try #require(stamp())
         try cli.fake("probe-for-lab.jsonl", try probeText(cli, week: 450_000, five: 15_000))
         try cli.fake("setup-token.out", Canary.realShapeToken() + "\n")
+        // The sign-in says it started and waits until the test lets it go, at most five minutes:
+        // the checks before it open the history lock too, so the stamp is read only after them.
+        try cli.fake(
+            "during-setup-token.sh",
+            """
+            d="$HOME/.ab-fake"
+            : > "$d/held-setup-token"
+            n=0
+            while [ ! -f "$d/go-setup-token" ] && [ "$n" -lt 3000 ]; do sleep 0.1; n=$((n + 1)); done
+
+            """)
         let login = try EndableCommand(cli, ["login", "lab"])
+        // Let the sign-in go even when an expectation below stops the test first.
+        defer { try? cli.fake("go-setup-token", "") }
+        try #require(fakeMarked(cli, "held-setup-token"))
+        let taken = try #require(stamp())
+        try cli.fake("go-setup-token", "")
         // The new token's first check came to its status rebuild, and lab's probe lock is held.
         try #require(
             pollUntil {

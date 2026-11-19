@@ -18,8 +18,9 @@ public enum TokenStore {
     static let maxLength = 512
 
     /// The token of `label`, from a token file that is a regular file owned by the user with
-    /// mode 0600. A file that is missing, wide open, not JSON or without a plausible token throws
-    /// `token_missing`, with a message that holds no part of the file.
+    /// mode 0600 and an access list that lets no other user or group in. A file that is missing,
+    /// not private, not JSON or without a plausible token throws `token_missing`, with a message
+    /// that holds no part of the file.
     static func read(context: ToolContext, label: String) throws -> TokenSecret {
         let missing = ToolError(Messages.tokenMissing(label), code: .tokenMissing)
         let facts = try TokenPaths.facts(context: context, label: label)
@@ -40,6 +41,21 @@ public enum TokenStore {
     /// and never returns any part of the file.
     public static func isUsable(context: ToolContext, label: String) -> Bool {
         (try? read(context: context, label: label)) != nil
+    }
+
+    /// What a status row, `pick` and `run` say when a token of `label` is kept from use by more
+    /// than a missing file: the refusal of a folder above it, which names its fix, or a token
+    /// file whose access list may let others in. Nil otherwise. No file is opened.
+    public static func blockedText(context: ToolContext, label: String) -> String? {
+        do {
+            let facts = try TokenPaths.facts(context: context, label: label)
+            return facts.sharedByAccessList || facts.unchecked
+                ? Messages.tokenFileShared(label) : nil
+        } catch let error as ToolError {
+            return error.message
+        } catch {
+            return nil
+        }
     }
 
     /// A shape check only: printable, no spaces, a sane length.

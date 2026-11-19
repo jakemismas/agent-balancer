@@ -158,7 +158,7 @@ extension PickService {
             observations: &observations)
         {
             if skip.code == .tokenMissing {
-                throw ToolError(Messages.tokenMissing(label), code: .tokenMissing)
+                throw ToolError(missingText(label), code: .tokenMissing)
             }
             if skip.code == .loginRejected, account.kind == Kind.token {
                 throw ToolError(Messages.probeLoginRejected, code: .loginRejected)
@@ -198,7 +198,7 @@ extension PickService {
             _ = try LaunchFiles.create(
                 context: context, account: account, leaseId: id, caller: .none)
         } catch let error as ToolError where error.code == .tokenMissing {
-            throw ToolError(Messages.tokenMissing(label), code: .tokenMissing)
+            throw ToolError(missingText(label), code: .tokenMissing)
         }
         do {
             leases.append(Lease(id: id, label: label, model: "default", at: now))
@@ -226,6 +226,12 @@ extension PickService {
         return RunLaunch(
             label: label, leaseId: id, arguments: ["--settings", path] + arguments, line: line,
             configDir: configDir)
+    }
+
+    /// What `run` says when the token of `label` cannot be used: what keeps it from use when that
+    /// names a fix, such as a refused token folder, else the `token_missing` text.
+    func missingText(_ label: String) -> String {
+        TokenStore.blockedText(context: context, label: label) ?? Messages.tokenMissing(label)
     }
 
     /// Drops the launch file and the lease of a run whose session could not be started, so no

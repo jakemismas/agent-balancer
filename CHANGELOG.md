@@ -472,3 +472,47 @@
   by, another run. The release check fails when the check job's time limit is not 20 minutes, the
   install job has no limit under 360 minutes, a job sets its own concurrency, another workflow is
   also named ci, or CI's name, concurrency group or rule for cancelling changes.
+- Access lists count as much as modes. A file or folder the tool makes under `~/.agent-balancer` no
+  longer keeps an entry from its folder that lets another user or group in: the writer clears such a
+  list on every file and folder it makes there, before anything is written to it, and on a lock file
+  or a log each time it opens one; the files the `--render` flag writes into its own folder have
+  such a list cleared too. A folder of the tool's whose access list lets another user or group in,
+  or cannot be read, is refused like one wider than 0700, with a message that names it and
+  `chmod -N`; an entry that keeps you from reading the list, one that denies you `readsecurity` or
+  `readattr`, makes a list that cannot be read. Every refusal of a folder now names it and its fix
+  by what is there: a mode, a list, a link, a file or another user's folder, and a folder account's
+  folder gets the same text in every command that uses it. A token file with such a list is not
+  private, so its account is not `ok`, picked or run, and its status row says the file may be
+  readable by others; a refused token folder gives its refusal and fix in `status`, `pick` and
+  `run`. Before `login` starts the sign-in or reads a pasted token, it runs the checks of every
+  later step of the run, the token save, the rules of its config save with every folder account's
+  folders, the first check and the status rebuild, from one plan per step that the step itself runs
+  under, and writes nothing that changes the account: each folder those steps write in must take a
+  new file that you can then read, write, add lines to and delete and whose list you can read; each
+  file they replace or delete must be one you may delete and not locked with `chflags`; each file
+  they read must open. A refusal names the file or folder and its fix (`chmod -N`, then `chmod 600`
+  for a file you cannot read, or `chflags nouchg` for a locked file), so it never drops a new token,
+  and a `login` that ends before a token is saved leaves the account as it was; when the check
+  cannot delete the empty file it made to test a folder, the refusal names that file too. A change
+  made during the sign-in that still stops the save says the new token was not saved and to run
+  `login` again once the change is fixed. Once the token is saved, a step that fails says so and
+  names `refresh` once its fix has run, never a new sign-in, except for a new token the service
+  rejects, whose text says to run `refresh` once and `login` only if the service rejects it again. A
+  folder account's `login` checks the plan save it makes after the sign-in, its lock included, and
+  the status rebuild that records the sign-in, before it starts `claude`. `uninstall` checks every
+  folder of the tool's before it removes anything and refuses one that fails the folder checks, by
+  its access list or its mode, with the folder and its fix, where it used to leave the files of a
+  `state/` or `backups/` folder it was refused and report success; it now also deletes
+  `state/token-rejections.json`, which it used to leave, keeping the data folder. `doctor` names
+  every folder of the tool's that the checks refuse, by its list or its mode, that cannot be opened,
+  searched or checked, or that is a link, a file or another user's folder, and each file of the
+  tool's whose list lets another user or group in or cannot be read, `state/token-rejections.json`
+  and the writer's temporary files among them, with the commands that clear it (a label's launch
+  files by their folder); it reads what is in a folder refused for its list or its mode in the same
+  run, and exits 1. Its count of temporary files that may hold a token leaves out an empty one,
+  which holds none. An entry that only denies, or only allows you, changes nothing while you can
+  read the list, and a volume that keeps no access lists counts as having none. The Manage window's
+  token tip says the token is used only while no other user can read its file. Before, the checks
+  read modes only, so an inheritable `everyone allow read` entry on `tokens/` gave a new 0600 token
+  file an entry that lets every local user read it, while `status` said `ok` and `doctor` said
+  nothing.

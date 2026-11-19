@@ -171,12 +171,13 @@ public enum Messages {
     }
 
     /// `uninstall` with a folder of the user's that fails the folder checks. `place` is the
-    /// folder's path as the person types it. One wider than 0700, or one that cannot be opened or
-    /// searched, is a real folder whose mode `lstat` read, never a link, so its commands take no
-    /// `-h`, and `chmod -N` clears its access list without opening it. An entry `lstat` cannot
-    /// check may be a link, so `-h` keeps each command on the entry itself; `chmod -h -N` opens
-    /// the entry, so the text names `chmod -N` for one whose access list also denies its owner
-    /// `read`, and `-N` goes first because `chmod 700` fails while `lstat` does.
+    /// folder's path as the person types it. One wider than 0700, one whose access list lets
+    /// another user or group in, or one that cannot be opened or searched, is a real folder whose
+    /// mode `lstat` read, never a link, so its commands take no `-h`, and `chmod -N` clears its
+    /// access list without opening it. An entry `lstat` cannot check may be a link, so `-h` keeps
+    /// each command on the entry itself; `chmod -h -N` opens the entry, so the text names
+    /// `chmod -N` for one whose access list also denies its owner `read`, and `-N` goes first
+    /// because `chmod 700` fails while `lstat` does.
     public static func uninstallFolderRefused(
         _ subject: String, _ place: String, _ problem: NoFollowWriter.FolderProblem
     ) -> String {
@@ -184,6 +185,9 @@ public enum Messages {
         case .widerThanPrivate:
             return
                 "\(subject) `\(place)` is wider than 0700, so `uninstall` cannot check what the tool made in it. Nothing was removed. Run `chmod 700 \(place)`, then run `agent-balancer uninstall` again."
+        case .sharedByAccessList:
+            return
+                "\(subject) `\(place)` has an access list that lets another user or group in, or that cannot be read, so `uninstall` cannot check what the tool made in it. Nothing was removed. Run `chmod -N \(place)`, then run `agent-balancer uninstall` again."
         case .cannotOpen:
             return
                 "\(subject) `\(place)` cannot be opened or searched, so `uninstall` cannot check what the tool made in it. Nothing was removed. Run `chmod -N \(place)`, then `chmod 700 \(place)`, then run `agent-balancer uninstall` again."
@@ -193,13 +197,312 @@ public enum Messages {
         }
     }
 
+    /// What every command that opens a folder of the tool's says when the folder's access list
+    /// lets another user or group in, or cannot be read. The folder opened as a real folder, so
+    /// plain `chmod -N` acts on it. It names the fix and no next command, since after a saved
+    /// token the next one is not the one that ran.
+    public static func folderSharedByAccessList(_ place: String) -> String {
+        "Refused `\(place)`: its access list lets another user or group in, or cannot be read. Run `chmod -N \(place)` in Terminal."
+    }
+
+    /// What every command that opens a folder of the tool's says when it refuses the folder, with
+    /// its fix. A link is never given a `chmod`, which would act on what it points to.
+    public static func folderRefused(_ place: String, _ why: NoFollowWriter.FolderRefusal)
+        -> String
+    {
+        switch why {
+        case .linkOrNotFolder:
+            return
+                "Refused `\(place)`: it is a link or not a folder, and the tool never follows a link. Move what is there out of the way, or move the folder a link points to back in its place."
+        case .cannotOpen:
+            return
+                "Refused `\(place)`: it cannot be opened or searched. Run `chmod -N \(place)`, then `chmod 700 \(place)` in Terminal."
+        case .cannotMake:
+            guard let cut = place.lastIndex(of: "/"), place != NoFollowWriter.dataFolderPlace
+            else { return "Refused `\(place)`: it is missing and could not be made." }
+            let above = String(place[..<cut])
+            return
+                "Refused `\(place)`: it is missing and could not be made in `\(above)`. Run `chmod -N \(above)`, then `chmod 700 \(above)` in Terminal."
+        case .notYours:
+            return
+                "Refused `\(place)`: it belongs to another user, so the tool does not use it. Move it out of the way."
+        case .widerThanPrivate:
+            return
+                "Refused `\(place)`: it is wider than 0700. Run `chmod 700 \(place)` in Terminal."
+        case .sharedByAccessList:
+            return folderSharedByAccessList(place)
+        }
+    }
+
+    /// What a check before a write says about a folder of the tool's in which the tool cannot make
+    /// and delete what it writes there, as an entry that denies the user adding or deleting
+    /// files makes.
+    public static func folderNotWritable(_ place: String) -> String {
+        "Refused `\(place)`: the tool cannot make and delete what it writes in it. Run `chmod -N \(place)`, then `chmod 700 \(place)` in Terminal, and `chflags nouchg \(place)` first if it is locked."
+    }
+
+    /// What a command says about a folder of the tool's it cannot mark as excluded from backups,
+    /// as an entry that denies the user writing its extended attributes makes.
+    static func notExcludedFromBackup(_ place: String) -> String {
+        "Refused `\(place)`: it cannot be marked as excluded from backups. Run `chmod -N \(place)` in Terminal."
+    }
+
+    /// What a probe says about its folder when it holds something the tool did not make there.
+    static func holdsForeignEntry(_ place: String) -> String {
+        "Refused `\(place)`: it holds something that is not a probe folder. Move what the tool did not make out of it."
+    }
+
+    /// What a check before a write says about a name the tool writes that is not a regular file
+    /// of the user's, which the writer never replaces or follows.
+    public static func notReplaceable(_ place: String) -> String {
+        fileRefused("`\(place)`", place, .notRegular, "replace or delete it")
+    }
+
+    /// What a check before a write says about a file of the tool's that a later step replaces or
+    /// deletes and could not, by the cause, with its fix. `subject` is what the text calls the
+    /// file and `path` the path its commands take, which differ only for a launch file, named by
+    /// its folder; `action` is what the tool could not do.
+    public static func fileRefused(
+        _ subject: String, _ path: String, _ why: NoFollowWriter.FileRefusal, _ action: String
+    ) -> String {
+        switch why {
+        case .notRegular:
+            let use = action == "read it" ? "read" : "write"
+            return
+                "Refused \(subject): it is not a regular file of yours, so the tool does not \(use) it. Move it out of the way."
+        case .flagged(let flags):
+            return flagged(subject, path, flags, action)
+        case .deleteDenied:
+            return
+                "Refused \(subject): its access list does not let the tool \(action). Run `chmod -N \(path)` in Terminal."
+        case .unchecked:
+            return
+                "Refused \(subject): it cannot be checked, so the tool cannot tell whether it can \(action). Run `chmod -h -N \(path)`, or `chmod -N \(path)` if that says Permission denied, in Terminal."
+        }
+    }
+
+    /// What a check says about a file or folder of the tool's that a flag locks: the user's own
+    /// flags with the `chflags` that clears them, or a system flag, which only an administrator
+    /// can clear.
+    public static func flagged(
+        _ subject: String, _ path: String, _ flags: NoFollowWriter.FileFlags, _ action: String
+    ) -> String {
+        guard !flags.user.isEmpty else {
+            return
+                "Refused \(subject): a system flag on it does not let the tool \(action), and only an administrator can clear that flag."
+        }
+        let names = flags.user.map { "`\($0)`" }.joined(separator: " and ")
+        let noun = flags.user.count == 1 ? "flag" : "flags"
+        let clear = flags.user.map { "no" + $0 }.joined(separator: ",")
+        let also =
+            flags.system
+            ? " A system flag is also set, which only an administrator can clear." : ""
+        return
+            "Refused \(subject): it has the \(names) \(noun) set, so the tool cannot \(action). Run `chflags \(clear) \(path)` in Terminal.\(also)"
+    }
+
+    /// What a check before a write says about a folder of the tool's whose new files and
+    /// folders take an inherited access list entry that keeps the tool from reading, writing or
+    /// checking them, as one that denies the user `read`, `write` or `readsecurity` does.
+    /// `chmod -N` on the folder drops the inheritable entry.
+    public static func folderGivesClosedFiles(_ place: String) -> String {
+        "Refused `\(place)`: what the tool makes in it takes an access list that keeps the tool from reading, writing or checking it. Run `chmod -N \(place)` in Terminal."
+    }
+
+    /// What a check before a read says about a file of the tool's that the reader cannot open,
+    /// by an access list entry or by its mode.
+    public static func fileNotReadable(_ subject: String, _ path: String) -> String {
+        "Refused \(subject): the tool cannot read it. Run `chmod -N \(path)`, then `chmod 600 \(path)` in Terminal."
+    }
+
+    /// What a check before a read says about a file of the tool's larger than the tool reads.
+    public static func fileTooLarge(_ subject: String) -> String {
+        "Refused \(subject): it is larger than any file the tool writes there. Move it out of the way."
+    }
+
+    /// What `login` prints for a new token the service rejects at its first check: one more
+    /// check first, since a rejection can pass, and a new sign-in only when the service rejects
+    /// the token again.
+    public static func newTokenRejected(_ label: String) -> String {
+        let safe = Display.safe(label, limit: 32)
+        return
+            "The service rejected the new token for '\(safe)'. Run `agent-balancer refresh --label \(safe)` once; if the service rejects it again, run `agent-balancer login \(safe)` in Terminal."
+    }
+
+    /// What `login` prints when its first check could not use the token file it just saved, such
+    /// as one changed or moved meanwhile: the token was saved, so `doctor` names what to fix.
+    public static func savedTokenNotUsable(_ label: String) -> String {
+        "The token file of '\(Display.safe(label, limit: 32))' could not be used for the first check. Run `agent-balancer doctor` in Terminal."
+    }
+
+    /// What `login` says when the account was removed while the person signed in.
+    static func accountGoneTokenNotSaved(_ label: String) -> String {
+        "No account is labelled '\(Display.safe(label))' any more, so the token was not saved."
+    }
+
+    /// What `login` adds when a step after the sign-in refuses before the new token is saved,
+    /// as only a change made while the person signed in or a lock held that long can make it.
+    public static func tokenNotSaved(_ label: String) -> String {
+        let safe = Display.safe(label, limit: 32)
+        return
+            "The new token for '\(safe)' was not saved. Once the above is fixed, run `agent-balancer login \(safe)` again."
+    }
+
+    /// What a check before a write adds when the file or folder it made to test a folder stays
+    /// there after the refusal, as an entry on the folder that denies deleting what is in it
+    /// keeps it. It is empty and its own access list is cleared.
+    public static func checkLeft(_ place: String, folder: Bool) -> String {
+        "The check left the empty \(folder ? "folder" : "file") `\(place)` there; move it out of the way once that is done."
+    }
+
+    /// What `login` says once the new token is saved and a step after the save did not finish.
+    /// It names the command that finishes the job, never a new sign-in.
+    public static func tokenSavedNoSignIn(_ label: String) -> String {
+        let safe = Display.safe(label, limit: 32)
+        return
+            "The new token for '\(safe)' is saved, so no new sign-in is needed. Once the above is fixed, run `agent-balancer refresh --label \(safe)` to check it."
+    }
+
+    /// What a folder account's `login` says when its sign-in worked and the plan it found could
+    /// not be saved. The next `refresh` that checks the sign-in records it.
+    public static func planNotRecorded(_ label: String, _ reason: String) -> String {
+        let safe = Display.safe(label, limit: 32)
+        return
+            "'\(safe)' is signed in, but its plan could not be recorded: \(reason) Once that is fixed, run `agent-balancer refresh --label \(safe)`, which records it; no new sign-in is needed."
+    }
+
+    /// The save's own step after the token file: its time. The config keeps the time saved
+    /// before, for the token the new one replaced, so the estimated end can show early, never
+    /// late.
+    static func tokenDateNotSaved(_ reason: String) -> String {
+        "The time the new token was made could not be saved in `~/.agent-balancer/config.json`, so its estimated end still counts from the time saved before, or from the token file's last change when there is none, and may show early: \(reason)"
+    }
+
+    static func launchFilesNotRewritten(_ label: String, _ reason: String) -> String {
+        "Launch files of '\(Display.safe(label, limit: 32))' could not all be rewritten with the new token, so a session that uses one keeps the old token until it ends: \(reason)"
+    }
+
+    static func launchLeftoversNotDeleted(_ label: String, _ reason: String) -> String {
+        "Temporary files the writer left in the launch folder of '\(Display.safe(label, limit: 32))' could not be deleted, and one may hold a token: \(reason)"
+    }
+
+    /// What a command says about a lock file of the tool's that does not open for writing.
+    public static func lockFileNotOpened(_ place: String) -> String {
+        "Refused `\(place)`: the lock file cannot be opened. Run `chmod -N \(place)`, then `chmod 600 \(place)` in Terminal."
+    }
+
+    /// What a check before a write says about a file of the tool's that does not open to take
+    /// another line.
+    public static func fileNotWritable(_ place: String) -> String {
+        "Refused `\(place)`: it cannot be opened to write. Run `chmod -N \(place)`, then `chmod 600 \(place)` in Terminal, and `chflags nouchg \(place)` first if it is locked."
+    }
+
+    /// What `doctor` says about a folder of the tool's whose access list lets another user or
+    /// group in, or cannot be read. What is in it is checked in the same run.
+    public static func doctorFolderShared(_ place: String) -> String {
+        "`\(place)` has an access list that lets another user or group in, or that cannot be read, so the tool refuses it. Run `chmod -N \(place)` in Terminal, then run `agent-balancer doctor` again."
+    }
+
+    /// What `doctor` says about a folder of the tool's that the folder checks refuse for its mode
+    /// or its access list, both when both apply, or that cannot be opened, searched or checked,
+    /// with the commands `uninstall` gives such a folder. What is in a folder it can open is
+    /// checked in the same run; in one it cannot, once its commands have run.
+    public static func doctorFolderProblem(
+        _ place: String, _ problem: NoFollowWriter.FolderProblem, alsoShared: Bool = false
+    ) -> String {
+        switch problem {
+        case .widerThanPrivate where alsoShared:
+            return
+                "`\(place)` is wider than 0700 and has an access list that lets another user or group in, or that cannot be read, so the tool refuses it. Run `chmod 700 \(place)` and `chmod -N \(place)` in Terminal, then run `agent-balancer doctor` again."
+        case .widerThanPrivate:
+            return
+                "`\(place)` is wider than 0700, so the tool refuses it. Run `chmod 700 \(place)` in Terminal, then run `agent-balancer doctor` again."
+        case .sharedByAccessList:
+            return doctorFolderShared(place)
+        case .cannotOpen:
+            return
+                "`\(place)` cannot be opened or searched, so the tool refuses it, and what is in it is checked once it opens. Run `chmod -N \(place)`, then `chmod 700 \(place)`, then run `agent-balancer doctor` again."
+        case .cannotCheck:
+            return
+                "`\(place)` cannot be checked, so the tool cannot tell what it is, and what is in it is checked once it can. Run `chmod -h -N \(place)`, or `chmod -N \(place)` if that says Permission denied, then `chmod -h 700 \(place)`, then run `agent-balancer doctor` again."
+        }
+    }
+
+    /// What `doctor` says about an entry where a folder of the tool's belongs that every command
+    /// refuses without opening it: a link, which is never followed and never given a `chmod`, a
+    /// file, or another user's folder, each with its fix. Nil for anything else.
+    public static func doctorFolderNotUsed(_ place: String, _ entry: NoFollowWriter.PlaceEntry)
+        -> String?
+    {
+        switch entry {
+        case .link:
+            return
+                "`\(place)` is a link, which the tool never follows, so it refuses it. Move the folder the link points to back in its place, then run `agent-balancer doctor` again."
+        case .notFolder:
+            return
+                "`\(place)` is not a folder, so the tool refuses it. Move it out of the way, then run `agent-balancer doctor` again."
+        case .notYours:
+            return
+                "`\(place)` belongs to another user, so the tool refuses it. Move it out of the way, then run `agent-balancer doctor` again."
+        default:
+            return nil
+        }
+    }
+
+    /// What `doctor` says about the probe folder when it holds something that is not a probe's
+    /// folder, which every probe refuses.
+    public static func doctorHoldsForeignEntry(_ place: String) -> String {
+        "`\(place)` holds something that is not a probe folder, so every probe refuses it. Move what the tool did not make out of it, then run `agent-balancer doctor` again."
+    }
+
+    /// What `doctor` says about a file of the tool's whose access list may let another user or
+    /// group in. A file `lstat` showed is a regular file, so plain `chmod -N` acts on it; one
+    /// `lstat` cannot check may be a link, so `-h` keeps `chmod` on the entry itself.
+    public static func doctorFileProblem(
+        _ place: String, _ problem: NoFollowWriter.FileListProblem
+    ) -> String {
+        switch problem {
+        case .shared:
+            return
+                "`\(place)` has an access list that lets another user or group in, or that cannot be read. Run `chmod -N \(place)` in Terminal."
+        case .unchecked:
+            return
+                "`\(place)` cannot be checked, so the tool cannot tell who can read it. Run `chmod -h -N \(place)`, or `chmod -N \(place)` if that says Permission denied."
+        }
+    }
+
+    /// What `doctor` says about a token file whose access list lets another user or group in, or
+    /// cannot be read. `lstat` showed a regular file, so plain `chmod -N` acts on it.
+    public static func doctorTokenFileShared(_ place: String, label: String) -> String {
+        "`\(place)` has an access list that lets another user or group in, or that cannot be read, so its token is not used, and another user may have read it. Run `chmod -N \(place)` in Terminal to use it again, or `agent-balancer login \(Display.safe(label, limit: 32))` to replace it."
+    }
+
+    /// What `doctor` says about a token file's name that `lstat` cannot check in a token folder
+    /// the user can search, such as a file whose list denies the user `readsecurity`. A `login`
+    /// refuses to replace such a file, so only the commands that clear its list are named.
+    public static func doctorTokenFileUnchecked(_ place: String, label: String) -> String {
+        "`\(place)` cannot be checked, so its token is not used, and another user may have read it. Run `chmod -h -N \(place)`, or `chmod -N \(place)` if that says Permission denied, to use it again."
+    }
+
+    /// What a status row, `pick` and `run` say about a token account whose token file has an
+    /// access list that lets another user or group in, or cannot be read or checked.
+    public static func tokenFileShared(_ label: String) -> String {
+        "The token file of '\(Display.safe(label, limit: 32))' may be readable by others, so its token is not used. Run `agent-balancer doctor` in Terminal."
+    }
+
+    /// What `doctor` says about a label's launch folder that holds a launch file whose access
+    /// list lets another user or group in, or cannot be read. Names only the folder, never a file.
+    public static func doctorLaunchFilesShared(_ place: String) -> String {
+        "Launch files in `\(place)` have an access list that lets another user or group in, or that cannot be read. Run `chmod -N \(place)/l-*.json` in Terminal."
+    }
+
     public static let trustStep =
         "Open `claude` once in each project folder on that account, so the folder is trusted there."
     public static let notCarriedOver =
         "MCP servers and plugins do not carry over to a folder account. Add them in that folder."
 
-    /// The `token_missing` text, the same for a token file that is absent, not private or does
-    /// not parse (docs/ARCHITECTURE.md section 9).
+    /// The `token_missing` text for a token file that is absent, not private by its kind, owner or
+    /// mode, or does not parse (docs/ARCHITECTURE.md section 9).
     public static func tokenMissing(_ label: String) -> String {
         "No token saved. Run `agent-balancer login \(Display.safe(label, limit: 32))` in Terminal."
     }

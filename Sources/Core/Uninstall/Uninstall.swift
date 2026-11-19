@@ -225,14 +225,18 @@ public enum Uninstall {
 
     /// Refuses a data folder that is there but is not a real folder of the user's that passes the
     /// folder checks (a link, which is never followed, a file, another user's folder, or one wider
-    /// than 0700 or that does not open), and the same for the token folder and the launch folder,
-    /// which may hold a token; a label's folder in the launch folder is refused only when it is a
-    /// real folder of the user's that fails the checks. Every read of the plan would otherwise fail
-    /// quietly and show nothing to remove while a token file is still there. A missing data folder
-    /// passes, and a link, a file or another user's folder where a label's folder belongs passes
-    /// too: the run counts it and never follows it.
+    /// than 0700, whose access list lets another user or group in or cannot be read, or that does
+    /// not open), and the same for the token folder and the launch folder, which may hold a token.
+    /// Every other folder of the tool's is refused when it is a real folder of the user's that
+    /// fails the checks, a label's folder in the launch folder included. Every read of the plan
+    /// would otherwise fail quietly and show nothing to remove while a token file is still there,
+    /// and a run would leave the tool's files in a refused folder while it reports success. A
+    /// missing data folder passes, and a link, a file or another user's folder where any folder
+    /// but the data, token and launch folders belongs passes too: the run counts it and never
+    /// follows it.
     public static func requireCheckable(_ context: ToolContext) throws {
-        switch NoFollowWriter(root: context.dataRoot).rootEntry() {
+        let writer = NoFollowWriter(root: context.dataRoot)
+        switch writer.rootEntry() {
         case .missing, .folder:
             break
         case .link:
@@ -246,6 +250,52 @@ public enum Uninstall {
                 Messages.uninstallFolderRefused("The data folder", "~/.agent-balancer", problem))
         }
         try TokenAccounts.requireCheckableForUninstall(context: context)
+        let hooks = HookRecord(context: context)
+        let linked = Set(hooks.listedLinks().compactMap { hooks.location(of: $0)?.folders[1] })
+        try requireOtherFoldersCheckable(writer, linkedLabels: linked)
+    }
+
+    /// Refuses, with the folder's own fix, when a folder of the tool's other than the data, token
+    /// and launch folders is a real folder of the user's that fails the folder checks: `state/`
+    /// and the two folders in it, `logs/`, `locks/`, `probe/` and each probe's folder,
+    /// `backups/`, and, where a listed link of the folder accounts in `linkedLabels` sits,
+    /// `accounts/` and that account's two folders. A folder in one that is not a real folder of
+    /// the user's is not looked at.
+    static func requireOtherFoldersCheckable(_ writer: NoFollowWriter, linkedLabels: Set<String>)
+        throws
+    {
+        // Whether `path` is a real folder of the user's that passes the checks.
+        func check(_ path: [String]) throws -> Bool {
+            let name = path[path.count - 1]
+            let entry = writer.placeEntry(parent: Array(path.dropLast()), name: name)
+            if case .problem(let problem) = entry {
+                let place = (["~/.agent-balancer"] + path).joined(separator: "/")
+                throw ToolError(Messages.uninstallFolderRefused("The folder", place, problem))
+            }
+            return entry == .folder
+        }
+        func names(_ path: [String]) -> [String] { (try? writer.listNames(folders: path)) ?? [] }
+        if try check(Layout.stateFolders) {
+            _ = try check(Layout.readingsFolders)
+            _ = try check(ReadingHistory.folders)
+        }
+        for top in [Layout.logsFolders, Layout.locksFolders] { _ = try check(top) }
+        if try check(Layout.probeFolders) {
+            for name in names(Layout.probeFolders)
+            where NoFollowWriter.isScratchName(name, prefix: Layout.probeFolderPrefix) {
+                _ = try check(Layout.probeFolders + [name])
+            }
+        }
+        _ = try check(Layout.backupsFolders)
+        // Only the link step enters the account folders, and only where a listed link sits.
+        guard !linkedLabels.isEmpty else { return }
+        let accounts = [FolderPaths.accountsFolderName]
+        if try check(accounts) {
+            for label in linkedLabels.sorted() where ConfigValidator.isValidLabel(label) {
+                let inner = FolderPaths.folders(label: label)
+                if try check(Array(inner.dropLast())) { _ = try check(inner) }
+            }
+        }
     }
 
     /// The lease window `uninstall` starts from: the config's `picker.leaseMinutes`, or the
@@ -417,13 +467,14 @@ extension Uninstall.Result {
 
 extension Uninstall {
     /// The names the tool writes in the folders `uninstall` empties, each from its writer:
-    /// `state/` holds the status rebuild's `status.json` and `current.json`, the events record
-    /// and the copies it sets aside, the leases, the pick log, the settings verdict, and the
-    /// readings and their history in `readings/` and `history/`, one file per label; `logs/`
-    /// holds the log; `backups/` the config backups; `probe/` one `p-<16 hex>` folder per probe,
-    /// with whatever the probe left in it; `locks/` the pick, links, history and per-label probe
-    /// locks. The writer's temporary files count where a whole-file write goes. Anything else in
-    /// those folders the tool did not make.
+    /// `state/` holds the status rebuild's `status.json`, `current.json` and token rejections,
+    /// the events record and the copies it sets aside, the leases, the pick log, the settings
+    /// verdict, and the readings and their history in `readings/` and `history/`, one file per
+    /// label; `logs/` holds the log; `backups/` the config backups; `probe/` one `p-<16 hex>`
+    /// folder per probe, with whatever the probe left in it; `locks/` the pick, links, history and
+    /// per-label probe locks. The writer's temporary files count where a whole-file write goes,
+    /// and in `locks/` and `logs/`, where the check before a `login` sign-in makes one to test the
+    /// folder. Anything else in those folders the tool did not make.
     enum OwnNames {
         /// Whether the tool writes a regular file named `name` directly in the folder `path`.
         static func isFile(_ name: String, in path: [String]) -> Bool {
@@ -432,8 +483,9 @@ extension Uninstall {
             switch path {
             case Layout.stateFolders:
                 let fixed: [String] = [
-                    StatusBuilder.statusName, StatusBuilder.currentName, EventLog.fileName,
-                    Layout.leasesName, Layout.picksLogName, Layout.settingsSeenName,
+                    StatusBuilder.statusName, StatusBuilder.currentName,
+                    StatusBuilder.rejectionsName, EventLog.fileName, Layout.leasesName,
+                    Layout.picksLogName, Layout.settingsSeenName,
                 ]
                 return fixed.contains(name) || EventLog.isSetAsideName(name) || temporary
             case Layout.readingsFolders:
@@ -441,7 +493,7 @@ extension Uninstall {
             case ReadingHistory.folders:
                 return isLabelName(name, prefix: "", suffix: ".jsonl") || temporary
             case Layout.logsFolders:
-                return name == Layout.logName
+                return name == Layout.logName || temporary
             case Layout.backupsFolders:
                 return ConfigStore.isBackupName(name) || temporary
             case Layout.locksFolders:
@@ -449,6 +501,7 @@ extension Uninstall {
                     Layout.pickLockName, Layout.linksLockName, StatusBuilder.lockName,
                 ]
                 return fixed.contains(name) || isLabelName(name, prefix: "probe-", suffix: ".lock")
+                    || temporary
             default:
                 return false
             }

@@ -230,40 +230,38 @@ extension UninstallTests {
         #expect(exists(temporary))
     }
 
-    @Test func anEmptyToolFolderThatIsNotPrivateGoesAndIsNotCountedAsLeft() throws {
-        let emptied: [[String]] = [
-            Layout.logsFolders, Layout.backupsFolders, Layout.probeFolders, ReadingHistory.folders,
+    @Test func aToolFolderThatIsNotPrivateStopsUninstallUntilItsCommandRunsEvenWhenEmpty() throws {
+        let folders: [[String]] = [
+            Layout.stateFolders, Layout.readingsFolders, ReadingHistory.folders,
+            Layout.logsFolders, Layout.locksFolders, Layout.probeFolders, Layout.backupsFolders,
         ]
-        for folders in emptied {
-            let (t, _) = try setUp()
-            try NoFollowWriter(root: t.context.dataRoot).prepare(folders: folders)
-            let url = folders.reduce(t.context.dataRoot) { $0.appendingPathComponent($1) }
-            chmod(url.path, 0o755)
-            let done = try run(t)
-            #expect(done.entriesLeft == 0, "\(folders)")
-            #expect(!exists(url) && done.dataFolderRemoved, "\(folders)")
+        for path in folders {
+            for withFile in [false, true] {
+                let (t, _) = try setUp()
+                let writer = NoFollowWriter(root: t.context.dataRoot)
+                try writer.prepare(folders: path)
+                let note = withFile ? try plant(t, path, "mine.txt") : nil
+                let url = path.reduce(t.context.dataRoot) { $0.appendingPathComponent($1) }
+                let before = tree(t.context.dataRoot)
+                chmod(url.path, 0o755)
+                defer { chmod(url.path, 0o700) }
+                let place = (["~/.agent-balancer"] + path).joined(separator: "/")
+                let refused = ToolError(
+                    Messages.uninstallFolderRefused("The folder", place, .widerThanPrivate))
+                #expect(throws: refused) {
+                    _ = try Uninstall.plan(context: t.context, leaseMinutes: 30)
+                }
+                #expect(throws: refused) { _ = try run(t) }
+                chmod(url.path, 0o700)
+                #expect(tree(t.context.dataRoot) == before, "\(path) \(withFile)")
+                // The command the text names, then a rerun that takes everything the tool made.
+                let done = try run(t)
+                #expect(done.tokenFiles == 1, "\(path) \(withFile)")
+                #expect(done.entriesLeft == (withFile ? 1 : 0), "\(path) \(withFile)")
+                #expect(!exists(url) || withFile, "\(path)")
+                if let note { #expect(text(note) == "{}", "\(path)") }
+            }
         }
-        // An empty one inside a folder that stays goes too, and only what stays is counted.
-        let (u, _) = try setUp()
-        let mine = try plant(u, Layout.stateFolders, "mine.txt")
-        try NoFollowWriter(root: u.context.dataRoot).prepare(folders: ReadingHistory.folders)
-        let history = ReadingHistory.folders.reduce(u.context.dataRoot) {
-            $0.appendingPathComponent($1)
-        }
-        chmod(history.path, 0o755)
-        let kept = try run(u)
-        #expect(kept.entriesLeft == 1 && !exists(history) && !kept.dataFolderRemoved)
-        #expect(text(mine) == "{}")
-        // One with something in it is never opened, stays, and is counted.
-        let (t, _) = try setUp()
-        let note = try plant(t, Layout.logsFolders, "mine.txt")
-        let logs = note.deletingLastPathComponent()
-        chmod(logs.path, 0o755)
-        defer { chmod(logs.path, 0o700) }
-        let done = try run(t)
-        #expect(done.entriesLeft == 1 && !done.dataFolderRemoved)
-        chmod(logs.path, 0o700)
-        #expect(text(note) == "{}")
     }
 
     @Test func aDataFolderTemporaryGoesOnlyUnderTheLinksLockItsWriterHolds() throws {

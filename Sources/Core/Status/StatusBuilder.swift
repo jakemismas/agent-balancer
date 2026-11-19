@@ -13,6 +13,9 @@ struct StatusBuild {
 struct TokenInfo: Sendable {
     var usable: Bool
     var modified: Date?
+    /// The text for a token that is not usable for more than a missing file
+    /// (`TokenStore.blockedText`), shown in place of the `token_missing` text.
+    var blocked: String? = nil
 }
 
 /// What the status shows for one folder account: the manifest verdict and the folder as `~` text.
@@ -106,7 +109,7 @@ public enum StatusBuilder {
                     possibleDuplicateOf: entry.possibleDuplicateOf.flatMap { other in
                         config.account(other) == nil ? nil : other
                     },
-                    tokenUsable: token?.usable ?? false,
+                    tokenUsable: token?.usable ?? false, tokenBlocked: token?.blocked,
                     tokenModified: token?.modified, config: config, now: now,
                     folder: folders[account.label]?.facts))
             if let count = missing[account.label], count > 0 {
@@ -360,6 +363,15 @@ public enum StatusBuilder {
     static func rebuilt(
         context: ToolContext, observations: StatusObservations, now: Date, lockWait: TimeInterval?
     ) throws -> (document: StatusDocument, savedState: Bool)? {
+        try NoFollowWriter.run(context.dataRoot, rebuildPlan(context: context)) {
+            try rebuiltSteps(
+                context: context, observations: observations, now: now, lockWait: lockWait)
+        }
+    }
+
+    private static func rebuiltSteps(
+        context: ToolContext, observations: StatusObservations, now: Date, lockWait: TimeInterval?
+    ) throws -> (document: StatusDocument, savedState: Bool)? {
         let writer = NoFollowWriter(root: context.dataRoot)
         guard
             let lock = try writer.acquireLock(
@@ -381,10 +393,13 @@ public enum StatusBuilder {
         var tokens: [String: TokenInfo] = [:]
         for account in config.accounts where account.kind == Kind.token {
             let facts = try? TokenPaths.facts(context: context, label: account.label)
+            let usable =
+                (facts?.isPrivate ?? false)
+                && TokenStore.isUsable(context: context, label: account.label)
+            let blocked =
+                usable ? nil : TokenStore.blockedText(context: context, label: account.label)
             tokens[account.label] = TokenInfo(
-                usable: (facts?.isPrivate ?? false)
-                    && TokenStore.isUsable(context: context, label: account.label),
-                modified: facts?.modified)
+                usable: usable, modified: facts?.modified, blocked: blocked)
         }
         let reader = NoFollowReader(root: context.dataRoot)
         var previous = CurrentFile()
@@ -608,20 +623,65 @@ public enum StatusBuilder {
         return max(found ?? .distantPast, record.at)
     }
 
+    /// What a status rebuild does under the data folder (`rebuilt`): it opens the history lock;
+    /// reads the config and the files it writes again; reads the stored readings and the token
+    /// files; writes `current.json`, `status.json` and the token rejections over what is in
+    /// `state/`, rewrites or adds lines to the events record and each history file there now,
+    /// and sets a damaged events record aside and starts the history of a label that has none as
+    /// new files; and adds lines to the log. Its other reads, whether the launch file a session
+    /// record names is there and whether a folder account's links are intact, answer no for a
+    /// folder the checks refuse and change nothing, so they are not in the plan.
+    static func rebuildPlan(context: ToolContext) -> NoFollowWriter.Plan {
+        typealias Target = NoFollowWriter.Target
+        let history = (try? ReadingHistory(context: context).labels()) ?? []
+        let targets: [Target] =
+            [
+                .file(Layout.locksFolders, lockName, [.lock]),
+                .file([], ConfigStore.fileName, [.read]),
+                .folder(Layout.readingsFolders, [.open]),
+                .folder(TokenPaths.folders, [.open]),
+                .file(Layout.stateFolders, currentName, [.read, .replace]),
+                .file(Layout.stateFolders, statusName, [.replace]),
+                .file(Layout.stateFolders, rejectionsName, [.read, .replace]),
+                .file(
+                    Layout.stateFolders, EventLog.fileName, [.read, .replace, .append],
+                    readLimit: EventLog.readLimit),
+                .folder(Layout.stateFolders, [.create]),
+                .folder(ReadingHistory.folders, [.create]),
+            ]
+            + history.sorted().map {
+                Target.file(
+                    ReadingHistory.folders, ReadingHistory.fileName($0),
+                    [.read, .replace, .append], readLimit: ReadingHistory.readLimit)
+            }
+            + [.file(Layout.logsFolders, Layout.logName, [.append])]
+        return NoFollowWriter.Plan(step: "status rebuild", targets: targets)
+    }
+
+    /// Throws the refusal the status rebuild would meet, from the checks of its plan
+    /// (`rebuildPlan`), so a folder account's `login` proves the rebuild that records its sign-in
+    /// before `claude` starts.
+    public static func requireRebuildable(context: ToolContext) throws {
+        try NoFollowWriter(root: context.dataRoot).require(rebuildPlan(context: context))
+    }
+
     /// Rebuilds after a command's own work is done. A failure is logged and never changes the
     /// command's output or exit code. Returns whether `state/current.json` was saved.
     @discardableResult
     public static func rebuildQuietly(
         context: ToolContext, observations: StatusObservations = StatusObservations()
     ) -> Bool {
-        do {
-            return try rebuilt(
-                context: context, observations: observations, now: Date(), lockWait: nil)?
-                .savedState ?? false
-        } catch {
-            Self.log(
-                context, "status rebuild failed: \((error as? ToolError)?.message ?? "unknown")")
-            return false
+        NoFollowWriter.run(context.dataRoot, rebuildPlan(context: context)) {
+            do {
+                return try rebuilt(
+                    context: context, observations: observations, now: Date(), lockWait: nil)?
+                    .savedState ?? false
+            } catch {
+                Self.log(
+                    context,
+                    "status rebuild failed: \((error as? ToolError)?.message ?? "unknown")")
+                return false
+            }
         }
     }
 

@@ -174,7 +174,8 @@ extension ManageViewModelTests {
         let panel = try #require(vm.panel)
         #expect(
             panel.tokenTip
-                == "Saved in a private file under ~/.agent-balancer. Only you can read it.")
+                == "Its token, once saved, sits in a file under ~/.agent-balancer. The tool uses it only while no other user can read that file."
+        )
         #expect(panel.endsOnTip == ManageTips.endsOn)
         #expect(Self.sentenceCount(ManageTips.endsOn) == 1)
         #expect(ManageTips.endsOn.contains("only a date you know"))

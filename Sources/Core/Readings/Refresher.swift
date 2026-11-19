@@ -358,6 +358,18 @@ public struct Refresher: Sendable {
         begin: () -> Bool, report: (AccountRefresh) -> Void,
         finish: (AccountRefresh) -> Bool
     ) -> AccountRefresh {
+        NoFollowWriter.run(context.dataRoot, checkPlan(account: account)) {
+            checkSteps(
+                account: account, force: force, fable: mode, rejectedAt: rejectedAt, begin: begin,
+                report: report, finish: finish)
+        }
+    }
+
+    private func checkSteps(
+        account: Account, force: Bool, fable mode: FableMode, rejectedAt: Date?,
+        begin: () -> Bool, report: (AccountRefresh) -> Void,
+        finish: (AccountRefresh) -> Bool
+    ) -> AccountRefresh {
         // A stored reading newer than the time the status counts as the latest one it saw came
         // from a probe that worked since, so the freshness rule holds again.
         func probeAgain(_ stored: Reading) -> Bool {
@@ -482,6 +494,32 @@ public struct Refresher: Sendable {
         }
     }
 
+    /// What a check of `account` does under the data folder (`steps`): it reads the config and
+    /// the stored reading, opens the account's probe lock, makes its probe folder in `probe/` and
+    /// removes it, as each probe does with its own, and writes the reading over the stored one;
+    /// it also opens the token folder for a token account, or the account's folders for a folder
+    /// account. The token file it reads is the one the token save makes in that folder, a new
+    /// file the save's own plan proves the reader can open there.
+    func checkPlan(account: Account) -> NoFollowWriter.Plan {
+        var targets: [NoFollowWriter.Target] = [
+            .file([], ConfigStore.fileName, [.read]),
+            .file(Layout.locksFolders, Layout.lockName(account.label), [.lock]),
+            .scratch(Layout.probeFolders, prefix: Layout.probeFolderPrefix, staleAfter: staleAfter),
+            .file(Layout.readingsFolders, Layout.readingName(account.label), [.read, .replace]),
+        ]
+        if account.kind == Kind.token {
+            targets.append(.folder(TokenPaths.folders, [.open]))
+        } else if account.kind == Kind.folder {
+            targets.append(.folder(FolderPaths.folders(label: account.label), [.open]))
+        }
+        return NoFollowWriter.Plan(step: "check", targets: targets)
+    }
+
+    /// Seconds after which a probe folder left behind is another probe's no longer.
+    private var staleAfter: TimeInterval {
+        Double(max(config.probe.timeoutSeconds, config.fable.probeTimeoutSeconds))
+    }
+
     /// A Fable probe runs when `fable.probe` is on, a reading is stored and the last Fable probe
     /// was more than a day ago. `--force` does not lift this limit, because a Fable probe costs
     /// cents rather than fractions of one.
@@ -558,11 +596,11 @@ public struct Refresher: Sendable {
         -> ProbeReadResult
     {
         let timeout = fable ? config.fable.probeTimeoutSeconds : config.probe.timeoutSeconds
-        let stale = Double(max(config.probe.timeoutSeconds, config.fable.probeTimeoutSeconds))
         let folder: String
         do {
             folder = try writer.makeScratchFolder(
-                parent: Layout.probeFolders, prefix: Layout.probeFolderPrefix, staleAfter: stale)
+                parent: Layout.probeFolders, prefix: Layout.probeFolderPrefix,
+                staleAfter: staleAfter)
         } catch let error as ToolError {
             return .failed(Issue(.checkFailed, .error, "Check failed: \(error.message)"))
         } catch {

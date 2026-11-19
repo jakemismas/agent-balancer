@@ -160,6 +160,16 @@ enum Support {
         return Output(status: task.terminationStatus, stdout: shown, stderr: errData)
     }
 
+    /// The folder `CLIHome` homes go in: `TMPDIR` when it is set, so a run can keep them, and the
+    /// access lists some tests set on them, out of the system's temporary folder, which
+    /// Foundation picks whatever `TMPDIR` says.
+    static let temporaryFolder: URL = {
+        if let set = ProcessInfo.processInfo.environment["TMPDIR"], !set.isEmpty {
+            return URL(fileURLWithPath: set, isDirectory: true)
+        }
+        return FileManager.default.temporaryDirectory
+    }()
+
     static func makeTempDir() throws -> URL {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("ab-test-\(UUID().uuidString)")
@@ -184,7 +194,7 @@ struct CLIHome {
     init(installFake: Bool = true) throws {
         guard let exe = Support.builtBinary() else { throw MissingBinary() }
         self.exe = exe
-        home = FileManager.default.temporaryDirectory
+        home = Support.temporaryFolder
             .appendingPathComponent("ab-cli-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
         if installFake { try self.installFake() }

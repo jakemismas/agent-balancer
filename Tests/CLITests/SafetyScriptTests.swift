@@ -147,6 +147,55 @@ import Testing
             Plant(
                 rule: "write", path: "Sources/Core/A/A.swift",
                 body: "try fm.set" + "Attributes([:], ofItemAtPath: p)\n"),
+            // An access list write outside the writer, also in the module that reads lists.
+            Plant(
+                rule: "write", path: "Sources/Core/Doctor/D.swift",
+                body: "_ = acl_set" + "_file(p, ACL_TYPE_EXTENDED, empty)\n"),
+            Plant(
+                rule: "write", path: "Sources/Core/Paths/AccessList.swift",
+                body: "_ = acl_set" + "_link_np(p, ACL_TYPE_EXTENDED, empty)\n"),
+            Plant(
+                rule: "write", path: "Sources/Core/Paths/AccessList.swift",
+                body: "_ = acl_set" + "_fd_np(fd, empty, ACL_TYPE_EXTENDED)\n"),
+            Plant(
+                rule: "write", path: "Sources/Core/A/A.swift",
+                body: "_ = acl_delete" + "_def_file(p)\n"),
+            // Calls that take a file security object or an attribute list also write a list.
+            Plant(
+                rule: "write", path: "Sources/Core/Doctor/D.swift",
+                body: "_ = chmod" + "x_np(p, sec)\n"),
+            Plant(
+                rule: "write", path: "Sources/Core/A/A.swift",
+                body: "_ = fchmod" + "x_np(fd, sec)\n"),
+            Plant(
+                rule: "write", path: "Sources/Core/A/A.swift",
+                body: "_ = mkdir" + "x_np(p, sec)\n"),
+            Plant(
+                rule: "write", path: "Sources/Core/A/A.swift",
+                body: "_ = mkfifo" + "x_np(p, sec)\n"),
+            Plant(
+                rule: "write", path: "Sources/Core/A/A.swift",
+                body: "_ = set" + "attrlist(p, &l, &b, n, 0)\n"),
+            Plant(
+                rule: "write", path: "Sources/Core/A/A.swift",
+                body: "_ = fset" + "attrlist(fd, &l, &b, n, 0)\n"),
+            Plant(
+                rule: "write", path: "Sources/Core/A/A.swift",
+                body: "_ = set" + "attrlistat(fd, p, &l, &b, n, 0)\n"),
+            // A file made with a security object, the umask's own, and the flag writers.
+            Plant(
+                rule: "write", path: "Sources/Core/Doctor/D.swift",
+                body: "_ = open" + "x_np(p, flags, sec)\n"),
+            Plant(
+                rule: "write", path: "Sources/Core/A/A.swift", body: "_ = umask" + "x_np(sec)\n"),
+            Plant(rule: "write", path: "Sources/Core/A/A.swift", body: "_ = ch" + "flags(p, 0)\n"),
+            Plant(
+                rule: "write", path: "Sources/Core/A/A.swift", body: "_ = fch" + "flags(fd, 0)\n"),
+            Plant(
+                rule: "write", path: "Sources/Core/A/A.swift", body: "_ = lch" + "flags(p, 0)\n"),
+            Plant(
+                rule: "write", path: "Sources/Core/Doctor/D.swift",
+                body: "_ = ch" + "flagsat(fd, p, 0, 0)\n"),
             Plant(
                 rule: "write", path: "Sources/Core/A/A.swift",
                 body: "let h = try File" + "Handle(forWri" + "tingTo: u)\n"),
@@ -419,7 +468,7 @@ import Testing
         let pieces = [
             (
                 "Sources/Core/Paths/NoFollowWriter.swift",
-                "try d.wri" + "te(to: u)\nunlink" + "(p)\n"
+                "try d.wri" + "te(to: u)\nunlink" + "(p)\n_ = acl_set" + "_fd_np(fd, e, t)\n"
             ),
             ("Sources/Core/Runner/R.swift", "let p = Pro" + "cess()\n"),
             ("Sources/Core/Env/E.swift", "let e = Process" + "Info.processInfo\n"),

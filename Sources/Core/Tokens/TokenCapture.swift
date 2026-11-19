@@ -10,6 +10,8 @@ public enum TokenCapture {
         public let length: Int
         public let replaced: Bool
         public let launchFilesRewritten: Int
+        /// Each step after the token file was saved that could not be finished.
+        public var unfinished: [String] = []
     }
 
     static let setupTokenTimeout: TimeInterval = 300
@@ -51,10 +53,25 @@ public enum TokenCapture {
     }
 
     /// The default form: runs `claude setup-token` with its output piped, takes the token from
-    /// the raw output and stores it. The child's remaining output is scrubbed and dropped.
-    public static func capture(context: ToolContext, label: String, runner: ClaudeRunner) throws
-        -> Result
-    {
+    /// the raw output and stores it. The child's remaining output is scrubbed and dropped. A
+    /// folder the save would refuse stops it before `announce` runs and before the child starts.
+    public static func capture(
+        context: ToolContext, label: String, runner: ClaudeRunner, announce: () -> Void = {}
+    ) throws -> Result {
+        try capture(
+            context: context, label: label, runner: runner,
+            ready: { try TokenAccounts.requireSaveable(context: context, label: label) },
+            announce: announce)
+    }
+
+    /// `capture` with `ready` as the checks that run before `announce` and the child, so a
+    /// refusal of any of them comes before a token exists.
+    static func capture(
+        context: ToolContext, label: String, runner: ClaudeRunner, ready: () throws -> Void,
+        announce: () -> Void
+    ) throws -> Result {
+        try ready()
+        announce()
         var found: String?
         let output = try runner.runSetupToken(timeout: setupTokenTimeout) { raw in
             found = extract(from: raw)
@@ -73,7 +90,8 @@ public enum TokenCapture {
 
     /// The fallback form: reads one line from standard input, with echo off on a terminal, and
     /// stores it when it has the shape of a setup-token. The token never comes from an argument.
-    /// On a terminal whose echo cannot be turned off, nothing is read and nothing is saved.
+    /// On a terminal whose echo cannot be turned off, nothing is read and nothing is saved, and a
+    /// folder the save would refuse stops it before anything is read.
     public static func pasted(context: ToolContext, label: String) throws -> Result {
         try pasted(context: context, label: label, terminal: .standardInput)
     }
@@ -81,6 +99,16 @@ public enum TokenCapture {
     static func pasted(context: ToolContext, label: String, terminal: PasteTerminal) throws
         -> Result
     {
+        try pasted(
+            context: context, label: label, terminal: terminal,
+            ready: { try TokenAccounts.requireSaveable(context: context, label: label) })
+    }
+
+    /// `pasted` with `ready` as the checks that run before anything is read.
+    static func pasted(
+        context: ToolContext, label: String, terminal: PasteTerminal, ready: () throws -> Void
+    ) throws -> Result {
+        try ready()
         let line = try readHidden(prompt: "Paste the token, then press Enter: ", terminal: terminal)
         let token = (line ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard hasTokenShape(token) else {
@@ -92,11 +120,20 @@ public enum TokenCapture {
     }
 
     private static func store(context: ToolContext, label: String, token: String) throws -> Result {
-        let installed = try TokenAccounts.install(
-            context: context, label: label, token: token, requireAccount: true)
+        let installed: TokenAccounts.Installed
+        do {
+            installed = try TokenAccounts.install(
+                context: context, label: label, token: token, requireAccount: true)
+        } catch let error as ToolError
+            where error.message != Messages.accountGoneTokenNotSaved(label)
+        {
+            // The checks before the sign-in passed, so the token is lost to a later change.
+            throw ToolError(error.message + " " + Messages.tokenNotSaved(label), code: error.code)
+        }
         return Result(
             length: token.count, replaced: installed.replaced,
-            launchFilesRewritten: installed.launchFilesRewritten)
+            launchFilesRewritten: installed.launchFilesRewritten,
+            unfinished: installed.unfinished)
     }
 
     /// Reads one line. On a terminal, echo goes off first; when it cannot, this throws before

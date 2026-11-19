@@ -38,6 +38,9 @@ extension UninstallTests {
             try plant(t, Layout.backupsFolders, "config-2026-11-13-2.json"),
             try plant(t, Layout.probeFolders + ["p-0123456789abcdef", "deep"], "x.jsonl"),
             try plant(t, Layout.locksFolders, Layout.lockName("pool-a"), ""),
+            // What a write check before a sign-in that could not delete its own file leaves.
+            try plant(t, Layout.logsFolders, ".tmp-0123456789abcdef"),
+            try plant(t, Layout.locksFolders, ".tmp-0123456789abcdef", ""),
         ]
         let mine: [URL] = [
             try plant(t, Layout.stateFolders, "my-notes.txt"),
@@ -48,7 +51,7 @@ extension UninstallTests {
             try plant(t, ReadingHistory.folders, "pool-a.txt"),
             try plant(t, ReadingHistory.folders, "Not_A_Label.jsonl"),
             try plant(t, Layout.logsFolders, "mine.txt"),
-            try plant(t, Layout.logsFolders, ".tmp-0123456789abcdef"),
+            try plant(t, Layout.logsFolders, ".tmp-notes"),
             try plant(t, Layout.backupsFolders, "config-mine.json"),
             try plant(t, Layout.probeFolders, "notes.txt"),
             try plant(t, Layout.locksFolders, "mine.txt"),
@@ -75,8 +78,8 @@ extension UninstallTests {
             emptyProbe,
         ]
         let plan = try Uninstall.plan(context: t.context, leaseMinutes: 30)
-        #expect(plan.stateFiles == 3 && plan.logFiles == 1 && plan.backupFiles == 1)
-        #expect(plan.probeFiles == 1 && plan.lockFiles == 2)
+        #expect(plan.stateFiles == 3 && plan.logFiles == 2 && plan.backupFiles == 1)
+        #expect(plan.probeFiles == 1 && plan.lockFiles == 3)
         let done = try run(t)
         for url in own { #expect(!exists(url), "\(url.lastPathComponent)") }
         for url in mine + folders + [inside, alsoInside] {
@@ -128,6 +131,13 @@ extension UninstallTests {
             label: "pool-a")
         try StatusBuilder.rebuild(context: context, now: now)
         StatusBuilder.log(context, "one line")
+        // A rejection of the token's probe, recorded as the status rebuild records one.
+        let rejection = StatusBuilder.RejectionsFile(tokens: [
+            "pool-a": StatusBuilder.RejectionRecord(accountKey: token().accountKey, at: now)
+        ])
+        try NoFollowWriter(root: context.dataRoot).put(
+            try EventLog.encoder().encode(rejection) + Data([0x0A]),
+            folders: Layout.stateFolders, name: StatusBuilder.rejectionsName)
         try LeaseStore(context: context).save([
             Lease(
                 id: "l-0a0b0c0d", label: "pool-a", model: "default",
@@ -155,17 +165,20 @@ extension UninstallTests {
                 folders: Layout.locksFolders, name: Layout.lockName("pool-a"), wait: 1))
         probeLock.release()
         // What a write stopped before its rename leaves, wherever a whole-file write goes, from a
-        // write that stopped two minutes ago.
+        // write that stopped two minutes ago, and what a write check before a sign-in that could
+        // not delete its own file leaves in the lock and log folders.
         let stopped: [[String]] = [
             [], Layout.stateFolders, Layout.readingsFolders, ReadingHistory.folders,
             Layout.backupsFolders, TokenPaths.folders, LaunchFiles.folders(label: "pool-a"),
+            Layout.locksFolders, Layout.logsFolders,
         ]
         let leftovers = try stopped.map { try plant(t, $0, ".tmp-0123456789abcdef") }
         setTimes(leftovers, to: now.addingTimeInterval(-120))
 
         let written = entries(t)
         for path in [
-            "state/status.json", "state/current.json", "state/events.jsonl", "state/leases.json",
+            "state/status.json", "state/current.json", "state/token-rejections.json",
+            "state/events.jsonl", "state/leases.json",
             "state/picks.log", "state/settings-seen.json", "state/readings/pool-a.json",
             "state/history/pool-a.jsonl", "logs/agent-balancer.log", "locks/pick.lock",
             "locks/links.lock", "locks/history.lock", "locks/probe-pool-a.lock",
@@ -177,6 +190,16 @@ extension UninstallTests {
         #expect(written.filter { $0.hasPrefix("backups/config-") }.count == 2)
         let plan = try Uninstall.plan(context: context, leaseMinutes: 30)
         #expect(plan.temporaries == 2 && plan.dataFolderTemporaries == 1)
+        // The listing's count of state files takes in the token rejection record.
+        let stateFiles = written.filter { path in
+            var folder: ObjCBool = false
+            let url = context.dataRoot.appendingPathComponent(path)
+            return path.hasPrefix("state/")
+                && FileManager.default.fileExists(atPath: url.path, isDirectory: &folder)
+                && !folder.boolValue
+        }
+        #expect(stateFiles.contains("state/token-rejections.json"))
+        #expect(plan.stateFiles == stateFiles.count)
 
         let done = try Uninstall.run(context: context, leaseMinutes: 30, snapshot: .empty)
         #expect(done.launchFiles == 1 && done.tokenFiles == 1 && done.launchFilesKept == 0)

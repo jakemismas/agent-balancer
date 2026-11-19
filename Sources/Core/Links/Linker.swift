@@ -68,13 +68,9 @@ public enum Linker {
         switch FolderPaths.state(context: context, label: label) {
         case .ready: break
         case .missing:
-            throw ToolError(
-                "The folder of '\(Display.safe(label, limit: 32))' is missing. Run `agent-balancer remove \(label)`, then add it again."
-            )
+            throw ToolError(FolderPaths.missingText(label))
         case .refused:
-            throw ToolError(
-                "The folder of '\(Display.safe(label, limit: 32))' is a link, or is not owned by you."
-            )
+            throw ToolError(FolderPaths.refusalText(context: context, label: label))
         }
         let source = try HookRecord.sharedSource(config: config, context: context)
         let writer = NoFollowWriter(root: context.dataRoot)

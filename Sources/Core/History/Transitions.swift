@@ -259,6 +259,8 @@ enum Transitions {
         var duplicateOf: String?
         var possibleDuplicateOf: String? = nil
         var tokenUsable: Bool
+        /// Why the token is not usable when that is more than a missing file, or nil.
+        var tokenBlocked: String? = nil
         var tokenModified: Date?
         var config: Config
         var now: Date
@@ -285,8 +287,10 @@ enum Transitions {
         .duplicateLogin, .planChanged, .checkFailed,
     ]
 
+    /// A row's text, scrubbed and bounded. The bound holds the longest text the tool builds, a
+    /// folder refusal at a 32-character label, so a fix is never cut; the menu cuts its own line.
     static func clean(_ text: String) -> String {
-        Display.safe(Scrubber.scrubText(text), limit: 200)
+        Display.safe(Scrubber.scrubText(text), limit: 600)
     }
 
     /// Codes from a sign-in check or a probe that say the expected sign-in is gone, not
@@ -425,6 +429,7 @@ enum Transitions {
             switch facts.verdict {
             case .notLinked: add(.notLinked, Messages.notLinked(account.label))
             case .broken: add(.settingsChanged, Messages.linkBroken(account.label))
+            case .refused(let text): add(.checkFailed, text)
             case .ok:
                 // A folder that shares the settings link is hit by a hook change like every other
                 // account; one that shares none has no hooks to lose.
@@ -440,7 +445,7 @@ enum Transitions {
                 missingRecord ? Messages.hookRecordMissing : Messages.settingsChanged)
         }
         if account.kind == Kind.token && !input.tokenUsable {
-            add(.tokenMissing, Messages.tokenMissing(account.label))
+            add(.tokenMissing, input.tokenBlocked ?? Messages.tokenMissing(account.label))
         }
         if let other = input.duplicateOf {
             add(

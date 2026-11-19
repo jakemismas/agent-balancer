@@ -38,7 +38,8 @@ public enum FolderPaths {
         case missing
         /// A real folder owned by the user.
         case ready
-        /// A link, a file, or a folder that another user owns.
+        /// A link, a file, a folder that another user owns, or one the folder checks refuse: wider
+        /// than 0700, or with an access list that lets another user or group in or cannot be read.
         case refused
     }
 
@@ -59,14 +60,92 @@ public enum FolderPaths {
 
     /// The folder rules of an account entry: the path is absolute, plain and matches the folder
     /// pattern, and a folder that exists is a real folder owned by the user. A folder that does
-    /// not exist yet passes.
+    /// not exist yet passes. A refusal names the first folder from `accounts` down that does not
+    /// pass and its fix for what it is, so a link is never given a `chmod`.
     static func requireUsable(context: ToolContext, label: String) throws {
         _ = try configDir(context: context, label: label)
         if state(context: context, label: label) == .refused {
-            throw ToolError(
-                "Account '\(Display.safe(label, limit: 32))': its folder is a link, is wider than 0700 or is not owned by you. Make the folder mode 0700 and owned by you, or run `agent-balancer remove \(Display.safe(label, limit: 32))`."
-            )
+            throw ToolError(refusalText(context: context, label: label))
         }
+    }
+
+    /// The first folder from `accounts` down to the label's folder that is not a real folder of
+    /// the user's passing the folder checks, as the person types it, with what is there.
+    private static func refusedPlace(context: ToolContext, label: String) -> (
+        place: String, entry: NoFollowWriter.PlaceEntry
+    ) {
+        let writer = NoFollowWriter(root: context.dataRoot)
+        let path = folders(label: label)
+        var found = (depth: path.count, entry: NoFollowWriter.PlaceEntry.problem(.cannotCheck))
+        for depth in 1...path.count {
+            let entry = writer.placeEntryOpening(
+                parent: Array(path.prefix(depth - 1)), name: path[depth - 1])
+            if entry != .folder {
+                found = (depth, entry)
+                break
+            }
+        }
+        let place = ([NoFollowWriter.dataFolderPlace] + path.prefix(found.depth))
+            .joined(separator: "/")
+        return (place, found.entry)
+    }
+
+    /// `refusalText` when a folder from `accounts` down to the label's folder is there and does not
+    /// pass the folder checks, or nil when each passes or one is missing.
+    static func refusalIfAny(context: ToolContext, label: String) -> String? {
+        let writer = NoFollowWriter(root: context.dataRoot)
+        let path = folders(label: label)
+        for depth in 1...path.count {
+            switch writer.placeEntryOpening(
+                parent: Array(path.prefix(depth - 1)), name: path[depth - 1])
+            {
+            case .folder: continue
+            case .missing: return nil
+            default: return refusalText(context: context, label: label)
+            }
+        }
+        return nil
+    }
+
+    /// What every command says about a folder account whose folder is missing: `remove` and a
+    /// new `add`, which makes it, set it up again.
+    public static func missingText(_ label: String) -> String {
+        let safe = Display.safe(label, limit: 32)
+        return
+            "The folder of '\(safe)' is missing. Run `agent-balancer remove \(safe)`, then add it again."
+    }
+
+    /// What every command says about a folder account whose folder the checks refuse, with the
+    /// fix for what is there. `remove` is offered only as the way to drop the account, since it
+    /// leaves the folder as it is; `add` passes `orRemove: false`, as there is no account yet.
+    public static func refusalText(context: ToolContext, label: String, orRemove: Bool = true)
+        -> String
+    {
+        let safe = Display.safe(label, limit: 32)
+        let (place, entry) = refusedPlace(context: context, label: label)
+        let remove = orRemove ? "or run `agent-balancer remove \(safe)`" : "then add it again"
+        let why: String
+        switch entry {
+        case .link:
+            why =
+                "is a link, which the tool never follows. Move the folder it points to back in its place, \(remove)."
+        case .notFolder:
+            why = "is not a folder. Move it out of the way, \(remove)."
+        case .notYours:
+            why = "belongs to another user. Move it out of the way, \(remove)."
+        case .problem(.widerThanPrivate):
+            why = "is wider than 0700. Run `chmod 700 \(place)`, \(remove)."
+        case .problem(.sharedByAccessList):
+            why =
+                "has an access list that lets another user or group in, or that cannot be read. Run `chmod -N \(place)`, \(remove)."
+        case .problem(.cannotOpen):
+            why =
+                "cannot be opened or searched. Run `chmod -N \(place)`, then `chmod 700 \(place)`, \(remove)."
+        case .problem(.cannotCheck), .missing, .folder:
+            why =
+                "cannot be checked. Run `chmod -h -N \(place)`, or `chmod -N \(place)` if that says Permission denied, then `chmod -h 700 \(place)`, \(remove)."
+        }
+        return "Account '\(safe)': its folder `\(place)` \(why)"
     }
 
     /// A link target is written into the manifest and the folder. It must be absolute and plain.
@@ -153,14 +232,15 @@ public struct FolderKind: AccountKindHandler {
             return AccountCheck(
                 issues: [Issue(.checkFailed, .error, "Check failed.")], emailDigest: digest)
         }
-        guard FolderPaths.state(context: runner.context, label: account.label) == .ready else {
+        switch FolderPaths.state(context: runner.context, label: account.label) {
+        case .ready: break
+        case .missing:
             return AccountCheck(
-                issues: [
-                    Issue(
-                        .checkFailed, .error,
-                        "Account folder is missing or not yours. Run `agent-balancer remove \(Display.safe(account.label, limit: 32))`, then add it again."
-                    )
-                ], emailDigest: digest)
+                issues: [Issue(.checkFailed, .error, FolderPaths.missingText(account.label))],
+                emailDigest: digest)
+        case .refused:
+            let text = FolderPaths.refusalText(context: runner.context, label: account.label)
+            return AccountCheck(issues: [Issue(.checkFailed, .error, text)], emailDigest: digest)
         }
         switch AuthStatusReader.read(runner: runner, configDir: dir) {
         case .failed(let issue):

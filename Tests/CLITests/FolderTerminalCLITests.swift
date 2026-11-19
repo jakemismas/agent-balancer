@@ -331,7 +331,7 @@ extension FolderAccountsCLITests {
         #expect(blocked.status == 1)
         let advice = shown(blocked.stderr)
         #expect(advice.contains("Account 'spare'"))
-        #expect(advice.contains("mode 0700 and owned by you"))
+        #expect(advice.contains("is wider than 0700. Run `chmod 700 "))
         #expect(advice.contains("`agent-balancer remove spare`"))
         let removed = try cli.run(["remove", "spare"])
         #expect(removed.status == 0, "\(shown(removed.stderr))")

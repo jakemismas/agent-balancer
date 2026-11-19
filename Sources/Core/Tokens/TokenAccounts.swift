@@ -11,6 +11,9 @@ public enum TokenAccounts {
         public let replaced: Bool
         /// The launch files of the label that now carry the new token.
         public let launchFilesRewritten: Int
+        /// Each step after the token file was saved that could not be finished, with what it
+        /// leaves. Empty when every step finished.
+        public var unfinished: [String] = []
     }
 
     /// What a removal did.
@@ -95,10 +98,24 @@ public enum TokenAccounts {
     ///
     /// With `requireAccount`, what `login` passes, the registry must still hold `label` as a token
     /// account when the lock is held, right before the write; otherwise nothing is written, so a
-    /// `login` that a `remove` overtook never leaves a token file with no account.
+    /// `login` that a `remove` overtook never leaves a token file with no account. It then also
+    /// records `tokenCreatedAt` in the registry it loaded under the lock, once the token file is
+    /// saved. A step after that save that fails is listed in `unfinished` and the rest still run,
+    /// so a saved token is never reported as not saved.
     static func install(
         context: ToolContext, label: String, token: String, snapshot: SessionsSnapshot? = nil,
         requireAccount: Bool = false
+    ) throws -> Installed {
+        try NoFollowWriter.run(context.dataRoot, savePlan(context: context, label: label)) {
+            try installSteps(
+                context: context, label: label, token: token, snapshot: snapshot,
+                requireAccount: requireAccount)
+        }
+    }
+
+    private static func installSteps(
+        context: ToolContext, label: String, token: String, snapshot: SessionsSnapshot?,
+        requireAccount: Bool
     ) throws -> Installed {
         guard TokenStore.isPlausible(token) else {
             throw ToolError("The token does not have a usable shape.")
@@ -110,30 +127,124 @@ public enum TokenAccounts {
         let config = requireAccount || existed ? try ConfigStore(context: context).load() : nil
         if requireAccount {
             guard config?.account(label)?.kind == Kind.token else {
-                throw ToolError(
-                    "No account is labelled '\(Display.safe(label))' any more, so the token was not saved."
-                )
+                throw ToolError(Messages.accountGoneTokenNotSaved(label))
             }
         }
         let probeLocks = try takeProbeLocks(context: context, labels: [label], config: config)
         defer { for probeLock in probeLocks { probeLock.release() } }
+        // A launch folder refused after the save would leave the old token in the launch files.
+        try LaunchFiles.requireOpenable(context: context, label: label)
         // A reading taken under another token would judge this one.
         try ReadingStore(context: context).delete(label: label)
         try TokenStore.save(context: context, label: label, token: token)
+        var unfinished: [String] = []
+        func reason(_ error: Error) -> String {
+            (error as? ToolError)?.message ?? "a file could not be used."
+        }
+        if requireAccount, var saved = config,
+            let index = saved.accounts.firstIndex(where: { $0.label == label })
+        {
+            saved.accounts[index].tokenCreatedAt = ISO8601DateFormatter().string(from: Date())
+            do {
+                try ConfigStore(context: context).save(saved)
+            } catch {
+                unfinished.append(Messages.tokenDateNotSaved(reason(error)))
+            }
+        }
         let records = snapshot ?? SessionsReader.read(context: context)
         var handled = Set<String>()
         var rewritten = 0
         var passes = 0
-        while passes < 5 {
-            passes += 1
-            let pass = try LaunchFiles.rewriteToken(
-                context: context, label: label, skipping: handled, snapshot: records)
-            if pass.handled.isEmpty { break }
-            handled.formUnion(pass.handled)
-            rewritten += pass.rewritten
+        // The token just saved, so the rewrite never reads the file back and never meets a
+        // refusal of it once the token exists.
+        let saved = TokenSecret(value: token)
+        do {
+            while passes < 5 {
+                passes += 1
+                let pass = try LaunchFiles.rewriteToken(
+                    context: context, label: label, token: saved, skipping: handled,
+                    snapshot: records)
+                if pass.handled.isEmpty { break }
+                handled.formUnion(pass.handled)
+                rewritten += pass.rewritten
+            }
+        } catch {
+            unfinished.append(Messages.launchFilesNotRewritten(label, reason(error)))
         }
-        try LaunchFiles.deleteWriterLeftovers(context: context, label: label)
-        return Installed(replaced: existed, launchFilesRewritten: rewritten)
+        do {
+            try LaunchFiles.deleteWriterLeftovers(context: context, label: label)
+        } catch {
+            unfinished.append(Messages.launchLeftoversNotDeleted(label, reason(error)))
+        }
+        return Installed(
+            replaced: existed, launchFilesRewritten: rewritten, unfinished: unfinished)
+    }
+
+    /// Throws, before `login` starts a sign-in or reads a pasted token, the refusal that a token
+    /// save of `label` would meet after it, from the checks of its plan (`savePlan`), so no
+    /// refusal drops a new token.
+    public static func requireSaveable(context: ToolContext, label: String) throws {
+        _ = try TokenPaths.fileName(label: label)
+        try NoFollowWriter(root: context.dataRoot).require(savePlan(context: context, label: label))
+    }
+
+    /// What `install` does under the data folder for `label`, in its order: it opens the pick
+    /// lock and the label's probe lock, deletes the writer's leftover temporary files in the
+    /// token folder, opens the launch folder and the label's folder in it, deletes the stored
+    /// reading, marks the token folder as excluded from backups, writes the token file, saves the
+    /// config, whose rules open every folder account's folders, and in the label's launch folder
+    /// replaces or deletes each launch file and deletes the writer's leftovers. The files it may
+    /// delete are those there now; a launch file `lstat` cannot check is named too, so a save
+    /// never leaves it on the old token unsaid. `config` gives the folder accounts; nil reads it.
+    static func savePlan(context: ToolContext, label: String, config: Config? = nil)
+        -> NoFollowWriter.Plan
+    {
+        typealias Target = NoFollowWriter.Target
+        guard let name = try? TokenPaths.fileName(label: label) else {
+            return NoFollowWriter.Plan(step: "token save", targets: [])
+        }
+        let writer = NoFollowWriter(root: context.dataRoot)
+        let leftovers = (try? writer.leftoverTemporaries(folders: TokenPaths.folders)) ?? []
+        let registry = config ?? ((try? ConfigStore(context: context).load()) ?? nil)
+        let folderAccounts = (registry?.accounts ?? []).filter { $0.kind == Kind.folder }
+        return NoFollowWriter.Plan(
+            step: "token save",
+            targets: [
+                .file(Layout.locksFolders, Layout.pickLockName, [.lock]),
+                .file(Layout.locksFolders, Layout.lockName(label), [.lock]),
+            ]
+                + leftovers.map { Target.file(TokenPaths.folders, $0, [.delete]) }
+                + LaunchFiles.openTargets(context: context, label: label)
+                + [
+                    .file(Layout.readingsFolders, Layout.readingName(label), [.delete]),
+                    .folder(TokenPaths.folders, [.mark]),
+                    .file(TokenPaths.folders, name, [.replace]),
+                    .file([], ConfigStore.fileName, [.read, .replace]),
+                ]
+                + folderAccounts.map {
+                    Target.folder(FolderPaths.folders(label: $0.label), [.open])
+                }
+                + LaunchFiles.rewriteTargets(context: context, label: label))
+    }
+
+    /// What `updateConfig` does under the data folder: it opens the pick lock and writes the
+    /// config, with a dated copy in `backups/` first when `backup` is set.
+    static func configPlan(backup: Bool) -> NoFollowWriter.Plan {
+        var targets: [NoFollowWriter.Target] = [
+            .file(Layout.locksFolders, Layout.pickLockName, [.lock]),
+            .file([], ConfigStore.fileName, [.replace]),
+        ]
+        if backup { targets.append(.folder(Layout.backupsFolders, [.create])) }
+        return NoFollowWriter.Plan(step: "config save", targets: targets)
+    }
+
+    /// Throws the refusal `updateConfig` would meet saving `config`, from its rules, every folder
+    /// account's folders among them, and the checks of its plan (`configPlan`), and writes
+    /// nothing, so a folder account's `login` proves the plan save after its sign-in before
+    /// `claude` starts.
+    public static func requireConfigUpdatable(context: ToolContext, config: Config) throws {
+        try ConfigValidator.validate(config, context: context)
+        try NoFollowWriter(root: context.dataRoot).require(configPlan(backup: false))
     }
 
     /// Removes what the tool keeps for `label`, under the pick lock, in this order: the launch
@@ -262,13 +373,15 @@ public enum TokenAccounts {
     ) throws -> Config {
         let store = ConfigStore(context: context)
         _ = try store.loadRequired()
-        let lock = try takeLock(context)
-        defer { lock.release() }
-        var config = try store.loadRequired()
-        try change(&config)
-        try store.save(config, backup: backup)
-        try afterSave()
-        return config
+        return try NoFollowWriter.run(context.dataRoot, configPlan(backup: backup)) {
+            let lock = try takeLock(context)
+            defer { lock.release() }
+            var config = try store.loadRequired()
+            try change(&config)
+            try store.save(config, backup: backup)
+            try afterSave()
+            return config
+        }
     }
 
     /// `init`'s save, under the pick lock like every other registry writer: `make` gets the
@@ -292,6 +405,23 @@ public enum TokenAccounts {
     public static func writerLeftovers(context: ToolContext) -> Int {
         TokenStore.writerLeftoverCount(context: context)
             + LaunchFiles.writerLeftoverCount(context: context)
+    }
+
+    /// How many of the temporary files `writerLeftovers` counts hold at least one byte, so may
+    /// hold a token, for `doctor`'s warning. An empty one, such as one the check before a `login`
+    /// sign-in could not delete, holds none; one `lstat` cannot size counts. Nothing is opened.
+    public static func writerLeftoversWithData(context: ToolContext) -> Int {
+        let writer = NoFollowWriter(root: context.dataRoot)
+        let labels = ((try? writer.listNames(folders: [LaunchFiles.folder])) ?? []).filter(
+            ConfigValidator.isValidLabel)
+        let folders = [TokenPaths.folders] + labels.map { LaunchFiles.folders(label: $0) }
+        return folders.reduce(0) { sum, folder in
+            let names = (try? writer.leftoverTemporaries(folders: folder)) ?? []
+            return sum
+                + names.filter { name in
+                    ((try? writer.info(folders: folder, name: name))?.size ?? 1) > 0
+                }.count
+        }
     }
 
     /// The temporary files `uninstall` counts as may hold a token: those `writerLeftovers` counts,
@@ -326,6 +456,38 @@ public enum TokenAccounts {
             }
             return label
         }
+    }
+
+    /// What `doctor` says about the token folder when the folder checks refuse it for its mode or
+    /// its access list or it cannot be opened, searched or checked, and about each token file and
+    /// writer's temporary file in it whose access list lets another user or group in, cannot be
+    /// read, or keeps `lstat` out, each with the commands that clear it. The files are checked in
+    /// the same run inside a token folder refused for its mode or its list, and once it opens
+    /// inside one that cannot be opened or checked. Names and access lists only; no file is
+    /// opened.
+    public static func accessListProblems(context: ToolContext) -> [String] {
+        let writer = NoFollowWriter.forDoctor(root: context.dataRoot)
+        let place = NoFollowWriter.dataFolderPlace + "/" + TokenPaths.folderName
+        let verdict = writer.doctorVerdict(parent: [], name: TokenPaths.folderName)
+        let folderLine = verdict.line.map { [$0] } ?? []
+        guard verdict.readable else { return folderLine }
+        let names = (try? writer.listNames(folders: TokenPaths.folders)) ?? []
+        return folderLine
+            + names.compactMap { name in
+                let path = place + "/" + name
+                if NoFollowWriter.isTemporaryName(name) {
+                    return writer.fileListProblem(folders: TokenPaths.folders, name: name).map {
+                        Messages.doctorFileProblem(path, $0)
+                    }
+                }
+                guard TokenStore.isTokenFileName(name) else { return nil }
+                let label = String(name.dropLast(5))
+                switch writer.fileListProblem(folders: TokenPaths.folders, name: name) {
+                case .unchecked: return Messages.doctorTokenFileUnchecked(path, label: label)
+                case .shared: return Messages.doctorTokenFileShared(path, label: label)
+                case nil: return nil
+                }
+            }
     }
 
     /// What `uninstall` lists before it asks: counts only, no name and no path.

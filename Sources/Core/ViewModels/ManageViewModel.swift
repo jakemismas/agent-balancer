@@ -90,7 +90,7 @@ public enum ManageTips {
     public static let tokenEmail =
         "Typed when you added it. A token cannot report its email, so this is not checked."
     public static let tokenFile =
-        "Saved in a private file under ~/.agent-balancer. Only you can read it."
+        "Its token, once saved, sits in a file under ~/.agent-balancer. The tool uses it only while no other user can read that file."
     public static let endingSoon =
         "Used up first unless it has no 5-hour reading. Treated as ended once its plan drops."
     public static let endsOn = "Set only a date you know, because launches stop after that day."

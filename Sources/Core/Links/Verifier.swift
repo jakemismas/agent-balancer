@@ -8,6 +8,8 @@ public enum FolderVerdict: Equatable, Sendable {
     case notLinked
     /// A listed link or its target is gone or changed.
     case broken(String)
+    /// The folder checks refuse the account's folder; the text names it and its fix.
+    case refused(String)
 }
 
 public struct FolderFacts: Equatable, Sendable {
@@ -38,6 +40,10 @@ public enum Verifier {
     /// folders). No process runs and no settings file is read.
     public static func linkFacts(context: ToolContext, label: String) -> FolderFacts {
         let hooks = HookRecord(context: context)
+        // A folder the checks refuse is named with its fix, never as a broken or missing link.
+        if let text = FolderPaths.refusalIfAny(context: context, label: label) {
+            return FolderFacts(verdict: .refused(text), sharesSettings: hooks.sharesSettings(label))
+        }
         guard hooks.isLinked(label) else {
             return FolderFacts(verdict: .notLinked, sharesSettings: false)
         }
@@ -107,6 +113,8 @@ public enum Verifier {
                     code: .settingsChanged, reason: "link broken",
                     text: Messages.linkBroken(account.label) + " "
                         + Display.safe(detail, limit: 120)))
+        case .refused(let text):
+            found.append(Failure(code: .checkFailed, reason: text, text: text))
         case .ok: break
         }
         if stopAtFirst, !found.isEmpty { return (found, nil) }

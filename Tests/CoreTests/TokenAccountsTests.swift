@@ -307,7 +307,23 @@ private func dataText(_ t: TestHome, skipping: URL) -> String {
             #expect(!error.message.contains(secret))
             #expect(error.message.contains("--paste"))
         }
-        #expect(!FileManager.default.fileExists(atPath: t.context.dataRoot.path))
+        // The folders a save writes and the lock files it takes are made before the sign-in
+        // starts; nothing else is, and nothing holds a byte.
+        let made =
+            FileManager.default.enumerator(atPath: t.context.dataRoot.path)?
+            .allObjects.compactMap { $0 as? String } ?? []
+        #expect(!made.isEmpty)
+        let locks = [Layout.pickLockName, Layout.lockName("pool-a")].map {
+            (Layout.locksFolders + [$0]).joined(separator: "/")
+        }
+        for path in made {
+            var folder: ObjCBool = false
+            let url = t.context.dataRoot.appendingPathComponent(path)
+            #expect(FileManager.default.fileExists(atPath: url.path, isDirectory: &folder))
+            if folder.boolValue { continue }
+            #expect(locks.contains(path), "\(path)")
+            #expect((try? Data(contentsOf: url))?.isEmpty == true, "\(path)")
+        }
     }
 
     @Test func aProtectedVariableInTheParentNeverReachesTheChild() throws {

@@ -35,7 +35,8 @@ enum Shared {
 
     static func line(_ issue: Issue) -> String {
         let tag = issue.severity == .error ? "Error" : "Warning"
-        return "\(tag) \(issue.code.rawValue): \(Display.safe(issue.text, limit: 400))"
+        // Paths and labels only, so the longest folder text, at a 32-character label, prints whole.
+        return "\(tag) \(issue.code.rawValue): \(Display.safe(issue.text, limit: 1200))"
     }
 
     /// Prompts on the terminal and returns the typed line, or nil at end of input.

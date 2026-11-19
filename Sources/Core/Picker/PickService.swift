@@ -100,7 +100,7 @@ public struct PickService: Sendable {
             if case .failed(let issue) = result.status {
                 switch issue.code {
                 case .loginRejected: skips[result.label] = "login rejected"
-                case .tokenMissing: skips[result.label] = "no token saved"
+                case .tokenMissing: skips[result.label] = noTokenReason(result.label)
                 default: break
                 }
             }
@@ -188,7 +188,7 @@ public struct PickService: Sendable {
                 path = try LaunchFiles.create(
                     context: context, account: account, leaseId: id, caller: caller)
             } catch let error as ToolError where error.code == .tokenMissing {
-                skips[account.label] = "no token saved"
+                skips[account.label] = noTokenReason(account.label)
                 continue
             }
             leaseId = id
@@ -280,6 +280,12 @@ public struct PickService: Sendable {
         HookRecord(context: context).currentState()
     }
 
+    /// Why a token account whose token cannot be used is left out: what keeps it from use when
+    /// that names a fix, such as a refused token folder, else `no token saved`.
+    func noTokenReason(_ label: String) -> String {
+        TokenStore.blockedText(context: context, label: label) ?? "no token saved"
+    }
+
     /// Why an account is left out, and the state code when one applies.
     struct Skip {
         var reason: String
@@ -339,7 +345,7 @@ public struct PickService: Sendable {
         if account.kind == Kind.token {
             // A file that does not parse counts as no token, so it is never probed or offered.
             guard TokenStore.isUsable(context: context, label: account.label) else {
-                return Skip("no token saved", code: .tokenMissing)
+                return Skip(noTokenReason(account.label), code: .tokenMissing)
             }
             if tokenRejectionStands(account) {
                 return Skip("login rejected", code: .loginRejected)

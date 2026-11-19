@@ -8,12 +8,19 @@ struct DoctorCommand: ParsableCommand {
 
     func run() throws {
         let context = ToolContext.current()
+        // Such a list also stops the reads below, so each one is named first.
+        let shared = DoctorChecks.accessListProblems(context: context)
+        for text in shared {
+            // Paths and labels only, so the longest line, at a 32-character label, prints whole.
+            print("Error: " + Display.safe(text, limit: 1200))
+        }
         let store = ConfigStore(context: context)
         guard let config = try store.load() else {
             print(Messages.notSetUp)
+            if !shared.isEmpty { throw ExitCode.failure }
             return
         }
-        var failed = false
+        var failed = !shared.isEmpty
 
         let runner = ClaudeRunner(context: context)
         do {
@@ -79,6 +86,9 @@ struct DoctorCommand: ParsableCommand {
                                     Messages.linkBroken(account.label) + " "
                                         + Display.safe(detail, limit: 120))))
                     failed = true
+                case .refused:
+                    // The sign-in check above already named the folder and its fix.
+                    failed = true
                 }
                 print("  trust: \(Messages.trustStep)")
                 print("  note: \(Messages.notCarriedOver)")
@@ -92,7 +102,7 @@ struct DoctorCommand: ParsableCommand {
             )
         }
 
-        let temporaries = TokenAccounts.writerLeftovers(context: context)
+        let temporaries = TokenAccounts.writerLeftoversWithData(context: context)
         if temporaries > 0 {
             print(
                 "Warning: \(temporaries) temporary files from a write that stopped part way may hold a token. Run `agent-balancer refresh` in Terminal to delete them."

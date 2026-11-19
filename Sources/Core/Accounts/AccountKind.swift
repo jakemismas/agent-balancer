@@ -76,9 +76,13 @@ extension AccountKinds {
         case Kind.login: return ProbeContext()
         case Kind.token: return try TokenKind.probeContext(account: account, context: context)
         case Kind.folder:
-            guard FolderPaths.state(context: context, label: account.label) == .ready else {
+            switch FolderPaths.state(context: context, label: account.label) {
+            case .ready: break
+            case .missing:
+                throw ToolError(FolderPaths.missingText(account.label), code: .checkFailed)
+            case .refused:
                 throw ToolError(
-                    "Account '\(Display.safe(account.label))': its folder is missing or is a link.",
+                    FolderPaths.refusalText(context: context, label: account.label),
                     code: .checkFailed)
             }
             return ProbeContext(

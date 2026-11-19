@@ -61,8 +61,7 @@ struct AddCommand: ParsableCommand {
                 _ = try FolderPaths.configDir(context: context, label: label)
                 if FolderPaths.state(context: context, label: label) == .refused {
                     throw ToolError(
-                        "The folder for '\(Display.safe(label))' exists and is a link or is not owned by you."
-                    )
+                        FolderPaths.refusalText(context: context, label: label, orRemove: false))
                 }
             }
             if let email, !email.contains("@") || email.contains(" ") {

@@ -527,3 +527,16 @@
   these stops keeps the label's leases, so a rerun still keeps a recent pick's launch file as a
   tombstone. Each text names the folder or the file and the `chmod` or `chflags` commands that let
   the tool check or delete it again, and a rerun after them goes on from there.
+- Access lists count for the `claude` binary too. Every command that would start `claude` refuses
+  a binary whose real target, links followed, has an access list entry that lets another user or
+  group change it, inherited or not, as it refuses one that group or others can write, and
+  `~/.local/bin` the same way when the binary sits there: an allow entry that gives any right other
+  than reading, running, listing, searching and reading its attributes or list, a right that
+  `chmod` cannot name or `ls -le` does not show included. An entry for you alone and a deny entry
+  change nothing, and a list you cannot read is refused. A lookup of the binary that an entry or a
+  mode stops, such as a folder you cannot search, is refused too, where it used to be skipped, and
+  the refusal names the folder or entry where it stops. Each refusal names a fix only where running
+  it clears the refusal: `chmod -N` on the binary's real target or on the folder, after the
+  `chflags` that clears a lock. `doctor` prints the refusal and exits 1. Before, the check read
+  modes only, so an `everyone allow write,append` entry on `~/.local/bin/claude` left `doctor` at
+  exit 0, while `chmod go+w` on the same file made it exit 1.

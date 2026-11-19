@@ -205,6 +205,29 @@ public enum Messages {
         "Refused `\(place)`: its access list lets another user or group in, or cannot be read. Run `chmod -N \(place)` in Terminal."
     }
 
+    /// What every command that would start `claude` says when the access list of the binary's
+    /// real target, the file that the path at `shown` resolves to, lets another user or group
+    /// change it or cannot be read. `fix` is the sentence that clears that list.
+    public static func claudeSharedByAccessList(_ shown: String, fix: String) -> String {
+        "Refused \(shown): its real target's access list lets another user or group change it, or cannot be read. \(fix)"
+    }
+
+    /// The same for `~/.local/bin` when the binary sits there.
+    public static func claudeFolderSharedByAccessList(_ shown: String, fix: String) -> String {
+        "Refused \(shown): its folder's access list lets another user or group change it, or cannot be read. \(fix)"
+    }
+
+    /// What every command that would start `claude` says when the lookup of the binary, or of
+    /// `~/.local/bin` when `ofFolder` is true, stops: `because` says where, when a step can be
+    /// named, and `fix` is the command that lets the lookup through, when one is known to.
+    public static func claudeUnchecked(
+        _ shown: String, ofFolder: Bool, because: String?, fix: String?
+    ) -> String {
+        let what = ofFolder ? "its folder" : "it"
+        let why = because.map { ", because " + $0 } ?? ""
+        return "Refused \(shown): \(what) cannot be checked\(why)." + (fix.map { " " + $0 } ?? "")
+    }
+
     /// What every command that opens a folder of the tool's says when it refuses the folder, with
     /// its fix. A link is never given a `chmod`, which would act on what it points to.
     public static func folderRefused(_ place: String, _ why: NoFollowWriter.FolderRefusal)

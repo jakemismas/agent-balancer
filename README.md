@@ -121,8 +121,8 @@ network calls of its own.
 
 - The tool looks for `claude` only at `~/.local/bin/claude`, `/opt/homebrew/bin/claude` and
   `/usr/local/bin/claude`, never at a path from its own files. If yours is elsewhere, link it into
-  `~/.local/bin`. That file, and `~/.local/bin` when it is used, must be owned by you or root and
-  not writable by group or others.
+  `~/.local/bin`. That file, and `~/.local/bin` if used, must be owned by you or root and not
+  writable by group or others, access lists included.
 - Its files are mode 0600 and its folders are mode 0700.
 - To uninstall, run `agent-balancer uninstall`, drag the app to the Trash, then
   `brew uninstall agent-balancer`.

@@ -89,9 +89,9 @@ agent-balancer/
                    `ClaudeRunner.launchAttached` starts `claude` for `run` with the terminal's own
                    input and output and the person's environment minus the protected group (6.2).
                    `CLIRunner` starts the agent-balancer tool for the menu app: found only at
-                   `/opt/homebrew/bin` and `/usr/local/bin`, owner and mode test of 6.2, the probe
-                   environment, never `claude`. `ChildProcess` is the one capture-and-timeout loop
-                   both runners share
+                   `/opt/homebrew/bin` and `/usr/local/bin`, the owner and mode test of 6.2
+                   without its access list test, the probe environment, never `claude`.
+                   `ChildProcess` is the one capture-and-timeout loop both runners share
       Readers/     auth status reader, probe reader (stream-json parser), sessions reader
                    (`SessionsReader`: the default folder's `sessions/` and `jobs/` records, section 8)
       Readings/    reading cache (state/readings/<label>.json), the merge rule of 6.3, and the
@@ -1265,11 +1265,40 @@ claude -p "Reply with the single word OK." --model haiku --tools "" --disallowed
 - The runner finds `claude` only in a fixed list (`~/.local/bin`, `/opt/homebrew/bin`,
   `/usr/local/bin`), uses the path found there (not a versioned real target, so a Claude Code
   update does not break it), and refuses a file whose real target is not owned by the user or
-  root, or is writable by group or others. The parent folder gets the same test only for
-  `~/.local/bin`, because Homebrew's own bin folders are group-writable on a standard install and
-  testing them would reject every Homebrew binary, the tool's own CLI included. No executable path
-  is read from config or any file in the data folder; a user with `claude` somewhere else links it
-  into `~/.local/bin`.
+  root, is writable by group or others, or has an access list that lets another user or group
+  change it. The parent folder gets the same tests only for `~/.local/bin`, because Homebrew's own
+  bin folders are group-writable on a standard install and testing them would reject every
+  Homebrew binary, the tool's own CLI included. No executable path is read from config or any file
+  in the data folder; a user with `claude` somewhere else links it into `~/.local/bin`.
+- The access list test reads the list through the reader of section 13. An allow entry, inherited
+  or not, also one that only passes on, for another user, a group or a qualifier that does not
+  resolve to the user, refuses the file or the folder when it gives any right other than reading,
+  running, listing, searching and reading its attributes or list: every bit counts but `read`
+  (`list`), `execute` (`search`), `readattr`, `readextattr`, `readsecurity` and `synchronize`,
+  which macOS keeps for Windows file sharing, so the generic rights of `sys/kauth.h` and any bit
+  libc does not name count too. The rights are read whole from libc's external form of the list
+  (`acl_size`, then `acl_copy_ext_native`, laid out as `kauth_filesec`), because `acl_get_perm_np`
+  refuses the generic bits and `ls -le` does not show them, while the kernel still grants what
+  they stand for. An entry for the user alone changes nothing, and so does a deny entry while the
+  user can read the list. A list that cannot be read is refused.
+- A lookup of the binary or of `~/.local/bin` that stops is refused, not skipped: `realpath` or
+  `stat` fails for a reason other than a missing entry, a path through a file or a loop of links,
+  which leave nothing that can run there. The refusal says it cannot be checked and names where
+  the lookup stops, found one name at a time with `lstat`, and with `readlink` for a link, which
+  needs no right on its target: the first folder the user cannot search, or the first entry whose
+  attributes the user cannot read, a link named as one. It names a `chmod -N` only where running it
+  as printed lets the lookup through: on a folder the user owns whose mode lets the owner search
+  it, so only its list can deny that, after the `chflags` that clears a `uchg` or `uappnd` lock on
+  it, which `chmod -N` cannot pass (a system flag gets no command), or on an entry that is not a
+  link, which an events-only open (`O_EVTONLY` with `O_NOFOLLOW`, which reads nothing in it) shows
+  to be the user's or root's (`sudo` first) and unlocked, since the `chflags` command fails on an
+  entry whose attributes the user cannot read. Otherwise it names none and says what blocks the
+  check.
+- Every command that would start `claude` refuses with one text that names the binary and the
+  command that clears the list: `chmod -N` on the real target's path for the file and on the real
+  folder's for `~/.local/bin`, with `sudo` first when root owns it, after the `chflags` that clears
+  a `uchg` or `uappnd` lock, which `chmod -N` cannot pass; a system flag gets no command, since
+  only an administrator can clear it. `doctor` prints the text and exits 1.
 
 ### 6.3 Cache and age
 
@@ -2148,8 +2177,8 @@ empty lists, and the events record keeps only each label's newest line.
   not found: an error card with the lookup paths tried; a status file with a newer
   `schemaVersion`: "Update agent-balancer". Never an empty window.
 - **Finding the CLI:** the app looks only at `/opt/homebrew/bin/agent-balancer`, then
-  `/usr/local/bin/agent-balancer`, after the same owner and mode test the runner applies to
-  `claude` (6.2). No executable path comes from config.
+  `/usr/local/bin/agent-balancer`, after the owner and mode test the runner applies to `claude`
+  (6.2), but not its access list test. No executable path comes from config.
 - **Size:** the popover caps at the visible screen height minus 40 points and scrolls inside;
   every command shown has a Copy button. Open at login is a checkmark item in the menu, off until
   the user turns it on. The refresh interval is changed with
@@ -2771,9 +2800,11 @@ too). A read that finds no list (`ENOENT`), or a volume that keeps none (`ENOTSU
 or only allows the owner, changes nothing while the owner can still read the list. The checks
 read a list only through libc's access list calls (`acl_get_fd_np` on an open handle, or
 `acl_get_link_np` by path on a file of the tool's, which needs no read access to it, then
-`acl_get_entry`, `acl_get_tag_type`, `acl_get_qualifier` and `mbr_uuid_to_id`), never the
-Security framework and never a child process. A folder of the tool's with such an entry is
-refused, with a message that names it and `chmod -N`, and `uninstall` refuses it the same way
+`acl_get_entry`, `acl_get_tag_type`, `acl_get_qualifier` and `mbr_uuid_to_id`; the check of the
+`claude` binary in 6.2 also reads each entry's rights whole with `acl_size` and
+`acl_copy_ext_native`), never the Security framework and never a child process. A folder of the
+tool's with such an entry is refused, with a message that names it and `chmod -N`, and
+`uninstall` refuses it the same way
 (section 12); a token file with one is not private (4A.4). Every refusal of a folder names it and
 its fix: `chmod 700` for a mode wider than 0700, `chmod -N` then `chmod 700` for one that cannot
 be opened or searched, `chmod -N` then `chmod 700` on the folder above for one below the data
@@ -2925,7 +2956,7 @@ file deletion outside the no-follow writer.
 | T2 | A token-like string lands in output or logs (for example echoed in a `claude` error) | The scrubber's token pass works on whole captured buffers after the size cap and before parsing, so a token split across two reads is still caught. A second pass (email addresses, UUIDs, `/Users/<name>`) runs only on stderr, error texts and log lines, never on the JSON fields the readers map. The leak test plants canaries in every input |
 | T3 | Network exfiltration or telemetry | No networking code; the safety script fails if `URLSession`, `Network` or socket APIs appear; the only network user is the `claude` binary |
 | T4 | Command injection through config | `Process` with argument arrays only, never a shell; labels and folders must match the patterns in 5.2, and folders must be owned by the user |
-| T5 | A fake `claude` earlier on `PATH` | The runner looks for `claude` only in the fixed list in 6.2 and refuses a binary whose real target is not owned by the user or root, or is writable by group or others; `doctor` shows the path |
+| T5 | A fake `claude` earlier on `PATH` | The runner looks for `claude` only in the fixed list in 6.2 and refuses a binary whose real target is not owned by the user or root, or that another user or group can change through its mode or its access list, and `~/.local/bin` the same way when the binary sits there (6.2); `doctor` shows the path, and for an access list the `chmod -N` that clears it |
 | T6 | A shared settings link gives chats a second path to edit the settings that apply to every session | Section 5: where links live, and the user's own path rules for settings files |
 | T7 | Probe runaway spends capacity | Lock per account folder, the reading-age skip rule (6.2), `--max-budget-usd 0.05`, timeout |
 | T8 | Two callers pick the same account at once | `pick` decides and writes its lease under an exclusive lock (7.2 rule 7), so the next pick sees the first one |

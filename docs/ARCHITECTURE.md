@@ -630,8 +630,8 @@ check saves `state/current.json` (4A.5). Only a replace writes
 
 Removing: `remove <label>` never refuses because a session still names a launch file. Removing
 the main account needs a person at a terminal (5.1): with standard input not a terminal, `remove`
-of a main account exits 1 and changes nothing. Under the pick lock it first reads the config again
-and checks that rule once more, before anything is written or deleted, and stops, writing nothing,
+of a main account exits 1 and changes nothing. Under the pick lock, before anything is written or
+deleted, it reads the config again and checks that rule once more, and stops, writing nothing,
 when the label now names another account than the one it read (another `accountKey`). When another
 `remove` of the label finished while it waited, it finishes what is left, as a rerun does. Every
 command that saves the registry (`init`, `add`, `login`, `refresh`'s plan record, `config set`,
@@ -639,28 +639,59 @@ command that saves the registry (`init`, `add`, `login`, `refresh`'s plan record
 role nor the account behind the label can change between that check and the last delete; the
 entry is deleted only while it still has the `accountKey` the check saw, and otherwise the remove
 stops and keeps it. A process that edits `config.json` directly takes no lock and is outside this
-guarantee (section 14, T16). Then it works in this order: (a) a launch file of the label that a
-session record names, or whose lease has not ended, or any launch file when the records cannot be
-read cleanly, is overwritten with a tombstone, and every other launch file of the label is deleted;
-(b) the label's leases are deleted; (c) the launch files are listed again and (a) is repeated for
-any file a `pick` wrote meanwhile; (d) every remaining file is read back, and when one still holds
-a token the remove stops and keeps the token file and the account; (e) the writer's leftover
-temporary files in `tokens/`, `tokens/<label>.json` and the stored reading are deleted; (f) the
-config entry is deleted last, still under the pick lock, and the rebuild that follows writes the
-`account_removed` event. A crash after any step leaves a state that `remove <label>` finishes on a
-rerun, also when the config entry is already gone, and `doctor` lists a token file that has no
-account. A tombstone is valid JSON, mode 0600, in the launch file's shape, with the token variable
-set to the literal `invalid` and no other secret: a session that reads it fails to sign in instead
-of falling back to the stored login. This keeps a launch file in place while any session record
-names it, live or not, and still leaves no file holding the old token; upkeep deletes a tombstone
-once no record names it and it is older than `picker.leaseMinutes`. `remove` says the same about the
-token living on. `remove` on any kind also deletes that label's launch files, leases and stored
-reading, so a label added again never inherits them. `remove` on a `folder` account never deletes
-the folder. Every overwrite and delete goes through the no-follow writer and touches only a regular
-file owned by the user named `l-<8 hex>.json` directly under `launch/<label>/` (or the token file
-directly under `tokens/`). Any other entry, a link included, is skipped, not followed, and counted in
-the output, and the writer's own leftover temporary files in `tokens/` and in that label's launch
-folder are deleted and read back; any that could not be deleted are counted in the output.
+guarantee (section 14, T16). Before it writes or deletes anything, it stops when it cannot check the
+token file or a launch file of the label, since such a file may hold the token: when `tokens/` or
+the label's launch folder cannot be listed or searched, such as one at 0600 or one whose access list
+denies you `list` or `search`, or when `lstat` cannot check `tokens/<label>.json` or a name of a
+launch file's shape in the label's launch folder, such as a file whose access list denies you
+`readattr`. A folder that `lstat` cannot check, such as one whose access list denies you `readattr`,
+stops it too: its list cannot be read either, so it fails the folder checks. Such a stop says that
+nothing was deleted, exits 1, and names that folder or the token file and the commands that let it
+check again: on a folder that cannot be opened or searched, `chmod -N` and then `chmod 700`, with
+`chflags nouchg,nouappnd` first if it is locked; on a folder that `lstat` cannot check, which may be
+a link, `chmod -h -N`, or `chmod -N` if that says Permission denied, and then `chmod -h 700`; on the
+token file, `chmod -h -N`, or `chmod -N` if that says Permission denied; for launch files it cannot
+check, `chmod -h -N` on the label's launch folder and on each file directly in it, or `chmod -N`
+where that says Permission denied, which also clears an entry the folder would pass on to a
+tombstone written in it, with `chflags -h nouchg,nouappnd` on the folder first if it is locked. A
+rerun after those commands goes on with the remove: it finishes, stops on the next entry it cannot
+check or delete with that entry's text, or, when nothing of the label is left, says that no account
+is labelled so. When the folder checks refuse `tokens/` for another reason, such as a link, a file,
+another user's folder or one wider than 0700, the remove also stops before it writes or deletes
+anything, with the writer's refusal; the label's launch folder in such a state stops it the same way
+at the first listing of (a), before anything is deleted. A rerun with no config entry left also goes
+ahead while such a file is there, and stops on it. Then it works in this order: (a) a launch file of
+the label that a session record names, or whose lease has not ended, or any launch file when the
+records cannot be read cleanly, is overwritten with a tombstone, and every other launch file of the
+label is deleted; (b) the launch files are listed again and (a) is repeated for any file a `pick`
+wrote meanwhile; (c) every remaining file is read back, and the remove stops when one still holds a
+token, or, with the text of the check before any delete, when a launch file it cannot check is
+there, such as a tombstone that took an access list from its folder; (d) the writer's leftover
+temporary files in `tokens/` and `tokens/<label>.json` are deleted, and when the token file is still
+there, such as a locked one or one whose access list denies you `delete`, the remove stops, and its
+text names the token file and says to run `chmod -h -N` and `chmod -h 700` on `tokens/` and `chmod
+-h -N` on the file, or `chmod -N` if that says Permission denied, with `chflags -h nouchg,nouappnd`
+first on either of them that is locked; when it can no longer check the token file or `tokens/` by
+then, it stops with the text of the check before any delete; (e) the label's leases and then the
+stored reading are deleted; (f) the config entry is deleted last, still under the pick lock, and the
+rebuild that follows writes the `account_removed` event. A stop at (c) or (d) keeps the leases, so a
+rerun still keeps a recent pick's file as a tombstone, and its text says it kept the token file or
+the config entry only when that one is there. A crash after any step leaves a state that `remove
+<label>` finishes on a rerun, also when the config entry is already gone, and `doctor` lists a token
+file that has no account. A tombstone is valid JSON, mode 0600, in the launch file's shape, with the
+token variable set to the literal `invalid` and no other secret: a session that reads it fails to
+sign in instead of falling back to the stored login. This keeps a launch file in place while any
+session record names it, live or not, and still leaves no file holding the old token; upkeep deletes
+a tombstone once no record names it and it is older than `picker.leaseMinutes`. `remove` says the
+same about the token living on. `remove` on any kind also deletes that label's launch files, leases
+and stored reading, so a label added again never inherits them. `remove` on a `folder` account never
+deletes the folder. Every overwrite and delete goes through the no-follow writer and touches only a
+regular file owned by the user named `l-<8 hex>.json` directly under `launch/<label>/` (or the token
+file directly under `tokens/`). Any other entry, a link included, is skipped, not followed, and
+counted in the output; a name of a launch file's shape that `lstat` cannot check is not among them,
+since the remove stops on it. The writer's own leftover temporary files in `tokens/` and in that
+label's launch folder are deleted and read back; any that could not be deleted are counted in the
+output.
 
 Leftover temporary files: the no-follow writer writes each file whole to a `.tmp-<16 hex>` name and
 renames it into place, so a process killed between the two leaves that temporary file, which can
@@ -2911,7 +2942,7 @@ file deletion outside the no-follow writer.
 | T20 | A stored token is read by another process that runs as the user, by a backup or by a sync tool, and stays usable for up to a year | 0600 files in 0700 folders; `tokens/` and `launch/` are marked as excluded from backups; `doctor` warns when the data folder sits inside a synced folder. Against code that runs as the user this is advisory, and it is the same exposure as Claude Code's own fallback credential file |
 | T21 | A token reaches output: `pick`'s JSON, an error text, a log line, the history, the app, a crash report | Only the `Tokens` and `Launch` modules read a token, and they return paths, never values. `pick` prints the launch file's path only. The scrubber runs on every captured buffer; `TokenCapture` reads the `claude setup-token` child's raw output first |
 | T22 | A caller's settings JSON carries a key that switches hooks off, changes permissions or chooses another account, into a launch file not visible in the typed line | `pick` accepts only allowlisted top-level keys (`env` by default) and only `env` names listed in `launch.envNames` (empty by default), never the protected names such as `CLAUDE_CONFIG_DIR`, the login locations, any `CLAUDE_CODE_*` name, `PATH`, `NODE_OPTIONS`, loader, proxy and certificate variables, and refuses without writing anything (4A.2). The config lists may hold only those keys and names, checked when the config loads and at pick time |
-| T23 | Launch files pile up, each with a token, or one outlives its account | The upkeep rule in 4A.6; `remove` deletes every file of the label; a token replace rewrites them; `uninstall` removes both folders, or says what it left that may hold a token and exits 1; `doctor` prints the count and the oldest age, never a file's content |
+| T23 | Launch files pile up, each with a token, or one outlives its account | The upkeep rule in 4A.6; `remove` deletes every file of the label, or stops, keeping the account, while a file it cannot check or delete may hold a token (4A.4); a token replace rewrites them; `uninstall` removes both folders, or says what it left that may hold a token and exits 1; `doctor` prints the count and the oldest age, never a file's content |
 | T24 | Something in the caller's environment beats the recipe: a worker bills another account, or lands in a folder with no hooks | The ambient rule (4A.3): folder-only picks under an inherited `CLAUDE_CONFIG_DIR`, `backgroundOnly` under an inherited credential name, a refused typed line under a stored-login name or a hooks-off name, `unsetEnv` for launchers, and a person launch without the protected group. The post-launch check in section 16 item 4 catches a launch that landed in the wrong folder. The profile base folders `HOME` and `XDG_CONFIG_HOME` stay (6.2) |
 | T25 | A folder account with a missing link runs sessions with no hooks | `pick` runs `verify` on a folder account before every recipe and refuses on any broken or missing link, and a never-linked folder is always refused; `run` refuses the same way |
 | T26 | Any chat that can run `pick` learns the path of a file that holds a token, and can read it; a token session can print its own token | Not prevented by the tool, and said so. Same-user limit as T16 and T20: the user's own policy is the boundary. The Limits section of `docs/GUIDE.md` gives a deny-rule snippet for `~/.agent-balancer/tokens/` and `~/.agent-balancer/launch/` |

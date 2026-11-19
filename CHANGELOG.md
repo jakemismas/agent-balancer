@@ -516,3 +516,14 @@
   read modes only, so an inheritable `everyone allow read` entry on `tokens/` gave a new 0600 token
   file an entry that lets every local user read it, while `status` said `ok` and `doctor` said
   nothing.
+- `remove` stops and exits 1 before it deletes anything when it cannot check the token file or a
+  launch file of the label, such as one whose access list denies you `readattr`, or cannot list or
+  search the token folder or the label's launch folder, and says that nothing was deleted. It
+  checks the launch files again at its read-back, and stops before the account goes when it cannot
+  delete the token file, such as a locked one. It used to delete the account and exit 0 while a
+  launch file it could not check, or a token file it could not check or delete, kept the token, and
+  counted such a launch file among the entries the tool did not make. A token folder that the
+  folder checks refuse, such as a link, now also stops it before anything is deleted, and each of
+  these stops keeps the label's leases, so a rerun still keeps a recent pick's launch file as a
+  tombstone. Each text names the folder or the file and the `chmod` or `chflags` commands that let
+  the tool check or delete it again, and a rerun after them goes on from there.

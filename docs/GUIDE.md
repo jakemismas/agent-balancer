@@ -169,6 +169,12 @@ replace or launch file cleanup deletes it; `agent-balancer doctor` counts any th
   a restore from a backup that brought the reading back without the token file.
   `agent-balancer remove <label>` deletes the token file and the stored reading, and deletes the
   label's launch files except one a session may still read, which stays with no token in it.
+  When an access list or a folder mode keeps it from checking the token file or a launch file of
+  the label, or from listing or searching their folders, it stops before it deletes anything and
+  names that folder or file and the commands that let it check them again. When a lock, an access
+  list or a folder mode keeps it from deleting the token file, it stops, keeps the account, and
+  names the commands that let it delete the file. Run the commands it names, then run
+  `agent-balancer remove <label>` again.
 - No manual check has confirmed whether a new token ends the old one, or found a way to cancel
   one: none is documented. So a replaced or leaked token may keep working until its year ends,
   and after every replace and every remove the tool prints that the old token may keep working

@@ -258,8 +258,9 @@ extension LaunchFiles {
     /// records cannot be read cleanly, becomes a tombstone and is kept; every other file is
     /// deleted. The folder is listed again after each pass, so a file written meanwhile is handled
     /// too. The writer's leftover temporary files go, entries the tool did not make are counted
-    /// and left alone, and the label's folder goes when nothing else is in it. Callers hold the
-    /// pick lock.
+    /// and left alone, and the label's folder goes when nothing else is in it. A name of a launch
+    /// file's shape that `lstat` cannot check is not counted as one the tool did not make: it may
+    /// be a launch file, and the caller's read-back stops on it. Callers hold the pick lock.
     static func removeAll(
         context: ToolContext, label: String, snapshot: SessionsSnapshot, leased: Set<String>,
         keepModifiedAfter: Date? = nil
@@ -269,7 +270,7 @@ extension LaunchFiles {
             context: context, label: label, snapshot: snapshot, leased: leased,
             keepModifiedAfter: keepModifiedAfter, keepAll: false)
         count.temporariesLeft = try deleteWriterLeftovers(context: context, label: label)
-        count.skipped = try strayCount(context: context, label: label)
+        count.skipped = try strayCount(context: context, label: label, leavingOutUnchecked: true)
         try writer.removeEmptyFolder(parent: [folder], name: label)
         return count
     }
@@ -313,11 +314,19 @@ extension LaunchFiles {
     }
 
     /// Entries in the label's folder that the tool did not make: neither a launch file of its own
-    /// nor a name of the writer's temporary shape.
-    private static func strayCount(context: ToolContext, label: String) throws -> Int {
+    /// nor a name of the writer's temporary shape. With `leavingOutUnchecked`, a name of a launch
+    /// file's shape that `lstat` cannot check is not counted either.
+    private static func strayCount(
+        context: ToolContext, label: String, leavingOutUnchecked: Bool = false
+    ) throws -> Int {
+        let writer = NoFollowWriter(root: context.dataRoot)
+        let dir = folders(label: label)
         let own = Set(try ownFileNames(context: context, label: label))
-        return try NoFollowWriter(root: context.dataRoot).listNames(folders: folders(label: label))
-            .filter { !own.contains($0) && !NoFollowWriter.isTemporaryName($0) }.count
+        let unchecked = Set(
+            leavingOutUnchecked ? writer.uncheckedNames(folders: dir, of: isFileName) : [])
+        return try writer.listNames(folders: dir).filter {
+            !own.contains($0) && !unchecked.contains($0) && !NoFollowWriter.isTemporaryName($0)
+        }.count
     }
 
     /// How many launch files of `label` may still carry a token: every one that is not a
@@ -331,12 +340,99 @@ extension LaunchFiles {
         }.count
     }
 
-    /// Whether the label's launch folder still holds a launch file that may carry a token, or a
-    /// temporary file the writer left behind.
+    /// How many names of a launch file's shape in the label's folder `lstat` cannot check, such
+    /// as a file whose access list denies its owner `readattr`. Each may hold a token. Nothing is
+    /// opened.
+    static func uncheckedFileCount(context: ToolContext, label: String) -> Int {
+        NoFollowWriter(root: context.dataRoot).uncheckedCount(
+            folders: folders(label: label), of: isFileName)
+    }
+
+    /// Whether the label's launch folder still holds a launch file that may carry a token, one
+    /// that `remove` cannot check included, or a temporary file the writer left behind.
     static func hasLeftovers(context: ToolContext, label: String) throws -> Bool {
+        if uncheckedForRemove(context: context, label: label, kept: .nothingDeleted) != nil {
+            return true
+        }
         if try filesHoldingAToken(context: context, label: label) > 0 { return true }
         let writer = NoFollowWriter(root: context.dataRoot)
         return !(try writer.leftoverTemporaries(folders: folders(label: label)).isEmpty)
+    }
+}
+
+/// What `remove` does with launch files it cannot check (docs/ARCHITECTURE.md section 4A.4,
+/// Removing): each may hold the token, so the remove stops before it deletes the token file, and
+/// its text names the label's launch folder and the command that lets the tool check it again.
+extension LaunchFiles {
+    /// The label's launch folder as a person types it.
+    static func typedFolder(label: String) -> String { "~/.agent-balancer/" + folder + "/" + label }
+
+    /// What `remove` stops with when it cannot check the launch files of `label`, or nil when it
+    /// can: the label's launch folder cannot be listed or searched, or a name of a launch file's
+    /// shape in it cannot be checked with `lstat`. A label folder `lstat` cannot check, such as
+    /// one whose access list denies you `readattr`, fails the folder checks, since that list
+    /// cannot be read either, so it gets the cannot-be-checked text. Any other trouble with the
+    /// launch folders stops the remove with the writer's refusal, as before. `kept` says what the
+    /// stop kept.
+    static func uncheckedForRemove(context: ToolContext, label: String, kept: TokenAccounts.Kept)
+        -> String?
+    {
+        guard ConfigValidator.isValidLabel(label) else { return nil }
+        let writer = NoFollowWriter(root: context.dataRoot)
+        guard writer.opensForSearch(folders: [folder]) else { return nil }
+        if !writer.opensForSearch(folders: folders(label: label)) {
+            switch writer.placeEntry(parent: [folder], name: label) {
+            case .problem(.cannotOpen): return folderCannotOpenText(label: label, kept: kept)
+            case .problem(.cannotCheck): return folderCannotCheckText(label: label, kept: kept)
+            default: break
+            }
+        }
+        let count = uncheckedFileCount(context: context, label: label)
+        return count > 0 ? uncheckedFilesText(label: label, count: count, kept: kept) : nil
+    }
+
+    /// Throws `uncheckedForRemove`'s text, so `remove` stops while a launch file it cannot check
+    /// may hold the token. Callers hold the pick lock.
+    static func requireCheckedForRemove(
+        context: ToolContext, label: String, kept: TokenAccounts.Kept
+    ) throws {
+        if let stop = uncheckedForRemove(context: context, label: label, kept: kept) {
+            throw ToolError(stop)
+        }
+    }
+
+    /// What `remove` stops with when its label's launch folder is a real folder of the user's
+    /// that cannot be opened or searched, such as one at 0600 or one whose access list denies its
+    /// owner `list` or `search`. `lstat` showed it is not a link, so its commands take no `-h`,
+    /// and `chmod -N` clears its list without opening it. A lock on it keeps `chmod` from
+    /// changing it.
+    static func folderCannotOpenText(label: String, kept: TokenAccounts.Kept) -> String {
+        let place = typedFolder(label: label)
+        return
+            "The launch folder `\(place)` cannot be opened or searched, so `remove` cannot check whether a launch file in it holds a token.\(kept.sentence) Run `chmod -N \(place)`, then `chmod 700 \(place)`, and `chflags nouchg,nouappnd \(place)` first if it is locked, then run `agent-balancer remove \(label)` again."
+    }
+
+    /// What `remove` stops with when `lstat` cannot check its label's launch folder and the
+    /// folder does not open to be searched. It may be a link, so `-h` keeps each command on the
+    /// entry itself; `chmod -h -N` opens the entry, so `chmod -N` clears one whose list also
+    /// denies its owner `list`, and `-N` goes first because `chmod -h 700` fails while `lstat`
+    /// does.
+    static func folderCannotCheckText(label: String, kept: TokenAccounts.Kept) -> String {
+        let place = typedFolder(label: label)
+        return
+            "The launch folder `\(place)` cannot be checked, so `remove` cannot tell what it is or whether a launch file in it holds a token.\(kept.sentence) Run `chmod -h -N \(place)`, or `chmod -N \(place)` if that says Permission denied, then `chmod -h 700 \(place)`, then run `agent-balancer remove \(label)` again."
+    }
+
+    /// What `remove` stops with when names of a launch file's shape in its label's launch folder
+    /// cannot be checked with `lstat`, such as a file whose access list denies its owner
+    /// `readattr`. Each may be a link, so `-h` keeps `chmod` on the entry itself, and `chmod -N`
+    /// clears one whose list also denies its owner `read`. The folder passed the folder checks,
+    /// so `chmod -h -N` opens it and clears an entry it would pass on to a file written in it,
+    /// and a lock on it would keep the rerun from deleting the files.
+    static func uncheckedFilesText(label: String, count: Int, kept: TokenAccounts.Kept) -> String {
+        let place = typedFolder(label: label)
+        return
+            "\(count) launch files of '\(label)' could not be checked and may hold a token.\(kept.sentence) Run `chmod -h -N \(place)`, and run `chmod -h -N` on each file directly in it, or `chmod -N` where that says Permission denied. Run `chflags -h nouchg,nouappnd \(place)` first if it is locked. Then run `agent-balancer remove \(label)` again."
     }
 }
 
@@ -650,10 +746,7 @@ extension LaunchFiles {
     /// How many names of a launch file's shape in the labels' folders `lstat` cannot check. Each
     /// may hold a token. Nothing is opened.
     static func uncheckedFileCount(context: ToolContext) -> Int {
-        let writer = NoFollowWriter(root: context.dataRoot)
-        return labels(context: context).reduce(0) {
-            $0 + writer.uncheckedCount(folders: folders(label: $1), of: isFileName)
-        }
+        labels(context: context).reduce(0) { $0 + uncheckedFileCount(context: context, label: $1) }
     }
 
     /// How many names of the writer's temporary shape in the labels' folders `lstat` cannot

@@ -936,6 +936,12 @@ extension NoFollowWriter {
     /// How many names directly in `<root>/<folders...>` that `shape` takes cannot be checked with
     /// `lstat`, such as in a folder the user cannot search. Nothing is opened.
     func uncheckedCount(folders: [String], of shape: (String) -> Bool) -> Int {
+        uncheckedNames(folders: folders, of: shape).count
+    }
+
+    /// The names directly in `<root>/<folders...>` that `shape` takes and `lstat` cannot check.
+    /// Nothing is opened.
+    func uncheckedNames(folders: [String], of shape: (String) -> Bool) -> [String] {
         let names = (try? listNames(folders: folders)) ?? []
         return names.filter { name in
             guard shape(name) else { return false }
@@ -945,7 +951,17 @@ extension NoFollowWriter {
             } catch {
                 return true
             }
-        }.count
+        }
+    }
+
+    /// Whether `<root>/<folders...>` opens through no-follow handles, passes the folder checks and
+    /// lets the user list it and search it.
+    func opensForSearch(folders: [String]) -> Bool {
+        guard let dir = try? NoFollowWriter.openFolder(root: root, folders: folders, create: false),
+            dir >= 0
+        else { return false }
+        defer { close(dir) }
+        return faccessat(dir, ".", R_OK | X_OK, AT_EACCESS) == 0
     }
 
     /// Deletes `<root>/<folders...>/<name>` only when `lstat` shows a regular file owned by the

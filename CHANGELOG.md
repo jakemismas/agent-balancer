@@ -466,3 +466,9 @@
   that links a library outside the system. `scripts/check-safety.sh` now fails a script under
   `scripts/` that sets pipefail and pipes into a reader that can stop early, such as `grep -q`,
   `grep -m` or `head`, and names the file, the line and the fix.
+- A newer push to a pull request cancels CI's run still in progress for that pull request's older
+  commit. A re-run does not cancel the run in progress: it waits for it, and a newer push cancels
+  it. A run started with Run workflow has a group of its own, so it never cancels, or is cancelled
+  by, another run. The release check fails when the check job's time limit is not 20 minutes, the
+  install job has no limit under 360 minutes, a job sets its own concurrency, another workflow is
+  also named ci, or CI's name, concurrency group or rule for cancelling changes.

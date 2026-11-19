@@ -7,6 +7,12 @@ on:
 permissions:
   contents: read
 
+# A run started with Run workflow has no pull request number, so its run id is a group of its own.
+# Only a first attempt cancels the run in progress; a re-run waits for it instead.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.run_attempt == '1' }}
+
 jobs:
   check:
     runs-on: macos-26

@@ -2,8 +2,9 @@ import Core
 import Foundation
 import Testing
 
-/// The release version rules, the release notes, the output folder guard and the check that the
-/// README and the release page agree with the packaging.
+/// The release version rules, the release notes, the output folder guard, the check that the
+/// README and the release page agree with the packaging, the packaging script's checks on what it
+/// made, and CI's time limits and concurrency group.
 @Suite struct ReleaseScriptTests {
     static func script(_ name: String) -> URL {
         Support.root.appendingPathComponent("scripts/\(name)")
@@ -408,5 +409,166 @@ import Testing
         let refusal = "package-release: the packaged tool links a library outside"
         #expect(out.status == (refuses ? 1 : 0), "\(printed)")
         #expect(printed.contains(refusal) == refuses, "\(printed)")
+    }
+
+    // MARK: CI's time limits and concurrency
+
+    static let ciGroup =
+        "${{ github.workflow }}-${{ github.event_name }}-"
+        + "${{ github.event.pull_request.number || github.run_id }}"
+    static let ciCancel = "${{ github.run_attempt == '1' }}"
+    static let ciConcurrency =
+        "concurrency:\n  group: \(ciGroup)\n  cancel-in-progress: \(ciCancel)\n"
+    static let ciConcurrencyInTheCheckJob =
+        "jobs:\n  check:\n    concurrency:\n      group: \(ciGroup)\n"
+        + "      cancel-in-progress: \(ciCancel)\n"
+    static let ciCheckJobGroup =
+        "    timeout-minutes: 20\n    concurrency:\n      group: ci-check\n"
+        + "      cancel-in-progress: false\n"
+    static let ciLastLine = "        run: brew uninstall local/ab/agent-balancer\n"
+    static let ciLastLineAndAThirdJob =
+        ciLastLine + "\n  lint:\n      runs-on: macos-26\n      concurrency: lint\n"
+        + "      steps:\n        - run: true\n"
+    static let lacksCheckLimit =
+        "must give its check job the line timeout-minutes: 20, unquoted with no comment"
+    static let lacksInstallLimit =
+        "must give its install job a line timeout-minutes: N, N from 1 to 359,"
+        + " unquoted with no comment"
+    static let lacksGroup = "must have the top-level concurrency line group: \(ciGroup)"
+    static let lacksCancel =
+        "must have the top-level concurrency line cancel-in-progress: \(ciCancel)"
+
+    @Test func theRealCIPassesWithItsGroupBeforeItsJobs() throws {
+        let ci = try String(
+            contentsOf: Support.root.appendingPathComponent(".github/workflows/ci.yml"),
+            encoding: .utf8)
+        #expect(ci.contains("\n\(Self.ciConcurrency)\njobs:\n  check:\n"))
+        let out = try Self.runCheck(in: Support.root)
+        #expect(out.status == 0, "\(String(decoding: out.stderr, as: UTF8.self))")
+        #expect(String(decoding: out.stdout, as: UTF8.self) == "check-release: ok\n")
+    }
+
+    @Test(arguments: [
+        ("    timeout-minutes: 20\n", "", ReleaseScriptTests.lacksCheckLimit),
+        (
+            "    timeout-minutes: 20\n", "    timeout-minutes: 19\n",
+            ReleaseScriptTests.lacksCheckLimit
+        ),
+        (
+            "    timeout-minutes: 20\n", "    timeout-minutes: 21\n",
+            ReleaseScriptTests.lacksCheckLimit
+        ),
+        (
+            "    timeout-minutes: 20\n", "    timeout-minutes: 0\n",
+            ReleaseScriptTests.lacksCheckLimit
+        ),
+        (
+            "    timeout-minutes: 20\n", "    timeout-minutes: 360\n",
+            ReleaseScriptTests.lacksCheckLimit
+        ),
+        (
+            "    timeout-minutes: 20\n", "    timeout-minutes: \"20\"\n",
+            ReleaseScriptTests.lacksCheckLimit
+        ),
+        (
+            "    timeout-minutes: 20\n    steps:\n",
+            "    steps:\n      - name: Limit\n        timeout-minutes: 20\n        run: true\n",
+            ReleaseScriptTests.lacksCheckLimit
+        ),
+        ("    timeout-minutes: 30\n", "", ReleaseScriptTests.lacksInstallLimit),
+        (
+            "    timeout-minutes: 30\n", "    timeout-minutes: 0\n",
+            ReleaseScriptTests.lacksInstallLimit
+        ),
+        (
+            "    timeout-minutes: 30\n", "    timeout-minutes: 360\n",
+            ReleaseScriptTests.lacksInstallLimit
+        ),
+        (
+            "    timeout-minutes: 30\n", "    timeout-minutes: 1000\n",
+            ReleaseScriptTests.lacksInstallLimit
+        ),
+        (
+            "    timeout-minutes: 30\n    steps:\n",
+            "    steps:\n      - name: Limit\n        timeout-minutes: 30\n        run: true\n",
+            ReleaseScriptTests.lacksInstallLimit
+        ),
+        (ReleaseScriptTests.ciConcurrency, "", ReleaseScriptTests.lacksGroup),
+        ("  group: \(ReleaseScriptTests.ciGroup)\n", "", ReleaseScriptTests.lacksGroup),
+        ("|| github.run_id }}\n", "|| github.ref }}\n", ReleaseScriptTests.lacksGroup),
+        (
+            "|| github.run_id }}\n", "|| github.run_id }}-${{ github.sha }}\n",
+            ReleaseScriptTests.lacksGroup
+        ),
+        ("\nconcurrency:\n", "\nenv:\n", ReleaseScriptTests.lacksGroup),
+        (
+            "\(ReleaseScriptTests.ciConcurrency)\njobs:\n  check:\n",
+            ReleaseScriptTests.ciConcurrencyInTheCheckJob, ReleaseScriptTests.lacksGroup
+        ),
+        (
+            "  cancel-in-progress: \(ReleaseScriptTests.ciCancel)\n", "",
+            ReleaseScriptTests.lacksCancel
+        ),
+        (
+            "  cancel-in-progress: \(ReleaseScriptTests.ciCancel)\n",
+            "  cancel-in-progress: true\n",
+            ReleaseScriptTests.lacksCancel
+        ),
+        (
+            "  cancel-in-progress: \(ReleaseScriptTests.ciCancel)\n",
+            "  cancel-in-progress: false\n",
+            ReleaseScriptTests.lacksCancel
+        ),
+        (
+            "    timeout-minutes: 20\n", ReleaseScriptTests.ciCheckJobGroup,
+            "must not set concurrency in its check job"
+        ),
+        (
+            "    timeout-minutes: 30\n", "    timeout-minutes: 30\n    concurrency: ci-install\n",
+            "must not set concurrency in its install job"
+        ),
+        (
+            ReleaseScriptTests.ciLastLine, ReleaseScriptTests.ciLastLineAndAThirdJob,
+            "must not set concurrency in its lint job"
+        ),
+        ("name: ci\n", "name: checks\n", "must have the top-level line name: ci"),
+    ])
+    func aCIWithoutItsLimitsOrConcurrencyFails(from: String, to: String, names: String) throws {
+        let fm = FileManager.default
+        let root = try Support.makeTempDir()
+        defer { try? fm.removeItem(at: root) }
+        try Self.copy(to: root)
+        let url = root.appendingPathComponent(".github/workflows/ci.yml")
+        let text = try String(contentsOf: url, encoding: .utf8)
+        #expect(text.components(separatedBy: from).count == 2, "once in ci.yml: \(from)")
+        try text.replacingOccurrences(of: from, with: to)
+            .write(to: url, atomically: true, encoding: .utf8)
+        let out = try Self.runCheck(in: root)
+        let printed = String(decoding: out.stderr, as: UTF8.self)
+        #expect(out.status == 1, "\(printed)")
+        #expect(printed.contains("FAIL release: .github/workflows/ci.yml \(names)"), "\(printed)")
+    }
+
+    // Group names ignore case, so a copy of CI under any case of its name would share CI's groups.
+    @Test(arguments: [
+        ("lint.yml", "name: ci\n", true), ("lint.yaml", "name: CI\n", true),
+        ("lint.yml", "name: \"ci\"\n", true), ("lint.yml", "name: 'Ci' # same group\n", true),
+        ("lint.yml", "name: lint\n", false), ("lint.yml", "name: ci-lint\n", false),
+    ])
+    func aSecondWorkflowNamedCIIsRefused(file: String, nameLine: String, refused: Bool) throws {
+        let fm = FileManager.default
+        let root = try Support.makeTempDir()
+        defer { try? fm.removeItem(at: root) }
+        try Self.copy(to: root)
+        let workflows = root.appendingPathComponent(".github/workflows")
+        let ci = try String(contentsOf: workflows.appendingPathComponent("ci.yml"), encoding: .utf8)
+        #expect(ci.hasPrefix("name: ci\n"))
+        try ci.replacingOccurrences(of: "name: ci\n", with: nameLine)
+            .write(to: workflows.appendingPathComponent(file), atomically: true, encoding: .utf8)
+        let out = try Self.runCheck(in: root)
+        let printed = String(decoding: out.stderr, as: UTF8.self)
+        let refusal = "FAIL release: .github/workflows/\(file) must not be named ci"
+        #expect(out.status == (refused ? 1 : 0), "\(printed)")
+        #expect(printed.contains(refusal) == refused, "\(printed)")
     }
 }

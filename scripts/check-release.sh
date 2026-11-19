@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Checks that the README's quick start, docs/RELEASING.md, the release workflow and the formula
 # template agree with what scripts/package-release.sh makes: the formula name, the tap, the artifact
-# names, the attestation line and the skill path.
+# names, the attestation line and the skill path. It also checks that CI keeps its jobs' time
+# limits and its concurrency group, with no job-level group and no other workflow named ci.
 # Usage: check-release.sh [root]
 set -euo pipefail
 # Under pipefail, a pipe into grep -q or head fails when its writer is cut off, so none is used.
@@ -12,13 +13,31 @@ cd "$ROOT"
 fail=0
 bad() { echo "FAIL release: $1" >&2; fail=1; }
 has() { grep -qF -- "$2" "$1" || bad "$1 lacks: $2"; }
+# Prints the lines nested under the first input line equal to $1, skipping blanks and comments.
+block() {
+  awk -v want="$1" '
+    !on { if ($0 == want) { on = 1; match($0, /[^ ]/); top = RSTART - 1 }; next }
+    /^[[:space:]]*(#|$)/ { next }
+    { match($0, /[^ ]/); if (RSTART - 1 <= top) exit; print }
+  '
+}
+# Prints each job of the jobs block on stdin that sets the job-level key $1, at any indentation.
+jobs_setting() {
+  awk -v key="$1" '
+    { match($0, /[^ ]/); d = RSTART - 1; text = substr($0, RSTART) }
+    NR == 1 || d <= top { top = d; job = text; sub(/:.*/, "", job); child = -1; next }
+    child < 0 { child = d }
+    d == child && (text == key ":" || index(text, key ": ") == 1) { print job }
+  '
+}
 
 PKG=scripts/package-release.sh
 FORMULA=packaging/agent-balancer.rb
 WORKFLOW=.github/workflows/release.yml
+CI_WORKFLOW=.github/workflows/ci.yml
 README=README.md
 DOC=docs/RELEASING.md
-for f in "$PKG" "$FORMULA" "$WORKFLOW" "$README" "$DOC"; do
+for f in "$PKG" "$FORMULA" "$WORKFLOW" "$CI_WORKFLOW" "$README" "$DOC"; do
   [ -f "$f" ] || { echo "FAIL release: missing $f" >&2; exit 1; }
 done
 
@@ -98,8 +117,42 @@ for want in "$APP_ZIP" "${CLI_TEMPLATE//\$VERSION/<version>}.tar.gz" 'SHA256SUMS
 done
 
 # CI installs the formula the script writes.
-has .github/workflows/ci.yml 'build/release/agent-balancer.rb'
-has .github/workflows/ci.yml "brew install local/ab/$NAME"
+has "$CI_WORKFLOW" 'build/release/agent-balancer.rb'
+has "$CI_WORKFLOW" "brew install local/ab/$NAME"
+
+# Without a limit a stalled job runs to GitHub's 360-minute default; from 360 up is no limit.
+ci_jobs="$(block 'jobs:' <"$CI_WORKFLOW")"
+check_job="$(block '  check:' <<<"$ci_jobs")"
+install_job="$(block '  install:' <<<"$ci_jobs")"
+[ "$(sed -n 's/^    timeout-minutes: //p' <<<"$check_job")" = 20 ] \
+  || bad "$CI_WORKFLOW must give its check job the line timeout-minutes: 20, unquoted with no comment"
+case "$(sed -n 's/^    timeout-minutes: //p' <<<"$install_job")" in
+  [1-9] | [1-9][0-9] | [12][0-9][0-9] | 3[0-5][0-9]) ;;
+  *) bad "$CI_WORKFLOW must give its install job a line timeout-minutes: N, N from 1 to 359, unquoted with no comment" ;;
+esac
+
+# Pinned whole: without its run id fallback, runs started with Run workflow would share a group.
+CI_GROUP='${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}'
+# Only a first attempt may cancel, so a re-run never stops the run in progress.
+CI_CANCEL="\${{ github.run_attempt == '1' }}"
+ci_concurrency="$(block 'concurrency:' <"$CI_WORKFLOW")"
+grep -qxF "  group: $CI_GROUP" <<<"$ci_concurrency" \
+  || bad "$CI_WORKFLOW must have the top-level concurrency line group: $CI_GROUP"
+grep -qxF "  cancel-in-progress: $CI_CANCEL" <<<"$ci_concurrency" \
+  || bad "$CI_WORKFLOW must have the top-level concurrency line cancel-in-progress: $CI_CANCEL"
+
+# A job-level group, or another workflow named ci in any case, lets other runs stall or cancel CI's.
+while IFS= read -r job; do
+  [ -z "$job" ] || bad "$CI_WORKFLOW must not set concurrency in its $job job"
+done <<<"$(jobs_setting concurrency <<<"$ci_jobs")"
+[ "$(sed -n 's/^name: //p' "$CI_WORKFLOW")" = ci ] \
+  || bad "$CI_WORKFLOW must have the top-level line name: ci"
+for wf in .github/workflows/*.yml .github/workflows/*.yaml; do
+  [ -f "$wf" ] && [ "$wf" != "$CI_WORKFLOW" ] || continue
+  if grep -E "^name:[[:space:]]*([Cc][Ii]|\"[Cc][Ii]\"|'[Cc][Ii]')([[:space:]]+#.*)?[[:space:]]*\$" "$wf" >/dev/null; then
+    bad "$wf must not be named ci: its runs would share CI's concurrency groups"
+  fi
+done
 
 if [ "$fail" -ne 0 ]; then exit 1; fi
 echo "check-release: ok"

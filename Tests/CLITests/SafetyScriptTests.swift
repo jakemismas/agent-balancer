@@ -2,7 +2,7 @@ import Foundation
 import Testing
 
 /// Plants one violation per rule in a temporary tree and runs the safety script against it.
-/// Every planted string is assembled here at runtime from halves.
+/// Every planted string that a rule scans this file for is assembled here at runtime from halves.
 @Suite struct SafetyScriptTests {
     struct Plant: Sendable {
         let rule: String
@@ -341,6 +341,39 @@ import Testing
             Plant(
                 rule: "settingsread", path: "Sources/Core/Picker/RunService.swift",
                 body: "let u = context.default" + "ClaudeFolder\n"),
+        ] + pipePlants()
+    }
+
+    /// A script that sets pipefail with `set` and runs `lines`.
+    static func script(_ lines: [String], set: String = "set -euo pipefail") -> String {
+        (["#!/usr/bin/env bash", set] + lines).joined(separator: "\n") + "\n"
+    }
+
+    /// Pipes into a reader that can stop before it reads all its input: on one line, across a
+    /// line continuation, inside `$( )`, `if`, `while`, `||` and `&&`, and each reader the rule
+    /// knows.
+    static func pipePlants() -> [Plant] {
+        let shapes: [[String]] = [
+            [#"printf '%s\n' "$a" | grep -q x"#],
+            [#"printf '%s\n' "$a" | grep -m 1 x"#],
+            [#"v="$(sed -n 1p f | head -n 1)""#],
+            [#"if otool -L f | tail -n +2 \"#, "  | grep -qE x; then exit 1; fi"],
+            [#"printf x | \"#, "  head -n 1"],
+            ["printf x |", "  grep -m1 x"],
+            ["x=$(printf x |", "  # the first line", "  head -n 1)"],
+            [#"[ -n "$a" ] && printf x | grep -l x || exit 1"#],
+            ["while printf x | grep -q x; do break; done"],
+            ["printf x | LC_ALL=C /usr/bin/grep --quiet x"],
+            ["printf x | sed -n '/x/{p;q;}'"],
+            ["printf x | awk '{ print; exit }'"],
+            ["printf x | cmp -s - f"],
+            ["printf x | read -r first"],
+            ["printf x | while read -r l; do", #"  [ -n "$l" ] && break"#, "done"],
+        ]
+        return shapes.map { Plant(rule: "pipe", path: "scripts/x.sh", body: script($0)) } + [
+            Plant(
+                rule: "pipe", path: "scripts/x.sh",
+                body: script(["printf x | head -1"], set: "set -o pipefail"))
         ]
     }
 
@@ -458,6 +491,68 @@ import Testing
         let result = try Self.runScript(root: root)
         #expect(result.status == 1)
         #expect(String(decoding: result.stdout, as: UTF8.self).contains("FAIL layout"))
+    }
+
+    @Test func aPipeIntoAnEarlyReaderNamesTheFileTheLineAndTheFix() throws {
+        let root = try Support.makeTempDir()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Self.write(
+            Plant(
+                rule: "none", path: "scripts/one.sh",
+                body: Self.script([#"printf '%s\n' "$a" | grep -q x"#])), into: root)
+        try Self.write(
+            Plant(
+                rule: "none", path: "scripts/two.sh",
+                body: Self.script([
+                    #"if otool -L f | tail -n +2 \"#, "  | grep -qE x; then exit 1; fi",
+                    "v=$(printf x | head -n 1)",
+                ])), into: root)
+        let result = try Self.runScript(root: root)
+        let text = String(decoding: result.stdout, as: UTF8.self)
+        let fix =
+            " under pipefail; use a here-string or a reader that reads all its input"
+            + " (grep ... >/dev/null, sed -n 1p)\n"
+        #expect(result.status == 1, "\(text)")
+        #expect(text.contains("FAIL pipe: scripts/one.sh:3 pipes into grep -q" + fix), "\(text)")
+        #expect(text.contains("FAIL pipe: scripts/two.sh:4 pipes into grep -q" + fix), "\(text)")
+        #expect(text.contains("FAIL pipe: scripts/two.sh:5 pipes into head" + fix), "\(text)")
+    }
+
+    /// The fixed forms pass: a here-string, readers that read all their input, an or that is not
+    /// a pipe, a pipe in a comment, in quotes or in a here-document, an exit that runs after the
+    /// input ends, a loop that reads every line, and a script that does not set pipefail.
+    @Test func pipesIntoReadersThatReadAllTheirInputPass() throws {
+        let root = try Support.makeTempDir()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let fixed: [[String]] = [
+            [#"grep -qx "$want" <<<"$listing" || exit 1"#],
+            [#"printf '%s\n' "$a" | grep x >/dev/null"#],
+            ["v=$(sed -n 's/x/y/p' f | sed -n 1p)"],
+            ["if grep -nE x f | grep -v y | grep . >/dev/null; then exit 1; fi"],
+            [
+                #"if otool -L f | tail -n +2 | awk '{ print $1 }' \"#,
+                "  | grep -vE '^/usr/lib/' | grep . >/dev/null; then exit 1; fi",
+            ],
+            ["printf x || grep -q x f"],
+            ["# printf x | grep -q x"],
+            [#"echo 'a | head -n 1' "b | grep -q c""#],
+            ["cat <<'EOF'", "x | head -n 1", "EOF"],
+            ["printf x | awk '/x/ { n++ } END { exit n == 0 }'"],
+            [#"printf x | while read -r l; do echo "$l"; done"#],
+            [#"while read -r l; do break; done <<<"$a""#],
+            ["printf x | grep -c x | tail -n +1"],
+        ]
+        for (n, lines) in fixed.enumerated() {
+            try Self.write(
+                Plant(rule: "none", path: "scripts/fixed\(n).sh", body: Self.script(lines)),
+                into: root)
+        }
+        try Self.write(
+            Plant(
+                rule: "none", path: "scripts/plain.sh",
+                body: Self.script(["printf x | grep -q x"], set: "set -eu")), into: root)
+        let result = try Self.runScript(root: root)
+        #expect(result.status == 0, "\(String(decoding: result.stdout, as: UTF8.self))")
     }
 
     @Test func realTreePasses() throws {

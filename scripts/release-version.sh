@@ -11,7 +11,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
 
 current() {
-  sed -n 's/.*static let current = "\(.*\)".*/\1/p' "$ROOT/Sources/Core/Version.swift" | head -n 1
+  sed -n 's/.*static let current = "\(.*\)".*/\1/p' "$ROOT/Sources/Core/Version.swift" | sed -n 1p
 }
 
 case "${1:-}" in

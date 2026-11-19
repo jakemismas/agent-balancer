@@ -372,10 +372,10 @@ check_part() {
 STATUS_TIME='(-|(Mon|Tue|Wed|Thu|Fri|Sat|Sun) (1[0-2]|[1-9]):[0-5][0-9] (AM|PM))'
 STATUS_PERCENT='(n/a|(100|[1-9]?[0-9])\.[0-9]%)'
 status_line() {
-  printf '%s\n' "$1" | grep -qE \
+  grep -qE \
     -e "^($LABELS) \[(login|token|folder), (main|pool)\] (ok|limited|error|ended) week $STATUS_PERCENT 5h $STATUS_PERCENT resets $STATUS_TIME in use ([0-9]+|unknown)\$" \
     -e "^  limited \((weekly|fiveHour)\) until $STATUS_TIME\$" \
-    -e "^next( for fable)?: ($LABELS|none)\$"
+    -e "^next( for fable)?: ($LABELS|none)\$" <<<"$1"
 }
 
 for doc in $DOCS; do

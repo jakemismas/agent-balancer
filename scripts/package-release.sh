@@ -111,13 +111,13 @@ sed -e "s|@OWNER@|$OWNER|g" \
 if grep -q '@[A-Z0-9]*@' "$OUT/agent-balancer.rb"; then die "the formula still holds a placeholder"; fi
 if command -v ruby >/dev/null 2>&1; then ruby -c "$OUT/agent-balancer.rb" >/dev/null; fi
 # The formula installs the prebuilt tool: no build step and no dependency that needs developer tools.
-if grep -nE 'swift|xcode|:build|system "' "$OUT/agent-balancer.rb" | grep -v '^[0-9]*: *#' | grep -q .; then
+if grep -nE 'swift|xcode|:build|system "' "$OUT/agent-balancer.rb" | grep -v '^[0-9]*: *#' | grep . >/dev/null; then
   die "the formula builds from source or needs developer tools"
 fi
 
 listing="$(tar -tzf "$OUT/$CLI_ARCHIVE")"
 for want in "$CLI_NAME/bin/agent-balancer" "$CLI_NAME/skill/agent-balancer/SKILL.md"; do
-  printf '%s\n' "$listing" | grep -qx "$want" || die "$CLI_ARCHIVE lacks $want"
+  grep -qx "$want" <<<"$listing" || die "$CLI_ARCHIVE lacks $want"
 done
 
 CHECK="$STAGE/check"
@@ -138,7 +138,7 @@ min="$(plutil -extract LSMinimumSystemVersion raw "$CHECK/app/AgentBalancerBar.a
 
 # The tool links only system libraries, so a Mac with no developer tools runs it.
 if otool -L "$CHECK/cli/$CLI_NAME/bin/agent-balancer" | tail -n +2 | awk '{ print $1 }' \
-  | grep -vE '^(/usr/lib/|/System/Library/)' | grep -q .; then
+  | grep -vE '^(/usr/lib/|/System/Library/)' | grep . >/dev/null; then
   die "the packaged tool links a library outside /usr/lib and /System/Library"
 fi
 

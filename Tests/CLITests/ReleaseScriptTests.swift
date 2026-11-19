@@ -282,4 +282,131 @@ import Testing
             printed.contains("FAIL release: .github/workflows/ci.yml has an action not pinned"),
             "\(printed)")
     }
+
+    // MARK: The packaging script's checks on what it made
+
+    static func packagingText() throws -> [String] {
+        try String(contentsOf: script("package-release.sh"), encoding: .utf8)
+            .components(separatedBy: "\n")
+    }
+
+    /// The lines of the packaging script from the first that starts with `start` through the next
+    /// line that is `end`: one of its checks as the script runs it.
+    static func packagingLines(from start: String, to end: String) throws -> String {
+        let lines = try packagingText()
+        let first = try #require(lines.firstIndex { $0.hasPrefix(start) }, "\(start)")
+        let last = try #require(lines[first...].firstIndex(of: end), "\(end) after \(start)")
+        return lines[first...last].joined(separator: "\n")
+    }
+
+    /// Runs `check` with the packaging script's shell options and `die` on the files in `dir`,
+    /// which stands for the output folder. `otool` prints `dir/otool.txt`.
+    static func runPackagingCheck(_ check: String, in dir: URL) throws -> Support.Output {
+        let lines = try packagingText()
+        let set = try #require(lines.first { $0.hasPrefix("set -") })
+        let die = try #require(lines.first { $0.hasPrefix("die() ") })
+        let harness = [
+            set, die, #"otool() { cat "$OUT/otool.txt"; }"#,
+            #"OUT="$1" CHECK="$1/check" CLI_NAME=agent-balancer-1.0.0-arm64"#,
+            #"CLI_ARCHIVE="$CLI_NAME.tar.gz""#, check, "echo checked",
+        ].joined(separator: "\n")
+        return try Support.run(
+            URL(fileURLWithPath: "/bin/bash"), ["-c", harness, "check", dir.path],
+            env: ["PATH": "/usr/bin:/bin"])
+    }
+
+    /// The formula template with `line` added to its install step, once or as more than a
+    /// megabyte, and whether the check refuses it.
+    @Test(arguments: [
+        ("", false, false), ("    system \"make\"\n", false, true),
+        ("    system \"swift\", \"build\"\n", true, true),
+        ("    # swift and xcode are not needed\n", true, false),
+    ])
+    func theFormulaCheckRefusesABuildStepAtAnyLength(line: String, megabyte: Bool, refuses: Bool)
+        throws
+    {
+        let fm = FileManager.default
+        let dir = try Support.makeTempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let template = try String(
+            contentsOf: Support.root.appendingPathComponent("packaging/agent-balancer.rb"),
+            encoding: .utf8)
+        let install = "  def install\n"
+        #expect(template.contains(install))
+        try template.replacingOccurrences(
+            of: install, with: install + (megabyte ? Self.overAMegabyte(of: line) : line)
+        ).write(
+            to: dir.appendingPathComponent("agent-balancer.rb"), atomically: true, encoding: .utf8)
+        let out = try Self.runPackagingCheck(
+            Self.packagingLines(from: "# The formula installs the prebuilt tool", to: "fi"),
+            in: dir)
+        let printed = String(decoding: out.stderr, as: UTF8.self)
+        #expect(out.status == (refuses ? 1 : 0), "\(printed)")
+        #expect(
+            printed.contains("package-release: the formula builds from source") == refuses,
+            "\(printed)")
+    }
+
+    /// A real archive that lists the tool, the skill file when `holdsSkill`, then more than a
+    /// megabyte of other entries.
+    @Test(arguments: [true, false])
+    func theListingCheckPassesAnArchiveThatHoldsTheFilesAtAnyLength(holdsSkill: Bool) throws {
+        let fm = FileManager.default
+        let dir = try Support.makeTempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let name = "agent-balancer-1.0.0-arm64"
+        let skill = "\(name)/skill/agent-balancer/SKILL.md"
+        let other = "\(name)/skill/agent-balancer/" + String(repeating: "a", count: 200) + ".md"
+        for file in ["\(name)/bin/agent-balancer", skill, other] {
+            let url = dir.appendingPathComponent("stage/\(file)")
+            try fm.createDirectory(
+                at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data().write(to: url)
+        }
+        let names = "\(name)/bin/agent-balancer\n" + (holdsSkill ? "\(skill)\n" : "")
+        try (names + Self.overAMegabyte(of: other + "\n")).write(
+            to: dir.appendingPathComponent("names.txt"), atomically: true, encoding: .utf8)
+        let tar = try Support.run(
+            URL(fileURLWithPath: "/usr/bin/tar"),
+            [
+                "-czf", dir.appendingPathComponent("\(name).tar.gz").path, "-C",
+                dir.appendingPathComponent("stage").path, "-T",
+                dir.appendingPathComponent("names.txt").path,
+            ], env: ["PATH": "/usr/bin:/bin"])
+        #expect(tar.status == 0, "\(String(decoding: tar.stderr, as: UTF8.self))")
+        let out = try Self.runPackagingCheck(
+            Self.packagingLines(from: "listing=", to: "done"), in: dir)
+        let printed = String(decoding: out.stderr, as: UTF8.self)
+        #expect(out.status == (holdsSkill ? 0 : 1), "\(printed)")
+        #expect(
+            printed.contains("package-release: \(name).tar.gz lacks \(skill)") == !holdsSkill,
+            "\(printed)")
+    }
+
+    /// The tool's library list with `line` after its first library, once or as more than a
+    /// megabyte, and whether the check refuses it.
+    @Test(arguments: [
+        ("\t/usr/lib/libc++.1.dylib (compatibility version 1.0.0)\n", false, false),
+        ("\t/opt/homebrew/lib/libextra.dylib (compatibility version 1.0.0)\n", false, true),
+        ("\t/opt/homebrew/lib/libextra.dylib (compatibility version 1.0.0)\n", true, true),
+        ("\t/System/Library/Frameworks/AppKit.framework/AppKit (current 1)\n", true, false),
+    ])
+    func theLibraryCheckRefusesALibraryOutsideTheSystemAtAnyLength(
+        line: String, megabyte: Bool, refuses: Bool
+    ) throws {
+        let fm = FileManager.default
+        let dir = try Support.makeTempDir()
+        defer { try? fm.removeItem(at: dir) }
+        let first =
+            "bin/agent-balancer:\n\t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0)\n"
+        try (first + (megabyte ? Self.overAMegabyte(of: line) : line)).write(
+            to: dir.appendingPathComponent("otool.txt"), atomically: true, encoding: .utf8)
+        let out = try Self.runPackagingCheck(
+            Self.packagingLines(from: "# The tool links only system libraries", to: "fi"),
+            in: dir)
+        let printed = String(decoding: out.stderr, as: UTF8.self)
+        let refusal = "package-release: the packaged tool links a library outside"
+        #expect(out.status == (refuses ? 1 : 0), "\(printed)")
+        #expect(printed.contains(refusal) == refuses, "\(printed)")
+    }
 }

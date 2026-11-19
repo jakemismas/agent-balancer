@@ -9,7 +9,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
 cd "$ROOT"
 
 APP="build/AgentBalancerBar.app"
-VERSION="$(sed -n 's/.*static let current = "\(.*\)".*/\1/p' Sources/Core/Version.swift | head -n 1)"
+VERSION="$(sed -n 's/.*static let current = "\(.*\)".*/\1/p' Sources/Core/Version.swift | sed -n 1p)"
 VERSION="${VERSION:-0.0.0}"
 
 swift build -c release --product AgentBalancerBar

@@ -145,6 +145,174 @@ for t in $TEXT_DIRS scripts .github $ROOT_DOCS Package.swift; do
   report attribution "$hits"
 done
 
+# A script under scripts/ that sets pipefail never pipes into a reader that can stop before it
+# reads all its input: grep -q, -m or -l, head, sed with q, awk with exit outside END, cmp, read or
+# a loop that breaks. When the reader stops, the writer dies of SIGPIPE and pipefail fails the
+# pipe, so a check takes a match for none. The scan reads quotes, comments, $( ), here-documents
+# and line continuations as the shell does, so a pipe split across lines is still found.
+PIPE_SCAN='
+  BEGIN {
+    d = 1; st[1] = "C"; last = ";"
+    fix = "use a here-string or a reader that reads all its input (grep ... >/dev/null, sed -n 1p)"
+  }
+  # Frames: C code (also inside $( )), M $(( )), B backquotes, S single quotes, A $-single quotes,
+  # D double quotes, H a here-document body that expands, Q one that does not.
+  function push(t) { d++; st[d] = t; par[d] = 0 }
+  # In quotes, an operator character becomes "_" in code, so code holds only real pipes and command
+  # ends; raw keeps the text at the same offsets.
+  function lit(c) { return index("|;&(){}<>`", c) ? "_" : c }
+  function put(c, r) { oc = oc c; orw = orw r }
+  function here(t,    dash, quoted, w) {
+    dash = 0; quoted = 1
+    if (substr(t, 1, 1) == "-") { dash = 1; t = substr(t, 2) }
+    sub(/^[ \t]+/, "", t)
+    if (match(t, "^" q "[^" q "]*" q) || match(t, /^"[^"]*"/)) w = substr(t, 2, RLENGTH - 2)
+    else if (match(t, /^\\[A-Za-z_][A-Za-z0-9_]*/)) w = substr(t, 2, RLENGTH - 1)
+    else if (match(t, /^[A-Za-z_][A-Za-z0-9_]*/)) { w = substr(t, 1, RLENGTH); quoted = 0 }
+    else return
+    hn++; hw[hn] = w; hq[hn] = quoted; hd[hn] = dash
+  }
+  function nexthere(    k) {
+    if (hn == 0) return
+    push(hq[1] ? "Q" : "H"); hdel[d] = hw[1]; hdash[d] = hd[1]
+    for (k = 1; k < hn; k++) { hw[k] = hw[k + 1]; hq[k] = hq[k + 1]; hd[k] = hd[k + 1] }
+    hn--
+  }
+  {
+    s = $0; n = length(s); oc = ""; orw = ""; cont = 0
+    if (st[d] == "H" || st[d] == "Q") {
+      t = s
+      if (hdash[d]) sub(/^\t+/, "", t)
+      if (t == hdel[d]) { d--; cl[NR] = "\n"; rl[NR] = "\n"; nexthere(); next }
+      if (st[d] == "Q") { cl[NR] = "\n"; rl[NR] = "\n"; next }
+    }
+    for (i = 1; i <= n; i++) {
+      c = substr(s, i, 1); c2 = substr(s, i + 1, 1); top = st[d]
+      if (top == "S") { if (c == q) d--; put(lit(c), c); continue }
+      if (c == "\\") {
+        if (i == n) { cont = 1; continue }
+        put(lit(c) lit(c2), c c2); i++; continue
+      }
+      if (top == "A") { if (c == q) d--; put(lit(c), c); continue }
+      if (top == "D" || top == "H") {
+        if (c == "\"" && top == "D") { d--; put(c, c); continue }
+        if (c == "$" && c2 == "(") { push(substr(s, i + 2, 1) == "(" ? "M" : "C"); put(c c2, c c2); i++; continue }
+        if (c == "`") { push("B"); put(c, c); continue }
+        put(lit(c), c); continue
+      }
+      if (c == q) { push("S"); put(c, c); continue }
+      if (c == "$" && c2 == q) { push("A"); put(c c2, c c2); i++; continue }
+      if (c == "\"") { push("D"); put(c, c); continue }
+      if (c == "`") { if (top == "B") d--; else push("B"); put(c, c); continue }
+      if (c == "$" && c2 == "(") { push(substr(s, i + 2, 1) == "(" ? "M" : "C"); put(c c2, c c2); i++; continue }
+      if (d > 1 && (top == "C" || top == "M")) {
+        if (c == "(") par[d]++
+        else if (c == ")" && par[d]-- == 0) { d--; put(c, c); continue }
+      }
+      if (c == "#" && (i == 1 || index(" \t;&|()", substr(s, i - 1, 1)))) break
+      if (c == "<" && c2 == "<" && top != "M" && substr(s, i + 2, 1) != "<" && substr(s, i - 1, 1) != "<") here(substr(s, i + 2))
+      put(c, c)
+    }
+    top = st[d]
+    if (top == "C" || top == "M" || top == "B") {
+      t = oc; sub(/[ \t]+$/, "", t)
+      if (t != "") last = substr(t, length(t))
+      # After a backslash, a pipe, an and-or operator or an open paren the command goes on.
+      if (cont || index("|&(", last)) put("\n", "\n")
+      else { put(";\n", ";\n"); last = ";" }
+    } else put("\n", "\n")
+    cl[NR] = oc; rl[NR] = orw
+    if (top == "C" || top == "M" || top == "B") nexthere()
+  }
+  function grepkind(args,    w, nw, k, j, ch) {
+    nw = split(args, w, /[ \t\n]+/)
+    for (k = 1; k <= nw; k++) {
+      if (w[k] == "--") break
+      if (w[k] ~ /^--(quiet|silent)$/) return "grep -q"
+      if (w[k] ~ /^--max-count/) return "grep -m"
+      if (w[k] ~ /^--files-with/) return "grep -l"
+      if (w[k] !~ /^-[A-Za-z0-9]/) continue
+      for (j = 2; j <= length(w[k]); j++) {
+        ch = substr(w[k], j, 1)
+        if (ch == "q") return "grep -q"
+        if (ch == "m") return "grep -m"
+        if (ch == "l" || ch == "L") return "grep -l"
+        # These take a value, the rest of the word or the next one.
+        if (index("efABCdD", ch)) { if (j == length(w[k])) k++; break }
+      }
+    }
+    return ""
+  }
+  function sedq(r) {
+    gsub(/"/, "", r); gsub(q, "", r)
+    return r ~ /(^|[;{} \t\n0-9$\/])[qQ][0-9]*[ \t]*([;}\n]|$)/
+  }
+  # An exit in END runs after all the input is read.
+  function awkexit(r) {
+    if (match(r, /(^|[^A-Za-z0-9_])END[ \t\n]*[{]/)) r = substr(r, 1, RSTART)
+    return r ~ /(^|[^A-Za-z0-9_])(exit|nextfile)([^A-Za-z0-9_]|$)/
+  }
+  # Whether the loop that starts at offset s of code leaves before done.
+  function breaks(s,    t, depth, cmd, w, nw, k) {
+    t = substr(code, s); depth = 0
+    while (t != "") {
+      if (match(t, /[;&|(){}\n]/)) { cmd = substr(t, 1, RSTART - 1); t = substr(t, RSTART + 1) }
+      else { cmd = t; t = "" }
+      nw = split(cmd, w, /[ \t]+/)
+      for (k = 1; k <= nw; k++) {
+        if (w[k] == "" || w[k] ~ /^(then|else|elif|if|while|until|!)$/) continue
+        if (w[k] == "do") { depth++; continue }
+        if (w[k] == "done" && --depth <= 0) return 0
+        if (depth > 0 && w[k] ~ /^(break|exit|return)$/) return 1
+        break
+      }
+    }
+    return 0
+  }
+  # The command after the pipe at offset s of code, past assignments and command or env.
+  function reader(s,    t, w, name, a, e, args, rargs, kind, ln) {
+    t = substr(code, s)
+    while (1) {
+      if (match(t, /^[ \t\n]+/)) { s += RLENGTH; t = substr(t, RLENGTH + 1) }
+      if (!match(t, /^[^ \t\n;&|()<>]+/)) return
+      w = substr(t, 1, RLENGTH)
+      if (w !~ /^[A-Za-z_][A-Za-z0-9_]*=/ && w != "command" && w != "env" && w != "exec") break
+      s += RLENGTH; t = substr(t, RLENGTH + 1)
+    }
+    name = w; sub(/.*\//, "", name)
+    a = s + length(w)
+    e = match(substr(code, a), /[;&|)]/) ? a + RSTART - 1 : length(code) + 1
+    args = substr(code, a, e - a); rargs = substr(raw, a, e - a)
+    kind = ""
+    if (name ~ /^[ef]?grep$/) kind = grepkind(args)
+    else if (name == "head" || name == "cmp" || name == "read") kind = name
+    else if (name == "sed" && sedq(rargs)) kind = "sed with q"
+    else if (name ~ /^[gmn]?awk$/ && awkexit(rargs)) kind = "awk with exit"
+    else if ((name == "while" || name == "until") && breaks(a)) kind = "a loop that breaks"
+    if (kind == "") return
+    t = substr(code, 1, s - 1); ln = gsub(/\n/, "", t) + 1
+    printf "FAIL pipe: %s:%d pipes into %s under pipefail; %s\n", FILENAME, ln, kind, fix
+  }
+  END {
+    for (k = 1; k <= NR; k++) { code = code cl[k]; raw = raw rl[k] }
+    if (code !~ /-[A-Za-z]*o[ \t\n]+pipefail/) exit
+    for (i = 1; i <= length(code); i++) {
+      if (substr(code, i, 1) != "|") continue
+      if (substr(code, i + 1, 1) == "|") { i++; continue }
+      if (substr(code, i - 1, 1) == ">") continue
+      reader(substr(code, i + 1, 1) == "&" ? i + 2 : i + 1)
+    }
+  }'
+if [ -d scripts ]; then
+  hits=$(find scripts -type f -print 2>/dev/null | sort | while IFS= read -r f; do
+    LC_ALL=C awk -v q="'" "$PIPE_SCAN" "$f" || printf 'FAIL pipe: %s:1 could not be scanned\n' "$f"
+  done)
+  if [ -n "$hits" ]; then
+    printf '%s\n' "$hits"
+    fail=1
+  fi
+fi
+
 # Local banned-string list: whole words, case-insensitive, matched across the tree.
 BANNED=".claude/sprint/banned-strings.txt"
 if [ -f "$BANNED" ]; then

@@ -460,3 +460,9 @@
   public flip. The README check reads the guide too and takes a `text` block only as status output
   for the made-up accounts, and the render draws the menu panel over a plain backdrop, where its
   flat stand-in for the panel material used to carry the peach of the design's desktop picture.
+- The packaging run's checks give the same answer on an input of any length. Under pipefail, a pipe
+  into a reader that stops early failed when the reader cut its writer off, so a long input could
+  make a run say the archive lacks a file it holds, or pass a formula with a build step or a tool
+  that links a library outside the system. `scripts/check-safety.sh` now fails a script under
+  `scripts/` that sets pipefail and pipes into a reader that can stop early, such as `grep -q`,
+  `grep -m` or `head`, and names the file, the line and the fix.

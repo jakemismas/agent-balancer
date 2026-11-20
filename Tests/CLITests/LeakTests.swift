@@ -254,7 +254,7 @@ struct Collected {
         try collected.addFiles(under: home)
 
         #expect(result.status == 0)
-        #expect(String(decoding: result.stdout, as: UTF8.self).contains("1.0.0"))
+        #expect(String(decoding: result.stdout, as: UTF8.self).contains(ReleaseScriptTests.release))
         #expect(collected.leaks(of: canaries).isEmpty)
     }
 }

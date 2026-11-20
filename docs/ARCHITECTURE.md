@@ -15,7 +15,7 @@ The toolchain settings every slice builds with:
 - Tests use Swift Testing (`import Testing`), never XCTest. A Mac with only the Command Line Tools
   ships `Testing.framework` and no `XCTest.framework`. `scripts/check-safety.sh` fails on
   `import XCTest`.
-- arm64 only in v1.0. Release builds come from the CI runner.
+- arm64 only. Release builds come from the CI runner.
 - The one dependency is swift-argument-parser, pinned to an exact version.
 - CI runs on `macos-26` and prints `swift --version` first, so the runner's Swift is on record.
 

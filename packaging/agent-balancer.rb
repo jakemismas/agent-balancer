@@ -31,7 +31,7 @@ class AgentBalancer < Formula
   end
 
   test do
-    # A prerelease formula is version 1.0.0-rcN, and the tool reports the base version 1.0.0.
+    # A prerelease formula is version X.Y.Z-rcN, and the tool reports the base version X.Y.Z.
     assert_match version.to_s.sub(/-rc\d+$/, ""), shell_output("#{bin}/agent-balancer --version")
     assert_path_exists share/"agent-balancer/skill/agent-balancer/SKILL.md"
   end

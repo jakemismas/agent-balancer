@@ -68,10 +68,10 @@ maintainer's decision. Update the page and the golden-output tests in the same c
 ## Landing
 
 Each change lands as one commit on `main`. Fold review fixes into that commit instead of adding
-fix-up commits, keep the subject under 70 characters in the imperative mood, and add a line to
-[CHANGELOG.md](CHANGELOG.md). The maintainer folds your pull request into one commit, keeps you as
-its author and lands it by a fast-forward push to `main` after the checks pass. The merge button
-is not used.
+fix-up commits, keep the subject under 70 characters in the imperative mood, and add a line at
+the end of the newest entry of [CHANGELOG.md](CHANGELOG.md). The maintainer folds your pull
+request into one commit, keeps you as its author and lands it by a fast-forward push to `main`
+after the checks pass. The merge button is not used.
 
 ## License
 

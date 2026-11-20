@@ -28,9 +28,12 @@ when the tool links anything else.
 
 ## Cut a release
 
-1. Set `Sources/Core/Version.swift` and the `CHANGELOG.md` heading to the new version, and land
-   the change. The release notes are the `CHANGELOG.md` entry under `## <version>`, so the entry
-   must exist and hold text. `scripts/release-notes.sh <version>` prints it.
+1. Set `Sources/Core/Version.swift`, the `CHANGELOG.md` heading and `release` in
+   `Tests/CLITests/ReleaseScriptTests.swift` to the new version, set `previous` there to the
+   version before it, and land the change. The tests check the tool's version, the version rule
+   and the newest `CHANGELOG.md` entry against those two values. The release notes are the
+   `CHANGELOG.md` entry under `## <version>`, so the entry must exist and hold text.
+   `scripts/release-notes.sh <version>` prints it.
 2. Start the `release` workflow by hand. Its version input must equal the `Version.swift` value,
    or that value plus `-rcN` when the prerelease switch is on. `scripts/release-version.sh check
    <version> <true|false>` applies the same rule, and the workflow and `package-release.sh` both
@@ -99,8 +102,8 @@ Topics: `claude-code`, `claude`, `usage-limits`, `rate-limits`, `multiple-accoun
 
 1. Publish the tap repository (`<owner>/homebrew-tap`) with a first formula, or leave the
    `Formula` folder empty until step 4.
-2. Start the `release` workflow with version `1.0.0-rc1` and the prerelease switch on. It creates
-   the `v1.0.0-rc1` prerelease with the files and the notes.
+2. Start the `release` workflow with version `1.1.0-rc1` and the prerelease switch on. It creates
+   the `v1.1.0-rc1` prerelease with the files and the notes.
 3. Update the tap from that run's printed checksums (see Update the tap above). In the virtual
    machine, run the real install:
 
@@ -110,12 +113,12 @@ Topics: `claude-code`, `claude`, `usage-limits`, `rate-limits`, `multiple-accoun
    brew test <owner>/tap/agent-balancer
    ```
 
-   The tool reports `1.0.0`, and the formula's test accepts that for the `1.0.0-rc1` formula.
+   The tool reports `1.1.0`, and the formula's test accepts that for the `1.1.0-rc1` formula.
    Download `AgentBalancerBar.zip` from the prerelease, run
    `gh attestation verify AgentBalancerBar.zip --repo <owner>/agent-balancer`, and open the app
    the way the install section of `docs/GUIDE.md` says.
-4. Only then start the `release` workflow with version `1.0.0` and the prerelease switch off. It
-   creates the `v1.0.0` tag and the release, with the `1.0.0` entry of `CHANGELOG.md` as notes,
+4. Only then start the `release` workflow with version `1.1.0` and the prerelease switch off. It
+   creates the `v1.1.0` tag and the release, with the `1.1.0` entry of `CHANGELOG.md` as notes,
    the checksums and the attestations.
 5. Update the tap by hand from the printed checksums, then run `brew update && brew upgrade
    agent-balancer` and check `agent-balancer --version`.

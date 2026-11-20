@@ -54,6 +54,22 @@ import Testing
         }
     }
 
+    /// The release this tree builds and the one before it. A new version changes both.
+    static let release = "1.1.0"
+    static let previous = "1.0.0"
+
+    @Test func theVersionIsThisRelease() throws {
+        #expect(Version.current == Self.release)
+        #expect(try Self.current() == Self.release)
+    }
+
+    @Test func theChecksTakeThisReleaseAndRefuseThePreviousOne() throws {
+        #expect(try Self.check(Self.release, "false") == 0)
+        #expect(try Self.check("\(Self.release)-rc1", "true") == 0)
+        #expect(try Self.check(Self.previous, "false") != 0)
+        #expect(try Self.check("\(Self.previous)-rc2", "true") != 0)
+    }
+
     // MARK: Release notes
 
     static func notes(_ version: String, changelog: String? = nil) throws -> Support.Output {
@@ -95,6 +111,31 @@ import Testing
         let out = try Self.notes(try Self.current())
         #expect(out.status == 0)
         #expect(!out.stdout.isEmpty)
+    }
+
+    @Test func theNewestChangelogEntryIsThisReleaseAboveThePreviousOne() throws {
+        let text = try String(
+            contentsOf: Support.root.appendingPathComponent("CHANGELOG.md"), encoding: .utf8)
+        let headings = text.split(separator: "\n").filter { $0.hasPrefix("## ") }.map(String.init)
+        #expect(Array(headings.prefix(2)) == ["## \(Self.release)", "## \(Self.previous)"])
+        let out = try Self.notes(Self.release)
+        #expect(out.status == 0)
+        #expect(!out.stdout.isEmpty)
+    }
+
+    /// The 1.0.0 entry is history, so its notes keep the SHA-256 they had at that build.
+    static let shippedNotes = "ee18d094748a6553066cac0a0dc40829dc4324f04b64ef72ba92ee1d57f40771"
+
+    @Test func theShippedEntryKeepsItsTextByteForByte() throws {
+        let out = try Self.notes("1.0.0")
+        #expect(out.status == 0)
+        let sum = try Support.run(
+            URL(fileURLWithPath: "/usr/bin/shasum"), ["-a", "256"], env: ["PATH": "/usr/bin:/bin"],
+            stdin: out.stdout)
+        #expect(sum.status == 0)
+        #expect(
+            String(decoding: sum.stdout, as: UTF8.self).prefix(64) == Self.shippedNotes,
+            "a new line goes at the end of the newest entry")
     }
 
     // MARK: Output folder guard

@@ -1,5 +1,88 @@
 # Changelog
 
+## 1.1.0
+
+- The packaging run's checks give the same answer on an input of any length. Under pipefail, a pipe
+  into a reader that stops early failed when the reader cut its writer off, so a long input could
+  make a run say the archive lacks a file it holds, or pass a formula with a build step or a tool
+  that links a library outside the system. `scripts/check-safety.sh` now fails a script under
+  `scripts/` that sets pipefail and pipes into a reader that can stop early, such as `grep -q`,
+  `grep -m` or `head`, and names the file, the line and the fix.
+- A newer push to a pull request cancels CI's run still in progress for that pull request's older
+  commit. A re-run does not cancel the run in progress: it waits for it, and a newer push cancels
+  it. A run started with Run workflow has a group of its own, so it never cancels, or is cancelled
+  by, another run. The release check fails when the check job's time limit is not 20 minutes, the
+  install job has no limit under 360 minutes, a job sets its own concurrency, another workflow is
+  also named ci, or CI's name, concurrency group or rule for cancelling changes.
+- Access lists count as much as modes. A file or folder the tool makes under `~/.agent-balancer` no
+  longer keeps an entry from its folder that lets another user or group in: the writer clears such a
+  list on every file and folder it makes there, before anything is written to it, and on a lock file
+  or a log each time it opens one; the files the `--render` flag writes into its own folder have
+  such a list cleared too. A folder of the tool's whose access list lets another user or group in,
+  or cannot be read, is refused like one wider than 0700, with a message that names it and
+  `chmod -N`; an entry that keeps you from reading the list, one that denies you `readsecurity` or
+  `readattr`, makes a list that cannot be read. Every refusal of a folder now names it and its fix
+  by what is there: a mode, a list, a link, a file or another user's folder, and a folder account's
+  folder gets the same text in every command that uses it. A token file with such a list is not
+  private, so its account is not `ok`, picked or run, and its status row says the file may be
+  readable by others; a refused token folder gives its refusal and fix in `status`, `pick` and
+  `run`. Before `login` starts the sign-in or reads a pasted token, it runs the checks of every
+  later step of the run, the token save, the rules of its config save with every folder account's
+  folders, the first check and the status rebuild, from one plan per step that the step itself runs
+  under, and writes nothing that changes the account: each folder those steps write in must take a
+  new file that you can then read, write, add lines to and delete and whose list you can read; each
+  file they replace or delete must be one you may delete and not locked with `chflags`; each file
+  they read must open. A refusal names the file or folder and its fix (`chmod -N`, then `chmod 600`
+  for a file you cannot read, or `chflags nouchg` for a locked file), so it never drops a new token,
+  and a `login` that ends before a token is saved leaves the account as it was; when the check
+  cannot delete the empty file it made to test a folder, the refusal names that file too. A change
+  made during the sign-in that still stops the save says the new token was not saved and to run
+  `login` again once the change is fixed. Once the token is saved, a step that fails says so and
+  names `refresh` once its fix has run, never a new sign-in, except for a new token the service
+  rejects, whose text says to run `refresh` once and `login` only if the service rejects it again. A
+  folder account's `login` checks the plan save it makes after the sign-in, its lock included, and
+  the status rebuild that records the sign-in, before it starts `claude`. `uninstall` checks every
+  folder of the tool's before it removes anything and refuses one that fails the folder checks, by
+  its access list or its mode, with the folder and its fix, where it used to leave the files of a
+  `state/` or `backups/` folder it was refused and report success; it now also deletes
+  `state/token-rejections.json`, which it used to leave, keeping the data folder. `doctor` names
+  every folder of the tool's that the checks refuse, by its list or its mode, that cannot be opened,
+  searched or checked, or that is a link, a file or another user's folder, and each file of the
+  tool's whose list lets another user or group in or cannot be read, `state/token-rejections.json`
+  and the writer's temporary files among them, with the commands that clear it (a label's launch
+  files by their folder); it reads what is in a folder refused for its list or its mode in the same
+  run, and exits 1. Its count of temporary files that may hold a token leaves out an empty one,
+  which holds none. An entry that only denies, or only allows you, changes nothing while you can
+  read the list, and a volume that keeps no access lists counts as having none. The Manage window's
+  token tip says the token is used only while no other user can read its file. Before, the checks
+  read modes only, so an inheritable `everyone allow read` entry on `tokens/` gave a new 0600 token
+  file an entry that lets every local user read it, while `status` said `ok` and `doctor` said
+  nothing.
+- `remove` stops and exits 1 before it deletes anything when it cannot check the token file or a
+  launch file of the label, such as one whose access list denies you `readattr`, or cannot list or
+  search the token folder or the label's launch folder, and says that nothing was deleted. It
+  checks the launch files again at its read-back, and stops before the account goes when it cannot
+  delete the token file, such as a locked one. It used to delete the account and exit 0 while a
+  launch file it could not check, or a token file it could not check or delete, kept the token, and
+  counted such a launch file among the entries the tool did not make. A token folder that the
+  folder checks refuse, such as a link, now also stops it before anything is deleted, and each of
+  these stops keeps the label's leases, so a rerun still keeps a recent pick's launch file as a
+  tombstone. Each text names the folder or the file and the `chmod` or `chflags` commands that let
+  the tool check or delete it again, and a rerun after them goes on from there.
+- Access lists count for the `claude` binary too. Every command that would start `claude` refuses
+  a binary whose real target, links followed, has an access list entry that lets another user or
+  group change it, inherited or not, as it refuses one that group or others can write, and
+  `~/.local/bin` the same way when the binary sits there: an allow entry that gives any right other
+  than reading, running, listing, searching and reading its attributes or list, a right that
+  `chmod` cannot name or `ls -le` does not show included. An entry for you alone and a deny entry
+  change nothing, and a list you cannot read is refused. A lookup of the binary that an entry or a
+  mode stops, such as a folder you cannot search, is refused too, where it used to be skipped, and
+  the refusal names the folder or entry where it stops. Each refusal names a fix only where running
+  it clears the refusal: `chmod -N` on the binary's real target or on the folder, after the
+  `chflags` that clears a lock. `doctor` prints the refusal and exits 1. Before, the check read
+  modes only, so an `everyone allow write,append` entry on `~/.local/bin/claude` left `doctor` at
+  exit 0, while `chmod go+w` on the same file made it exit 1.
+
 ## 1.0.0
 
 - Add the release: `scripts/package-release.sh` (app zip, CLI archive, checksums and the filled
@@ -460,83 +543,3 @@
   public flip. The README check reads the guide too and takes a `text` block only as status output
   for the made-up accounts, and the render draws the menu panel over a plain backdrop, where its
   flat stand-in for the panel material used to carry the peach of the design's desktop picture.
-- The packaging run's checks give the same answer on an input of any length. Under pipefail, a pipe
-  into a reader that stops early failed when the reader cut its writer off, so a long input could
-  make a run say the archive lacks a file it holds, or pass a formula with a build step or a tool
-  that links a library outside the system. `scripts/check-safety.sh` now fails a script under
-  `scripts/` that sets pipefail and pipes into a reader that can stop early, such as `grep -q`,
-  `grep -m` or `head`, and names the file, the line and the fix.
-- A newer push to a pull request cancels CI's run still in progress for that pull request's older
-  commit. A re-run does not cancel the run in progress: it waits for it, and a newer push cancels
-  it. A run started with Run workflow has a group of its own, so it never cancels, or is cancelled
-  by, another run. The release check fails when the check job's time limit is not 20 minutes, the
-  install job has no limit under 360 minutes, a job sets its own concurrency, another workflow is
-  also named ci, or CI's name, concurrency group or rule for cancelling changes.
-- Access lists count as much as modes. A file or folder the tool makes under `~/.agent-balancer` no
-  longer keeps an entry from its folder that lets another user or group in: the writer clears such a
-  list on every file and folder it makes there, before anything is written to it, and on a lock file
-  or a log each time it opens one; the files the `--render` flag writes into its own folder have
-  such a list cleared too. A folder of the tool's whose access list lets another user or group in,
-  or cannot be read, is refused like one wider than 0700, with a message that names it and
-  `chmod -N`; an entry that keeps you from reading the list, one that denies you `readsecurity` or
-  `readattr`, makes a list that cannot be read. Every refusal of a folder now names it and its fix
-  by what is there: a mode, a list, a link, a file or another user's folder, and a folder account's
-  folder gets the same text in every command that uses it. A token file with such a list is not
-  private, so its account is not `ok`, picked or run, and its status row says the file may be
-  readable by others; a refused token folder gives its refusal and fix in `status`, `pick` and
-  `run`. Before `login` starts the sign-in or reads a pasted token, it runs the checks of every
-  later step of the run, the token save, the rules of its config save with every folder account's
-  folders, the first check and the status rebuild, from one plan per step that the step itself runs
-  under, and writes nothing that changes the account: each folder those steps write in must take a
-  new file that you can then read, write, add lines to and delete and whose list you can read; each
-  file they replace or delete must be one you may delete and not locked with `chflags`; each file
-  they read must open. A refusal names the file or folder and its fix (`chmod -N`, then `chmod 600`
-  for a file you cannot read, or `chflags nouchg` for a locked file), so it never drops a new token,
-  and a `login` that ends before a token is saved leaves the account as it was; when the check
-  cannot delete the empty file it made to test a folder, the refusal names that file too. A change
-  made during the sign-in that still stops the save says the new token was not saved and to run
-  `login` again once the change is fixed. Once the token is saved, a step that fails says so and
-  names `refresh` once its fix has run, never a new sign-in, except for a new token the service
-  rejects, whose text says to run `refresh` once and `login` only if the service rejects it again. A
-  folder account's `login` checks the plan save it makes after the sign-in, its lock included, and
-  the status rebuild that records the sign-in, before it starts `claude`. `uninstall` checks every
-  folder of the tool's before it removes anything and refuses one that fails the folder checks, by
-  its access list or its mode, with the folder and its fix, where it used to leave the files of a
-  `state/` or `backups/` folder it was refused and report success; it now also deletes
-  `state/token-rejections.json`, which it used to leave, keeping the data folder. `doctor` names
-  every folder of the tool's that the checks refuse, by its list or its mode, that cannot be opened,
-  searched or checked, or that is a link, a file or another user's folder, and each file of the
-  tool's whose list lets another user or group in or cannot be read, `state/token-rejections.json`
-  and the writer's temporary files among them, with the commands that clear it (a label's launch
-  files by their folder); it reads what is in a folder refused for its list or its mode in the same
-  run, and exits 1. Its count of temporary files that may hold a token leaves out an empty one,
-  which holds none. An entry that only denies, or only allows you, changes nothing while you can
-  read the list, and a volume that keeps no access lists counts as having none. The Manage window's
-  token tip says the token is used only while no other user can read its file. Before, the checks
-  read modes only, so an inheritable `everyone allow read` entry on `tokens/` gave a new 0600 token
-  file an entry that lets every local user read it, while `status` said `ok` and `doctor` said
-  nothing.
-- `remove` stops and exits 1 before it deletes anything when it cannot check the token file or a
-  launch file of the label, such as one whose access list denies you `readattr`, or cannot list or
-  search the token folder or the label's launch folder, and says that nothing was deleted. It
-  checks the launch files again at its read-back, and stops before the account goes when it cannot
-  delete the token file, such as a locked one. It used to delete the account and exit 0 while a
-  launch file it could not check, or a token file it could not check or delete, kept the token, and
-  counted such a launch file among the entries the tool did not make. A token folder that the
-  folder checks refuse, such as a link, now also stops it before anything is deleted, and each of
-  these stops keeps the label's leases, so a rerun still keeps a recent pick's launch file as a
-  tombstone. Each text names the folder or the file and the `chmod` or `chflags` commands that let
-  the tool check or delete it again, and a rerun after them goes on from there.
-- Access lists count for the `claude` binary too. Every command that would start `claude` refuses
-  a binary whose real target, links followed, has an access list entry that lets another user or
-  group change it, inherited or not, as it refuses one that group or others can write, and
-  `~/.local/bin` the same way when the binary sits there: an allow entry that gives any right other
-  than reading, running, listing, searching and reading its attributes or list, a right that
-  `chmod` cannot name or `ls -le` does not show included. An entry for you alone and a deny entry
-  change nothing, and a list you cannot read is refused. A lookup of the binary that an entry or a
-  mode stops, such as a folder you cannot search, is refused too, where it used to be skipped, and
-  the refusal names the folder or entry where it stops. Each refusal names a fix only where running
-  it clears the refusal: `chmod -N` on the binary's real target or on the folder, after the
-  `chflags` that clears a lock. `doctor` prints the refusal and exits 1. Before, the check read
-  modes only, so an `everyone allow write,append` entry on `~/.local/bin/claude` left `doctor` at
-  exit 0, while `chmod go+w` on the same file made it exit 1.

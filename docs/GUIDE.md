@@ -200,6 +200,20 @@ replace or launch file cleanup deletes it; `agent-balancer doctor` counts any th
   list or a folder mode keeps it from deleting the token file, it stops, keeps the account, and
   names the commands that let it delete the file. Run the commands it names, then run
   `agent-balancer remove <label>` again.
+- The tool treats a launch file or a token file that it cannot check, such as one whose access
+  list keeps it from reading the file's attributes, as one that may hold a token.
+  `agent-balancer login <label>` stops before the sign-in when it cannot check, rewrite or delete
+  a launch file of the label. When one turns so during the sign-in, or a temporary file a write
+  left cannot be deleted then, it saves the token, names each such file by its path, says that it
+  may keep a token, names the commands that let the tool check, rewrite or delete it, and exits 1.
+  When `agent-balancer pick` or `agent-balancer run <label>` stops after it wrote a launch file
+  and cannot check or delete that file, its error names the file and the commands that let the
+  tool check or delete it, and the tool deletes the file later, once it can.
+  `agent-balancer add <label>` refuses a label whose token file it cannot check, as it refuses one
+  from an earlier account that it can see. `agent-balancer status` warns about a launch file that a
+  live session names and the tool cannot check. `agent-balancer doctor` counts each launch file it
+  cannot check, names each label's launch folder it cannot check or list, whose files it then
+  cannot all count, and exits 1.
 - No manual check has confirmed whether a new token ends the old one, or found a way to cancel
   one: none is documented. So a replaced or leaked token may keep working until its year ends,
   and after every replace and every remove the tool prints that the old token may keep working

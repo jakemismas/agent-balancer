@@ -229,7 +229,7 @@ import Testing
                         "At exit 0 and 2 the answer is JSON on standard output; at exit 1 the error text is on standard error.",
                         "| 0 | A recipe | Launch with it |",
                         "| 2 | Nothing fits | Do not launch. Leave the work waiting, show `reason` and pick again later |",
-                        "| 1 | No pick: a refused flag, refused settings, a busy lock or another error | Report the error text. No lease or launch file was written |",
+                        "| 1 | No pick: a refused flag, refused settings, a busy lock or another error | Report the error text. No lease was written, and a launch file stays only when the error names it: never use that file; the commands the error names are for a person in their own terminal |",
                     ]
                 ),
                 (
@@ -337,7 +337,12 @@ import Testing
         let same = { (words: String) in (words, words) }
         let meaning: [String: [(String, String)]] = [
             "0": [("Apply it", "Launch with it")],
-            "1": [same("Report the error text. No lease or launch file was written")],
+            "1": [
+                same("Report the error text. No lease was written"),
+                same(
+                    "a launch file stays only when the error names it: never use that file; the commands the error names are for a person in their own terminal"
+                ),
+            ],
             "2": [
                 same("Do not launch."), ("Leave the item waiting", "Leave the work waiting"),
                 same("show `reason`"),

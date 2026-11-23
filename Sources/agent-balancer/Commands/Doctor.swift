@@ -113,19 +113,27 @@ struct DoctorCommand: ParsableCommand {
         if !sessions.clean {
             print("sessions: some session records could not be read, so in-use is unknown")
         }
-        for session in sessions.live
-        where session.refs.contains(where: { !LaunchFiles.exists(context: context, ref: $0) }) {
-            print(
-                "Warning launch_file_missing: session \(Display.safe(String(session.id.prefix(8)), limit: 8)) names a launch file that is gone."
-            )
+        var namesUnchecked = false
+        for session in sessions.live {
+            let id = Display.safe(String(session.id.prefix(8)), limit: 8)
+            let found = session.refs.map { LaunchFiles.presence(context: context, ref: $0) }
+            // A launch file that cannot be checked may hold a token, so it is never called gone.
+            if found.contains(.unchecked) {
+                namesUnchecked = true
+                print(
+                    "Warning launch_file_unchecked: session \(id) names a launch file that cannot be checked."
+                )
+            }
+            if found.contains(.missing) {
+                print(
+                    "Warning launch_file_missing: session \(id) names a launch file that is gone.")
+            }
         }
 
         let launch = DoctorChecks.launchFiles(context: context, snapshot: sessions, now: now)
-        if let oldest = launch.oldestAge {
-            print(
-                "launch files: \(launch.count), oldest \(DoctorChecks.describe(age: oldest)) old")
-        } else {
-            print("launch files: 0")
+        print(DoctorChecks.launchFilesLine(launch))
+        if DoctorChecks.launchFilesFail(launch, sessionNamesUnchecked: namesUnchecked) {
+            failed = true
         }
         if let service = DoctorChecks.syncedFolder(context: context) {
             print(

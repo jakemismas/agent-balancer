@@ -65,7 +65,8 @@ struct LoginCommand: ParsableCommand {
                 }, saved: saved)
         }
 
-        for text in outcome.unfinished { print("Error: " + Display.safe(text, limit: 1200)) }
+        // Each is the tool's own text, so a list of launch files in one prints whole.
+        for text in outcome.unfinished { print("Error: " + Display.safe(text, limit: Int.max)) }
         var failed = !outcome.unfinished.isEmpty
         // A token the service rejects may need a new sign-in, which the rejection's text says.
         var rejected = false

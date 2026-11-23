@@ -179,21 +179,54 @@ extension TokenStore {
     static func requireCheckedForRemove(
         context: ToolContext, label: String, kept: TokenAccounts.Kept
     ) throws {
+        switch try unchecked(context: context, label: label) {
+        case .folderCannotOpen?: throw ToolError(folderCannotOpenText(label: label, kept: kept))
+        case .folderCannotCheck?: throw ToolError(folderCannotCheckText(label: label, kept: kept))
+        case .file?: throw ToolError(fileCannotCheckText(label: label, kept: kept))
+        case nil: return
+        }
+    }
+
+    /// What keeps a command from checking the token file of a label.
+    enum Unchecked: Equatable {
+        /// The token folder is a real folder of the user's that cannot be listed or searched.
+        case folderCannotOpen
+        /// `lstat` cannot check the token folder, and it does not open to be searched.
+        case folderCannotCheck
+        /// `lstat` cannot check the token file.
+        case file
+    }
+
+    /// What keeps a command from checking the token file of `label`, or nil when nothing does:
+    /// the cases `requireCheckedForRemove` stops on. Any other refusal of the token folder throws
+    /// the writer's refusal, and a missing token folder or token file is nil.
+    static func unchecked(context: ToolContext, label: String) throws -> Unchecked? {
+        if case .unchecked(let what) = try checkFile(context: context, label: label) { return what }
+        return nil
+    }
+
+    /// What a command finds where the token file of `label` belongs: what keeps it from checking
+    /// it, or, from one `lstat` of the name once the folder checks pass, whether an entry is
+    /// there, so no state between two reads passes as a missing file.
+    enum FileCheck: Equatable {
+        case unchecked(Unchecked)
+        case there(Bool)
+    }
+
+    static func checkFile(context: ToolContext, label: String) throws -> FileCheck {
         let name = try TokenPaths.fileName(label: label)
         let writer = NoFollowWriter(root: context.dataRoot)
         if !writer.opensForSearch(folders: TokenPaths.folders) {
             switch writer.placeEntry(parent: [], name: TokenPaths.folderName) {
-            case .problem(.cannotOpen):
-                throw ToolError(folderCannotOpenText(label: label, kept: kept))
-            case .problem(.cannotCheck):
-                throw ToolError(folderCannotCheckText(label: label, kept: kept))
+            case .problem(.cannotOpen): return .unchecked(.folderCannotOpen)
+            case .problem(.cannotCheck): return .unchecked(.folderCannotCheck)
             default: break
             }
         }
         do {
-            _ = try writer.checkedInfo(folders: TokenPaths.folders, name: name)
+            return .there(try writer.checkedInfo(folders: TokenPaths.folders, name: name) != nil)
         } catch is NoFollowWriter.UncheckedEntry {
-            throw ToolError(fileCannotCheckText(label: label, kept: kept))
+            return .unchecked(.file)
         }
     }
 
@@ -254,5 +287,49 @@ extension TokenStore {
         let kept = account ? ", and the account was kept" : ""
         return
             "The token file `\(typedFile(label: label))` could not be deleted, so it still holds the token of '\(label)'\(kept). On `\(typedFolder)`, run `chmod -h -N` and `chmod -h 700`, and run `chmod -h -N` on the token file, or `chmod -N` if that says Permission denied. Run `chflags -h nouchg,nouappnd` first on either of them that is locked. Then run `agent-balancer remove \(label)` again."
+    }
+}
+
+/// What `add` does with a token file of the label it cannot check (docs/ARCHITECTURE.md section
+/// 4A.4, Adding): it may hold a token from an earlier account, so `add` refuses the label as it
+/// refuses one whose token file it can see, and its text names the token file or its folder and
+/// the commands that let the tool check it, with the commands of `remove`'s texts.
+extension TokenStore {
+    /// Throws what `add` refuses `label` with when it cannot check the label's token file: the
+    /// token folder cannot be listed or searched, or `lstat` cannot check the token folder or the
+    /// token file. Any other refusal of the token folder throws the writer's refusal. Otherwise it
+    /// returns whether an entry is where the token file belongs, from the same `lstat`, which
+    /// `add` refuses as a token file from an earlier account; a missing folder or file is false.
+    public static func requireCheckedForAdd(context: ToolContext, label: String) throws -> Bool {
+        switch try checkFile(context: context, label: label) {
+        case .unchecked(.folderCannotOpen):
+            throw ToolError(
+                "The token folder `\(typedFolder)` cannot be opened or searched, so `add` cannot check whether a token file from an earlier account '\(label)' is in it. Run `chmod -N \(typedFolder)`, then `chmod 700 \(typedFolder)`, and `chflags nouchg,nouappnd \(typedFolder)` first if it is locked, then run `agent-balancer add \(label)` again."
+            )
+        case .unchecked(.folderCannotCheck):
+            throw ToolError(
+                "The token folder `\(typedFolder)` cannot be checked, so `add` cannot tell what it is or whether a token file from an earlier account '\(label)' is in it. Run `chmod -h -N \(typedFolder)`, or `chmod -N \(typedFolder)` if that says Permission denied, then `chmod -h 700 \(typedFolder)`, then run `agent-balancer add \(label)` again."
+            )
+        case .unchecked(.file):
+            let file = typedFile(label: label)
+            throw ToolError(
+                "The token file `\(file)` cannot be checked, so it may hold a token from an earlier account '\(label)'. Run `chmod -h -N \(file)`, or `chmod -N \(file)` if that says Permission denied, then run `agent-balancer remove \(label)` in Terminal, then add it again."
+            )
+        case .there(let there): return there
+        }
+    }
+}
+
+/// What a token save does with the writer's temporary files it could not delete in the token
+/// folder: each may hold a token, so `login` names it and exits 1 (docs/ARCHITECTURE.md section
+/// 4A.4, Leftover temporary files).
+extension TokenStore {
+    /// The writer's temporary files in the token folder that may still hold a token, by name.
+    static func temporariesLeft(context: ToolContext) -> [String] {
+        NoFollowWriter(root: context.dataRoot).temporariesThatMayHold(folders: TokenPaths.folders)
+    }
+
+    static func temporariesNotDeletedText(names: [String]) -> String {
+        Messages.temporariesNotDeleted(place: typedFolder, names: names)
     }
 }

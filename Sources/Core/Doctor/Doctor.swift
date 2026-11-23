@@ -83,17 +83,67 @@ public enum DoctorChecks {
         }
     }
 
-    /// The launch files the tool holds, and the age of the oldest. Never a path or any content.
+    /// The launch files the tool holds, the age of the oldest, and the launch folders it cannot
+    /// check. Never a launch file's path or any content.
     public struct LaunchSummary: Equatable, Sendable {
+        /// The launch files the tool can count: those it can check, and those it cannot check,
+        /// since each may hold a token. A launch file in a launch folder that cannot be listed
+        /// counts only when a session record names it.
         public var count: Int
         public var oldestAge: TimeInterval?
+        /// How many of `count` the tool cannot check.
+        public var unchecked = 0
+        /// The launch folders the folder checks refuse, as a person types them; each launch file
+        /// in one is counted as one the tool cannot check.
+        public var refusedFolders: [String] = []
+        /// The launch folders that cannot be listed or checked, as a person types them.
+        public var unlistedFolders: [String] = []
     }
 
     public static func launchFiles(
         context: ToolContext, snapshot: SessionsSnapshot, now: Date = Date()
     ) -> LaunchSummary {
         let inventory = Core.LaunchFiles.inventory(context: context, snapshot: snapshot, now: now)
-        return LaunchSummary(count: inventory.files, oldestAge: inventory.oldestAge)
+        return LaunchSummary(
+            count: inventory.files + inventory.unchecked, oldestAge: inventory.oldestAge,
+            unchecked: inventory.unchecked, refusedFolders: inventory.refusedFolders,
+            unlistedFolders: inventory.unlistedFolders)
+    }
+
+    /// Whether `doctor` exits 1 for its launch files: one it cannot check, a launch folder it
+    /// cannot check, or a live session that names a launch file it cannot check. Each may hold a
+    /// token, whatever else `doctor` says about the folder.
+    public static func launchFilesFail(_ launch: LaunchSummary, sessionNamesUnchecked: Bool)
+        -> Bool
+    {
+        sessionNamesUnchecked || launch.unchecked > 0 || !launch.refusedFolders.isEmpty
+            || !launch.unlistedFolders.isEmpty
+    }
+
+    /// The `launch files` line of `doctor`: how many, the age of the oldest, how many the tool
+    /// cannot check, and each launch folder it cannot check, so a count that leaves out the files
+    /// of a folder it cannot list never reads as the whole.
+    public static func launchFilesLine(_ launch: LaunchSummary) -> String {
+        var line = "launch files: \(launch.count)"
+        if let oldest = launch.oldestAge { line += ", oldest \(describe(age: oldest)) old" }
+        if launch.unchecked > 0 { line += ", \(launch.unchecked) cannot be checked" }
+        func folders(_ places: [String]) -> String {
+            let noun = places.count == 1 ? "folder" : "folders"
+            return ", and the launch \(noun) " + Messages.listed(places.map { "`" + $0 + "`" })
+        }
+        if !launch.refusedFolders.isEmpty {
+            let it = launch.refusedFolders.count == 1 ? "it" : "them"
+            line +=
+                folders(launch.refusedFolders)
+                + " cannot be checked, so each launch file in \(it) counts as one that cannot be checked"
+        }
+        if !launch.unlistedFolders.isEmpty {
+            let it = launch.unlistedFolders.count == 1 ? "it" : "them"
+            line +=
+                folders(launch.unlistedFolders)
+                + " cannot be checked or listed, so a launch file in \(it) counts only when a session record names it"
+        }
+        return line
     }
 
     /// `3 days`, `5 hours`, `12 minutes` or `under a minute`.

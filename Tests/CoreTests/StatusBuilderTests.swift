@@ -43,13 +43,15 @@ import Testing
         previous: CurrentFile = CurrentFile(), observations: StatusObservations = .init(),
         sessions: SessionsSnapshot = .empty, tokens: [String: TokenInfo] = [:],
         launchExists: @escaping (LaunchRef) -> Bool = { _ in true },
+        launchUnchecked: @escaping (LaunchRef) -> Bool = { _ in false },
         tune: (inout Config) -> Void = { _ in }
     ) -> StatusBuild {
         var config = Config(accounts: accounts)
         tune(&config)
         return StatusBuilder.build(
             config: config, readings: readings, previous: previous, observations: observations,
-            sessions: sessions, tokens: tokens, launchExists: launchExists, now: now)
+            sessions: sessions, tokens: tokens, launchExists: launchExists,
+            launchUnchecked: launchUnchecked, now: now)
     }
 
     func golden(_ name: String, _ document: StatusDocument) throws {
@@ -252,6 +254,46 @@ import Testing
         #expect(r.warnings.first?.text == "1 live session names a launch file that is gone.")
         #expect(built.events.map(\.type) == ["account_added"])
         try golden("launch-file-missing", built.document)
+    }
+
+    @Test func aLaunchFileThatCannotBeCheckedIsItsOwnCountOnTheLabelAndNeverMissing() throws {
+        let hidden = LaunchRef(label: "pool-a", leaseId: "l-0b0b0b0b")
+        let gone = LaunchRef(label: "pool-a", leaseId: "l-0a0a0a0a")
+        let token = ["pool-a": TokenInfo(usable: true, modified: now)]
+        let one = SessionsSnapshot(
+            clean: true, live: [LiveSession(id: "s-1", name: "w1", refs: [hidden])],
+            named: [hidden])
+        let built = build(
+            [account("pool-a", kind: Kind.token)], sessions: one, tokens: token,
+            launchExists: { _ in false }, launchUnchecked: { $0 == hidden })
+        let r = row(built)
+        #expect(r.state == "ok" && r.warnings.map(\.code) == ["launch_file_unchecked"])
+        #expect(
+            r.warnings.first?.text
+                == "1 live session names a launch file that cannot be checked. Run `agent-balancer doctor` in Terminal."
+        )
+        #expect(built.events.map(\.type) == ["account_added"])
+        try golden("launch-file-unchecked", built.document)
+
+        // Each session counts once for each reason its launch files give, however many files of
+        // the label it names: a count of the files would say 3.
+        let other = LaunchRef(label: "pool-a", leaseId: "l-0c0c0c0c")
+        let two = SessionsSnapshot(
+            clean: true,
+            live: [
+                LiveSession(id: "s-1", name: "w1", refs: [hidden, other, gone]),
+                LiveSession(id: "s-2", name: "w2", refs: [hidden]),
+            ], named: [hidden, other, gone])
+        let both = row(
+            build(
+                [account("pool-a", kind: Kind.token)], sessions: two, tokens: token,
+                launchExists: { _ in false }, launchUnchecked: { $0 != gone }))
+        #expect(both.warnings.map(\.code) == ["launch_file_missing", "launch_file_unchecked"])
+        #expect(both.warnings.first?.text == "1 live session names a launch file that is gone.")
+        #expect(
+            both.warnings.last?.text
+                == "2 live sessions name a launch file that cannot be checked. Run `agent-balancer doctor` in Terminal."
+        )
     }
 
     // MARK: Ending soon

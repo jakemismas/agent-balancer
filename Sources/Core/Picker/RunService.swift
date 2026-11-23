@@ -3,6 +3,8 @@ import Foundation
 /// What `run` hands the command once the checks pass: the launch line and the argument array.
 public struct RunLaunch: Sendable {
     public let label: String
+    /// The account's kind: only a token account's launch file holds a token.
+    public let kind: String
     public let leaseId: String
     /// `--settings` and the launch file, then the person's own arguments. The settings pair comes
     /// first so nothing the person typed can take it or turn it into prompt text.
@@ -206,7 +208,14 @@ extension PickService {
             leases.append(Lease(id: id, label: label, model: "default", at: now))
             try leaseStore.save(leases)
         } catch {
-            LaunchFiles.discard(context: context, label: label, leaseId: id)
+            // The lease error comes first, then the launch file the cleanup could not delete.
+            if let left = LaunchFiles.discard(
+                context: context, label: label, leaseId: id,
+                holdsToken: account.kind == Kind.token, command: "run",
+                rerun: "agent-balancer run " + (printOnly ? "--print-command " : "") + label)
+            {
+                throw ToolError.adding(left, to: error)
+            }
             throw error
         }
         logPick(
@@ -226,8 +235,8 @@ extension PickService {
             prefix
             + (["claude", launchArgs] + arguments.map(Self.shellQuote)).joined(separator: " ")
         return RunLaunch(
-            label: label, leaseId: id, arguments: ["--settings", path] + arguments, line: line,
-            configDir: configDir)
+            label: label, kind: account.kind, leaseId: id,
+            arguments: ["--settings", path] + arguments, line: line, configDir: configDir)
     }
 
     /// What `run` says when the token of `label` cannot be used: what keeps it from use when that
@@ -237,22 +246,35 @@ extension PickService {
     }
 
     /// Drops the launch file and the lease of a run whose session could not be started, so no
-    /// token copy is left behind.
-    public func abandon(_ launch: RunLaunch) {
+    /// token copy is left behind. Returns what `run` adds to its error when the launch file is
+    /// still there or cannot be checked, or nil when it is gone.
+    @discardableResult
+    public func abandon(_ launch: RunLaunch) -> String? {
+        func discard() -> String? {
+            LaunchFiles.discard(
+                context: context, label: launch.label, leaseId: launch.leaseId,
+                holdsToken: launch.kind == Kind.token, command: "run",
+                rerun: "agent-balancer run \(launch.label)")
+        }
         let writer = NoFollowWriter(root: context.dataRoot)
         guard
             let lock = try? writer.acquireLock(
                 folders: Layout.locksFolders, name: Layout.pickLockName, wait: lockWaitSeconds)
-        else {
-            LaunchFiles.discard(context: context, label: launch.label, leaseId: launch.leaseId)
-            return
-        }
+        else { return discard() }
         defer { lock.release() }
-        LaunchFiles.discard(context: context, label: launch.label, leaseId: launch.leaseId)
+        let left = discard()
         let store = LeaseStore(context: context)
         let minutes = (try? ConfigStore(context: context).loadRequired().picker.leaseMinutes) ?? 0
         if minutes > 0, let open = try? store.current(now: clock(), leaseMinutes: minutes) {
             try? store.save(open.filter { $0.id != launch.leaseId })
         }
+        return left
+    }
+
+    /// What `run` throws when `claude` could not be started: `error`, then what keeps the launch
+    /// file there when `abandon` could not delete it, so the start error comes first.
+    public func abandoned(_ launch: RunLaunch, after error: Error) -> Error {
+        guard let left = abandon(launch) else { return error }
+        return ToolError.adding(left, to: error)
     }
 }

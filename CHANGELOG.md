@@ -113,6 +113,26 @@
   environment that only the release job, run from `main` with the maintainer's approval, can read;
   says to change the release workflow before adding the second ruleset; and says to check the
   first ruleset again after a move.
+- A launch file or a token file that the tool cannot check, such as one whose access list denies
+  you `readattr`, counts as one that may hold a token. When `pick` or `run` stops after it wrote a
+  launch file, such as when its lease save fails or `claude` cannot be started, and cannot check or
+  delete that file, its error names the file and the `chmod` and `chflags` commands that let the
+  tool check or delete it, after the error that stopped it, then says to run your own command
+  again and that upkeep deletes the file later; the file used to stay, with the token in it, and
+  nothing said so. `docs/CONTRACT.md` and `docs/ORCHESTRATORS.md` now say that a `pick` that exits
+  1 leaves a launch file only when its error names it, which a caller never uses. `login` goes on
+  past each launch file its rewrite cannot check, rewrite or delete, such as one that turned
+  unreadable or locked while you signed in, names each one by its path, and each temporary file of
+  the writer's it could not delete, with the commands that clear each cause, and exits 1. It used
+  to stop at the first launch file it could not rewrite, and to exit 0 while a file it could not
+  check, read or delete, or a temporary file, kept the old token. `status` warns
+  `launch_file_unchecked` on an account whose live session names such a launch file, and `doctor`
+  says so of the session, counts on its `launch files` line each such launch file it can list or
+  that a session names, names each label's launch folder it cannot check, such as one at 0755 or
+  one whose access list denies you `list`, and exits 1, where both called the file gone with
+  `launch_file_missing` and `doctor` counted 0 for such a folder. `add` refuses a label whose token
+  file it cannot check, or whose token folder it cannot list, search or check, as it refuses one
+  whose token file it can see, and names the commands that let the tool check it.
 
 ## 1.1.0
 

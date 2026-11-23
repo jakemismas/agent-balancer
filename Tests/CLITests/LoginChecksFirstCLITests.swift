@@ -472,9 +472,11 @@ extension AccessListPrivacyCLITests {
                 ), "\(name): \(said)")
             #expect(said.contains("First check: read"), "\(name)")
         case .launchFileLocked:
+            // The rewrite goes on past the locked file and names it by its path.
+            let place = typed([LaunchFiles.folder, "lab"])
             #expect(
                 said.contains(
-                    "Error: Launch files of 'lab' could not all be rewritten with the new token, so a session that uses one keeps the old token until it ends: "
+                    "Error: 1 launch file of 'lab' could not be checked, rewritten or deleted: `\(place)/\(target.lastPathComponent)`. It may keep the old token"
                 ), "\(name): \(said)")
             #expect(said.contains("First check: read"), "\(name)")
         }

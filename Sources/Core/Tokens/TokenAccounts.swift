@@ -121,7 +121,10 @@ public enum TokenAccounts {
     /// `login` that a `remove` overtook never leaves a token file with no account. It then also
     /// records `tokenCreatedAt` in the registry it loaded under the lock, once the token file is
     /// saved. A step after that save that fails is listed in `unfinished` and the rest still run,
-    /// so a saved token is never reported as not saved.
+    /// so a saved token is never reported as not saved; so are the launch files of the label that
+    /// the rewrite could not check, rewrite or delete, and the writer's temporary files in
+    /// `tokens/` and the label's launch folder that it could not delete, since each may hold a
+    /// token.
     static func install(
         context: ToolContext, label: String, token: String, snapshot: SessionsSnapshot? = nil,
         requireAccount: Bool = false
@@ -143,6 +146,8 @@ public enum TokenAccounts {
         let lock = try takeLock(context)
         defer { lock.release() }
         try TokenStore.deleteWriterLeftovers(context: context)
+        // One the delete could not take may hold a token, so the save names it.
+        let tokenTemporaries = TokenStore.temporariesLeft(context: context)
         let existed = (try TokenPaths.facts(context: context, label: label)).exists
         let config = requireAccount || existed ? try ConfigStore(context: context).load() : nil
         if requireAccount {
@@ -173,6 +178,7 @@ public enum TokenAccounts {
         }
         let records = snapshot ?? SessionsReader.read(context: context)
         var handled = Set<String>()
+        var left = Set<String>()
         var rewritten = 0
         var passes = 0
         // The token just saved, so the rewrite never reads the file back and never meets a
@@ -186,15 +192,30 @@ public enum TokenAccounts {
                     snapshot: records)
                 if pass.handled.isEmpty { break }
                 handled.formUnion(pass.handled)
+                left.formUnion(pass.left)
                 rewritten += pass.rewritten
             }
         } catch {
             unfinished.append(Messages.launchFilesNotRewritten(label, reason(error)))
         }
+        // A file the rewrite could not check, rewrite or delete may keep the old token.
+        left.formUnion(
+            LaunchFiles.unhandledFileNames(context: context, label: label, handled: handled))
+        if !left.isEmpty {
+            unfinished.append(LaunchFiles.notRewrittenText(label: label, names: left.sorted()))
+        }
         do {
             try LaunchFiles.deleteWriterLeftovers(context: context, label: label)
+            let temporaries = LaunchFiles.temporariesLeft(context: context, label: label)
+            if !temporaries.isEmpty {
+                unfinished.append(
+                    LaunchFiles.temporariesNotDeletedText(label: label, names: temporaries))
+            }
         } catch {
             unfinished.append(Messages.launchLeftoversNotDeleted(label, reason(error)))
+        }
+        if !tokenTemporaries.isEmpty {
+            unfinished.append(TokenStore.temporariesNotDeletedText(names: tokenTemporaries))
         }
         return Installed(
             replaced: existed, launchFilesRewritten: rewritten, unfinished: unfinished)

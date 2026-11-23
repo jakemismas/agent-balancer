@@ -32,7 +32,8 @@ public enum StatusBuilder {
     static func build(
         config: Config, readings: [String: Reading], previous: CurrentFile,
         observations: StatusObservations, sessions: SessionsSnapshot, tokens: [String: TokenInfo],
-        launchExists: (LaunchRef) -> Bool, now: Date, folders: [String: FolderInfo] = [:]
+        launchExists: (LaunchRef) -> Bool, launchUnchecked: (LaunchRef) -> Bool = { _ in false },
+        now: Date, folders: [String: FolderInfo] = [:]
     ) -> StatusBuild {
         var current = CurrentFile()
         current.prunedAt = previous.prunedAt
@@ -82,10 +83,16 @@ public enum StatusBuilder {
             for label in labels { live[label, default: []].append(session) }
         }
         var missing: [String: Int] = [:]
+        // A launch file `lstat` cannot check may hold a token, so it is never counted as gone.
+        var unchecked: [String: Int] = [:]
         for session in sessions.live {
-            for label in Set(session.refs.filter { !launchExists($0) }.map(\.label)) {
-                missing[label, default: 0] += 1
+            var gone = Set<String>()
+            var hidden = Set<String>()
+            for ref in session.refs where !launchExists(ref) {
+                if launchUnchecked(ref) { hidden.insert(ref.label) } else { gone.insert(ref.label) }
             }
+            for label in gone { missing[label, default: 0] += 1 }
+            for label in hidden { unchecked[label, default: 0] += 1 }
         }
 
         let retention = config.history.retentionDays
@@ -118,6 +125,13 @@ public enum StatusBuilder {
                     ? "1 live session names a launch file that is gone."
                     : "\(count) live sessions name a launch file that is gone."
                 evaluation.warnings.append(Issue(.launchFileMissing, .warning, text))
+            }
+            if let count = unchecked[account.label], count > 0 {
+                let sessions = count == 1 ? "1 live session names" : "\(count) live sessions name"
+                let text =
+                    sessions
+                    + " a launch file that cannot be checked. Run `agent-balancer doctor` in Terminal."
+                evaluation.warnings.append(Issue(.launchFileUnchecked, .warning, text))
             }
 
             if known == nil {
@@ -422,11 +436,20 @@ public enum StatusBuilder {
                 facts: Verifier.linkFacts(context: context, label: account.label),
                 display: context.display(dir))
         }
+        // One read of each launch file, so a file that changes between two reads is never gone.
+        var presences: [LaunchRef: LaunchFiles.Presence] = [:]
+        func presence(_ ref: LaunchRef) -> LaunchFiles.Presence {
+            if let seen = presences[ref] { return seen }
+            let found = LaunchFiles.presence(context: context, ref: ref)
+            presences[ref] = found
+            return found
+        }
         let built = build(
             config: config, readings: readings, previous: previous, observations: observations,
             sessions: sessions, tokens: tokens,
-            launchExists: { LaunchFiles.exists(context: context, ref: $0) }, now: now,
-            folders: folders)
+            launchExists: { presence($0) == .there },
+            launchUnchecked: { presence($0) == .unchecked },
+            now: now, folders: folders)
 
         var current = built.current
         let events = EventLog(context: context)
@@ -630,8 +653,8 @@ public enum StatusBuilder {
     /// `state/`, rewrites or adds lines to the events record and each history file there now,
     /// and sets a damaged events record aside and starts the history of a label that has none as
     /// new files; and adds lines to the log. Its other reads, whether the launch file a session
-    /// record names is there and whether a folder account's links are intact, answer no for a
-    /// folder the checks refuse and change nothing, so they are not in the plan.
+    /// record names is there and whether a folder account's links are intact, answer without a
+    /// refusal for a folder the checks refuse and change nothing, so they are not in the plan.
     static func rebuildPlan(context: ToolContext) -> NoFollowWriter.Plan {
         typealias Target = NoFollowWriter.Target
         let history = (try? ReadingHistory(context: context).labels()) ?? []

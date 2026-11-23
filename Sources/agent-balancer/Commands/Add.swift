@@ -50,8 +50,9 @@ struct AddCommand: ParsableCommand {
                         ? "A login account comes from `agent-balancer init`."
                         : "The kind must be token or folder.")
             }
-            // A token file left by an earlier account of this label is never taken over.
-            if try TokenPaths.facts(context: context, label: label).exists {
+            // A token file left by an earlier account of this label is never taken over, and one
+            // the tool cannot check may be such a file; one check decides both.
+            if try TokenStore.requireCheckedForAdd(context: context, label: label) {
                 throw ToolError(
                     "A token file from an earlier account '\(Display.safe(label))' is still saved. Run `agent-balancer remove \(label)` in Terminal first, then add it again."
                 )

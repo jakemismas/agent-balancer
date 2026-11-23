@@ -37,8 +37,7 @@ struct RunCommand: ParsableCommand {
             status = try ClaudeRunner(context: context).launchAttached(
                 arguments: launch.arguments, configDir: launch.configDir)
         } catch {
-            service.abandon(launch)
-            throw error
+            throw service.abandoned(launch, after: error)
         }
         if status != 0 { throw ExitCode(status) }
     }

@@ -447,7 +447,7 @@ extension ManageViewModelTests {
     /// Error codes a row can carry, and the codes each kind can never record.
     static let warningOnlyCodes: Set<StateCode> = [
         .limited, .fableLimited, .loginExpiring, .possibleDuplicate, .keyInSettings, .stale,
-        .launchFileMissing,
+        .launchFileMissing, .launchFileUnchecked,
     ]
     static let neverRecorded: [String: Set<String>] = [
         Kind.folder: ["token_missing"],

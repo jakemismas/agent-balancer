@@ -444,7 +444,7 @@ extension ManageViewModelTests {
         // Every error code a row can carry has a folder row, so a new code needs one too.
         let neverAnError: Set<StateCode> = [
             .limited, .fableLimited, .loginExpiring, .possibleDuplicate, .keyInSettings, .stale,
-            .launchFileMissing,
+            .launchFileMissing, .launchFileUnchecked,
         ]
         let folderCodes = Set(Self.folderRows.compactMap(\.code))
         for code in StateCode.allCases where !neverAnError.contains(code) {

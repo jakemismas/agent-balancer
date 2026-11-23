@@ -1001,6 +1001,24 @@ extension NoFollowWriter {
         }
     }
 
+    /// The names of the writer's temporary shape directly in `<root>/<folders...>` that may still
+    /// hold what a write put there: a regular file of the user's, or a name `lstat` cannot check.
+    /// Nothing is opened.
+    func temporariesThatMayHold(folders: [String]) -> [String] {
+        let names = (try? listNames(folders: folders)) ?? []
+        return names.filter { name in
+            guard Self.isTemporaryName(name) else { return false }
+            do {
+                guard let facts = try checkedInfo(folders: folders, name: name) else {
+                    return false
+                }
+                return facts.isRegularFile && facts.ownedByUser
+            } catch {
+                return true
+            }
+        }
+    }
+
     /// Deletes the temporary files `put` left directly in `<root>/<folders...>`. Callers hold the
     /// lock every writer of that folder holds, so none of them belongs to a write in progress.
     /// Anything else of that shape, a link included, is left alone. Returns how many names of that

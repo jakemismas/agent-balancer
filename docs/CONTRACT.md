@@ -21,7 +21,7 @@ seconds and wait up to 30 seconds for the pick lock.
 |---|---|---|
 | 0 | A recipe | Apply it |
 | 2 | Nothing fits | Do not launch. Leave the item waiting and show `reason` |
-| 1 | No pick: a refused flag, refused settings, a busy lock or another error | Report the error text. No lease or launch file was written |
+| 1 | No pick: a refused flag, refused settings, a busy lock or another error | Report the error text. No lease was written, and a launch file stays only when the error names it: never use that file; the commands the error names are for a person in their own terminal |
 
 ### Fields stable in schema version 1
 

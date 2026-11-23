@@ -73,20 +73,91 @@ public enum LaunchFiles {
         return url
     }
 
-    /// True when a launch file of that lease exists.
-    static func exists(context: ToolContext, label: String, leaseId: String) -> Bool {
-        let info = try? NoFollowWriter(root: context.dataRoot).info(
-            folders: folders(label: label), name: fileName(leaseId: leaseId))
-        return info != nil
+    /// What `lstat` shows at the launch file of one lease.
+    public enum Presence: Equatable, Sendable {
+        case there
+        case missing
+        /// `lstat` cannot check it, such as a file whose access list denies you `readattr`, one in
+        /// a folder you cannot search, or one in a folder the folder checks refuse. It may be
+        /// there and hold a token.
+        case unchecked
+    }
+
+    /// Whether the launch file of that lease is there, from `lstat` alone. Nothing is read.
+    static func presence(context: ToolContext, label: String, leaseId: String) -> Presence {
+        do {
+            let info = try NoFollowWriter(root: context.dataRoot).checkedInfo(
+                folders: folders(label: label), name: fileName(leaseId: leaseId))
+            return info == nil ? .missing : .there
+        } catch {
+            return .unchecked
+        }
     }
 }
 
+/// What `pick` and `run` do with the launch file of a pick that did not finish
+/// (docs/ARCHITECTURE.md section 4A.2): it is deleted, and when it is still there or cannot be
+/// checked, the command's error names it and the commands that let the tool check or delete it.
 extension LaunchFiles {
-    /// Removes the launch file of a pick that did not finish. Only a regular file owned by the
-    /// user goes, through the no-follow writer.
-    static func discard(context: ToolContext, label: String, leaseId: String) {
-        _ = try? NoFollowWriter(root: context.dataRoot).removeOwnRegularFile(
-            folders: folders(label: label), name: fileName(leaseId: leaseId))
+    /// Deletes the launch file of a pick that did not finish. Only a regular file owned by the
+    /// user goes, through the no-follow writer. Returns what `command` adds to its error when the
+    /// file is still there or `lstat` cannot check it, or nil when it is gone. `holdsToken` says
+    /// whether the file was written with a token, and `rerun` is the command the person ran, which
+    /// the text names to run again.
+    static func discard(
+        context: ToolContext, label: String, leaseId: String, holdsToken: Bool, command: String,
+        rerun: String
+    ) -> String? {
+        let writer = NoFollowWriter(root: context.dataRoot)
+        let dir = folders(label: label)
+        let name = fileName(leaseId: leaseId)
+        _ = try? writer.removeOwnRegularFile(folders: dir, name: name)
+        let info: OwnFileInfo?
+        do {
+            info = try writer.checkedInfo(folders: dir, name: name)
+        } catch {
+            return notDiscardedText(
+                label: label, leaseId: leaseId, holdsToken: holdsToken, checked: false,
+                command: command, rerun: rerun)
+        }
+        guard let info, info.isRegularFile, info.ownedByUser else { return nil }
+        return notDiscardedText(
+            label: label, leaseId: leaseId, holdsToken: holdsToken, checked: true,
+            command: command, rerun: rerun)
+    }
+
+    /// The launch file of `label` and `leaseId` as a person types it.
+    static func typedFile(label: String, leaseId: String) -> String {
+        typedFolder(label: label) + "/" + fileName(leaseId: leaseId)
+    }
+
+    /// What `command` adds to its error when the launch file it wrote is still there after its
+    /// delete, with `checked`, or cannot be checked with `lstat`, such as one that took an entry
+    /// from its folder that denies you `readattr`. The file may be a link by then, so `-h` keeps
+    /// `chmod` on the entry itself, and `chmod -N` clears one whose list also denies you `read`.
+    /// The folder passed the folder checks, so `chmod -h -N` opens it and clears an entry it
+    /// passes on to each file written in it. A lock, an append-only flag, a folder that is not
+    /// writable or a list that denies you `delete` keeps the file from being deleted. The file
+    /// holds no lease, so upkeep deletes it once the tool can check and delete it (4A.6).
+    static func notDiscardedText(
+        label: String, leaseId: String, holdsToken: Bool, checked: Bool, command: String,
+        rerun: String
+    ) -> String {
+        let place = typedFolder(label: label)
+        let file = typedFile(label: label, leaseId: leaseId)
+        let start = "The launch file `\(file)` that `\(command)` wrote"
+        let end =
+            " Then run your `\(rerun)` command again. The upkeep that `agent-balancer pick` and `agent-balancer refresh` run deletes the file later, as it deletes the file of any pick that holds no lease."
+        guard checked else {
+            let holds = holdsToken ? " and may still hold the token of '\(label)'" : ""
+            return
+                "\(start) could not be checked, so it was not deleted\(holds). Run `chmod -h -N \(place)` and `chmod -h -N \(file)`, or `chmod -N \(file)` if that says Permission denied. Run `chflags -h nouchg,nouappnd \(place)` first if it is locked."
+                + end
+        }
+        let holds = holdsToken ? ", so it still holds the token of '\(label)'" : ""
+        return
+            "\(start) could not be deleted\(holds). Run `chmod -h -N \(place)`, `chmod -h 700 \(place)` and `chmod -h -N \(file)`, or `chmod -N \(file)` if that says Permission denied. Run `chflags -h nouchg,nouappnd \(place)` and `chflags -h nouchg,nouappnd \(file)` first if either is locked."
+            + end
     }
 }
 
@@ -111,9 +182,9 @@ extension LaunchFiles {
         return found
     }
 
-    /// True when the named launch file exists as a directory entry. Nothing is read.
-    public static func exists(context: ToolContext, ref: LaunchRef) -> Bool {
-        exists(context: context, label: ref.label, leaseId: ref.leaseId)
+    /// What `lstat` shows at the named launch file. Nothing is read.
+    public static func presence(context: ToolContext, ref: LaunchRef) -> Presence {
+        presence(context: context, label: ref.label, leaseId: ref.leaseId)
     }
 }
 
@@ -183,42 +254,82 @@ extension LaunchFiles {
         var handled = Set<String>()
         /// Files that now carry the new token.
         var rewritten = 0
+        /// Files still there that the pass could not rewrite, turn into a tombstone or delete, or
+        /// could no longer check. Each may keep the old token.
+        var left = Set<String>()
     }
 
     /// Writes `token`, the one the token store just saved for `label`, into every live launch file
     /// of the label that is not in `skipping`. A tombstone is never revived, and a file that
     /// carries no token, such as one a renamed `login` account's pick left under its old label,
-    /// never gains one. A file that does not parse never keeps the old token: one a session record
-    /// names (or any, when the records cannot be read cleanly) becomes a tombstone, and any other
-    /// is deleted. Callers hold the pick lock.
+    /// never gains one. A file that does not parse never keeps the old token unsaid: one a
+    /// session record names (or any, when the records cannot be read cleanly) becomes a
+    /// tombstone, and any other is deleted. A file the pass cannot rewrite, turn into a tombstone
+    /// or delete, such as one a lock or an access list keeps, goes into `left` while it is still
+    /// there, and the pass goes on with the others. Callers hold the pick lock.
     static func rewriteToken(
         context: ToolContext, label: String, token secret: TokenSecret, skipping: Set<String>,
         snapshot: SessionsSnapshot
     ) throws -> RewritePass {
         let token = secret.reveal()
         let writer = NoFollowWriter(root: context.dataRoot)
+        let dir = folders(label: label)
         var pass = RewritePass()
         for name in try ownFileNames(context: context, label: label) where !skipping.contains(name)
         {
             pass.handled.insert(name)
-            guard var object = object(context: context, label: label, name: name) else {
-                if isNamed(name, label: label, snapshot: snapshot) {
-                    try writeTombstone(context: context, label: label, name: name)
-                } else {
-                    try writer.removeOwnRegularFile(folders: folders(label: label), name: name)
+            do {
+                guard var object = object(context: context, label: label, name: name) else {
+                    if isNamed(name, label: label, snapshot: snapshot) {
+                        try writeTombstone(context: context, label: label, name: name)
+                    } else if !(try writer.removeOwnRegularFile(folders: dir, name: name)),
+                        mayStillHold(writer, dir, name)
+                    {
+                        pass.left.insert(name)
+                    }
+                    continue
                 }
-                continue
+                if isTombstone(object) { continue }
+                var env = object["env"] as? [String: Any] ?? [:]
+                // A file with no token belongs to a session that runs on another sign-in.
+                guard env[ProtectedEnv.tokenVariable] != nil else { continue }
+                env[ProtectedEnv.tokenVariable] = token
+                object["env"] = env
+                try put(object, context: context, label: label, name: name)
+                pass.rewritten += 1
+            } catch {
+                if mayStillHold(writer, dir, name) { pass.left.insert(name) }
             }
-            if isTombstone(object) { continue }
-            var env = object["env"] as? [String: Any] ?? [:]
-            // A file with no token belongs to a session that runs on another sign-in.
-            guard env[ProtectedEnv.tokenVariable] != nil else { continue }
-            env[ProtectedEnv.tokenVariable] = token
-            object["env"] = env
-            try put(object, context: context, label: label, name: name)
-            pass.rewritten += 1
         }
         return pass
+    }
+
+    /// Whether `name` in `dir` may still hold what the tool wrote there: a regular file of the
+    /// user's, or a name `lstat` cannot check. A name that is gone, or that is a link or another
+    /// user's entry by now, holds no file of the tool's.
+    private static func mayStillHold(_ writer: NoFollowWriter, _ dir: [String], _ name: String)
+        -> Bool
+    {
+        do {
+            guard let info = try writer.checkedInfo(folders: dir, name: name) else { return false }
+            return info.isRegularFile && info.ownedByUser
+        } catch {
+            return true
+        }
+    }
+
+    /// The names of a launch file's shape in the label's folder that are not in `handled` and
+    /// may hold a token: one `lstat` cannot check, or a regular file of the user's, which a pass
+    /// could not check when it listed the folder. One listing decides each name.
+    static func unhandledFileNames(context: ToolContext, label: String, handled: Set<String>)
+        -> [String]
+    {
+        let writer = NoFollowWriter(root: context.dataRoot)
+        let dir = folders(label: label)
+        let names = (try? writer.listNames(folders: dir)) ?? []
+        return names.filter { name in
+            isFileName(name) && !handled.contains(name) && mayStillHold(writer, dir, name)
+        }
     }
 
     /// What `removeAll` did with the launch files of one label.
@@ -344,8 +455,48 @@ extension LaunchFiles {
     /// as a file whose access list denies its owner `readattr`. Each may hold a token. Nothing is
     /// opened.
     static func uncheckedFileCount(context: ToolContext, label: String) -> Int {
-        NoFollowWriter(root: context.dataRoot).uncheckedCount(
+        uncheckedFileNames(context: context, label: label).count
+    }
+
+    /// The names of a launch file's shape in the label's folder that `lstat` cannot check.
+    /// Nothing is opened.
+    static func uncheckedFileNames(context: ToolContext, label: String) -> [String] {
+        NoFollowWriter(root: context.dataRoot).uncheckedNames(
             folders: folders(label: label), of: isFileName)
+    }
+
+    /// What a token save says about `names`, launch files of the label that its rewrite could not
+    /// check, rewrite or delete: each by its path, since each may keep the old token, with the
+    /// commands that clear each cause. A lock or an append-only flag on the folder or the file
+    /// goes first; `chmod -h -N` on the folder clears an entry it passes on to each file written
+    /// in it, and `chmod -h 700` a mode that keeps a delete out; on the file, `chmod -h -N`
+    /// clears its list, `chmod -N` one that also denies `read`, and `chmod -h 600` a mode that
+    /// keeps the tool from reading it.
+    static func notRewrittenText(label: String, names: [String]) -> String {
+        let place = typedFolder(label: label)
+        let one = names.count == 1
+        let paths = names.map { "`" + place + "/" + $0 + "`" }
+        let what = one ? "1 launch file" : "\(names.count) launch files"
+        let keeps =
+            one
+            ? "It may keep the old token, and a session that uses the file keeps that token until it ends."
+            : "Each may keep the old token, and a session that uses one keeps that token until it ends."
+        let each = one ? "that file" : "each of these files"
+        return
+            "\(what) of '\(label)' could not be checked, rewritten or deleted: \(Messages.listed(paths)). \(keeps) Run `chflags -h nouchg,nouappnd` first on `\(place)` and on \(one ? "that file if either is locked" : "each of these files that is locked"). Then run `chmod -h -N \(place)` and `chmod -h 700 \(place)`, and on \(each) `chmod -h -N`, or `chmod -N` \(one ? "if" : "where") that says Permission denied, then `chmod -h 600`."
+    }
+
+    /// The writer's temporary files in the label's folder that may still hold a launch file, by
+    /// name: those it could not delete, and names of their shape `lstat` cannot check.
+    static func temporariesLeft(context: ToolContext, label: String) -> [String] {
+        NoFollowWriter(root: context.dataRoot).temporariesThatMayHold(
+            folders: folders(label: label))
+    }
+
+    /// What a token save says about `names`, the writer's temporary files it could not delete in
+    /// the label's folder.
+    static func temporariesNotDeletedText(label: String, names: [String]) -> String {
+        Messages.temporariesNotDeleted(place: typedFolder(label: label), names: names)
     }
 
     /// Whether the label's launch folder still holds a launch file that may carry a token, one
@@ -436,17 +587,29 @@ extension LaunchFiles {
     }
 }
 
-/// Whole-tree calls for `doctor` and `uninstall`. They return counts and ages only, never a name,
-/// a path or any content of a launch file.
+/// Whole-tree calls for `doctor` and `uninstall`. They return counts, ages and the launch folders
+/// the tool cannot check, never a name, a path or any content of a launch file.
 extension LaunchFiles {
     /// What the launch folders hold right now.
     public struct Inventory: Equatable, Sendable {
-        /// Launch files the tool made, across every label.
+        /// Launch files the tool made, across every label's launch folder it can list.
         public var files = 0
         /// Of those, the files a session record still names. Zero when the records cannot be read.
         public var named = 0
         /// Age in seconds of the oldest launch file, or nil with no file.
         public var oldestAge: TimeInterval?
+        /// Launch files the tool cannot check, not counted in `files`: each name of a launch
+        /// file's shape that `lstat` cannot check, each such name in a launch folder the folder
+        /// checks refuse, and each launch file a session record names in a launch folder that
+        /// cannot be listed. Each may hold a token.
+        public var unchecked = 0
+        /// The launch folders the folder checks refuse, as a person types them. Each launch file
+        /// in one counts in `unchecked`.
+        public var refusedFolders: [String] = []
+        /// The launch folders that cannot be listed, or that `lstat` cannot check, as a person
+        /// types them. A launch file in one counts in `unchecked` only when a session record
+        /// names it.
+        public var unlistedFolders: [String] = []
     }
 
     /// The labels that have a launch folder: real folders the user owns, never a link.
@@ -456,26 +619,64 @@ extension LaunchFiles {
             ConfigValidator.isValidLabel)
     }
 
+    /// What the launch folders hold, from one listing of each folder. A launch folder the folder
+    /// checks refuse is read as `doctor` reads it, so each launch file in it counts as one the
+    /// tool cannot check; in one that cannot be listed, each launch file a session record names
+    /// counts so.
     public static func inventory(
         context: ToolContext, snapshot: SessionsSnapshot, now: Date
     ) -> Inventory {
         let writer = NoFollowWriter(root: context.dataRoot)
+        let reader = NoFollowWriter.forDoctor(root: context.dataRoot)
         var result = Inventory()
-        for label in labels(context: context) {
-            for name in (try? ownFileNames(context: context, label: label)) ?? [] {
-                result.files += 1
-                if snapshot.named.contains(
-                    LaunchRef(label: label, leaseId: String(name.dropLast(5))))
-                {
-                    result.named += 1
+        let labelNames: [String]
+        if let names = try? writer.listNames(folders: [folder]) {
+            labelNames = names
+        } else if let names = try? reader.listNames(folders: [folder]) {
+            result.refusedFolders.append("~/.agent-balancer/" + folder)
+            labelNames = names
+        } else {
+            result.unlistedFolders.append("~/.agent-balancer/" + folder)
+            result.unchecked = snapshot.named.count
+            return result
+        }
+        let rootRefused = !result.refusedFolders.isEmpty
+        for label in labelNames where ConfigValidator.isValidLabel(label) {
+            let dir = folders(label: label)
+            if !rootRefused, let names = try? writer.listNames(folders: dir) {
+                for name in names where isFileName(name) {
+                    count(name, label: label, writer: writer, snapshot: snapshot, now: now, &result)
                 }
-                if let info = try? writer.info(folders: folders(label: label), name: name) {
-                    let age = max(0, now.timeIntervalSince(info.modified))
-                    result.oldestAge = max(result.oldestAge ?? 0, age)
-                }
+            } else if let names = try? reader.listNames(folders: dir) {
+                if !rootRefused { result.refusedFolders.append(typedFolder(label: label)) }
+                result.unchecked += names.filter(isFileName).count
+            } else {
+                result.unlistedFolders.append(typedFolder(label: label))
+                result.unchecked += snapshot.named.filter { $0.label == label }.count
             }
         }
         return result
+    }
+
+    /// Counts the launch file `name` of `label` into `result` from one `lstat`: a regular file of
+    /// the user's as a file, a name `lstat` cannot check as unchecked, and anything else not.
+    private static func count(
+        _ name: String, label: String, writer: NoFollowWriter, snapshot: SessionsSnapshot,
+        now: Date, _ result: inout Inventory
+    ) {
+        let info: OwnFileInfo?
+        do {
+            info = try writer.checkedInfo(folders: folders(label: label), name: name)
+        } catch {
+            result.unchecked += 1
+            return
+        }
+        guard let info, info.isRegularFile, info.ownedByUser else { return }
+        result.files += 1
+        if snapshot.named.contains(LaunchRef(label: label, leaseId: String(name.dropLast(5)))) {
+            result.named += 1
+        }
+        result.oldestAge = max(result.oldestAge ?? 0, max(0, now.timeIntervalSince(info.modified)))
     }
 
     /// Throws, so `uninstall` refuses before it removes anything, when the launch folder is there

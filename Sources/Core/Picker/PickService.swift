@@ -23,7 +23,8 @@ public struct PickRequest: Sendable {
 
 /// `pick`: refreshes stale readings, then under the pick lock decides, writes the launch file and
 /// the lease, and logs one line (docs/ARCHITECTURE.md sections 4A and 7.2). A thrown `ToolError`
-/// is exit 1, and no lease, launch file or `picks.log` line was written for it.
+/// is exit 1, and no lease or `picks.log` line was written for it; a launch file written for it
+/// is deleted again, or its text names that file.
 public struct PickService: Sendable {
     public let context: ToolContext
     public var clock: @Sendable () -> Date = { Date() }
@@ -199,7 +200,14 @@ public struct PickService: Sendable {
                     Lease(id: id, label: account.label, model: request.model ?? "default", at: now))
                 try leaseStore.save(leases)
             } catch {
-                LaunchFiles.discard(context: context, label: account.label, leaseId: id)
+                // The lease error comes first, then the launch file the cleanup could not delete.
+                if let left = LaunchFiles.discard(
+                    context: context, label: account.label, leaseId: id,
+                    holdsToken: account.kind == Kind.token, command: "pick",
+                    rerun: "agent-balancer pick")
+                {
+                    throw ToolError.adding(left, to: error)
+                }
                 throw error
             }
             break

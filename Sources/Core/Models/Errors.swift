@@ -19,6 +19,9 @@ public enum StateCode: String, Codable, Sendable, CaseIterable {
     case stale
     /// A live session names a launch file that is gone. A count only: no event, no path.
     case launchFileMissing = "launch_file_missing"
+    /// A live session names a launch file that `lstat` cannot check, so it may hold a token. A
+    /// count only: no event, no path.
+    case launchFileUnchecked = "launch_file_unchecked"
 }
 
 public enum Severity: String, Sendable {
@@ -50,6 +53,14 @@ public struct ToolError: Error, LocalizedError, Equatable, Sendable {
     }
 
     public var errorDescription: String? { message }
+
+    /// `error` with `more` after its text and with its code, for a step that failed and left
+    /// something with a fix of its own.
+    static func adding(_ more: String, to error: Error) -> ToolError {
+        let tool = error as? ToolError
+        return ToolError(
+            (tool?.message ?? error.localizedDescription) + " " + more, code: tool?.code)
+    }
 }
 
 public enum Messages {
@@ -422,6 +433,25 @@ public enum Messages {
 
     static func launchFilesNotRewritten(_ label: String, _ reason: String) -> String {
         "Launch files of '\(Display.safe(label, limit: 32))' could not all be rewritten with the new token, so a session that uses one keeps the old token until it ends: \(reason)"
+    }
+
+    /// `items` as a sentence lists them: `a`, `a and b`, `a, b and c`.
+    static func listed(_ items: [String]) -> String {
+        items.count > 1
+            ? items.dropLast().joined(separator: ", ") + " and " + (items.last ?? "")
+            : items.joined()
+    }
+
+    /// What a token save says about the writer's temporary files it could not delete in the
+    /// folder `place`, as a person types it, each by its path, since each may hold a token. The
+    /// commands clear a lock, an access list or a folder mode that keeps the delete out; `-h`
+    /// keeps each on the entry itself, and `chmod -N` clears one whose list also denies `read`.
+    static func temporariesNotDeleted(place: String, names: [String]) -> String {
+        let one = names.count == 1
+        let paths = names.map { "`" + place + "/" + $0 + "`" }
+        let each = one ? "that file" : "each of these files"
+        return
+            "\(names.count) temporary \(one ? "file" : "files") the writer left in `\(place)` could not be deleted and may hold a token: \(listed(paths)). Run `chflags -h nouchg,nouappnd` first on `\(place)` and on \(one ? "that file if either is locked" : "each of these files that is locked"). Then run `chmod -h -N \(place)` and `chmod -h 700 \(place)`, and on \(each) `chmod -h -N`, or `chmod -N` \(one ? "if" : "where") that says Permission denied."
     }
 
     static func launchLeftoversNotDeleted(_ label: String, _ reason: String) -> String {

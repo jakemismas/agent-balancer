@@ -28,19 +28,39 @@ when the tool links anything else.
 
 ## Cut a release
 
-1. Set `Sources/Core/Version.swift`, the `CHANGELOG.md` heading and `release` in
-   `Tests/CLITests/ReleaseScriptTests.swift` to the new version, set `previous` there to the
-   version before it, and land the change. The tests check the tool's version, the version rule
-   and the newest `CHANGELOG.md` entry against those two values. The release notes are the
-   `CHANGELOG.md` entry under `## <version>`, so the entry must exist and hold text.
-   `scripts/release-notes.sh <version>` prints it.
+1. Set `Sources/Core/Version.swift` and `release` in `Tests/CLITests/ReleaseScriptTests.swift`
+   to the new version, and set `previous` there to the version before it. In `CHANGELOG.md`, add
+   a `## <version>` heading above the shipped entry, and move every line added since the last
+   release under the new heading, unchanged and in order: between releases each change adds its
+   line at the end of the newest entry, so those lines end the shipped entry. Leave the shipped
+   entry as it was at its release. Then land the change. The tests check the tool's version, the
+   version rule and the newest `CHANGELOG.md` entry against `release` and `previous`, and each
+   shipped entry against its pin (see step 3), so a line left in a shipped entry fails them. The
+   release notes are the `CHANGELOG.md` entry under `## <version>`, so the entry must exist and
+   hold text. `scripts/release-notes.sh <version>` prints it.
 2. Start the `release` workflow by hand. Its version input must equal the `Version.swift` value,
    or that value plus `-rcN` when the prerelease switch is on. `scripts/release-version.sh check
    <version> <true|false>` applies the same rule, and the workflow and `package-release.sh` both
    call it. A prerelease of `1.0.0` is `1.0.0-rc1`, `1.0.0-rc2` and so on; `1.0.0-rc` and
    `1.0.0-rc1abc` fail, and so does a plain version with the switch on.
 3. The run checks the tree, packages the files, attests the archive and the zip, and creates the
-   GitHub release with the notes.
+   GitHub release with the notes. Then pin the entry it released: add its version to
+   `shippedNotes` in `Tests/CLITests/ReleaseScriptTests.swift` with the byte count and the SHA-256
+   of its notes at the run's tag, as `"<version>": Pin(bytes: <count>, sha256: "<SHA-256>")`, and
+   land the change. After `git fetch --tags`, these commands print the count, then the SHA-256
+   and a dash, where `<tag>` is the run's tag and `<version>` the entry's version (for
+   `v1.0.0-rc1`, the entry is `1.0.0`). When the tag or the entry is missing, they stop with an
+   error and print neither:
+
+   ```
+   notes="$(git show <tag>:CHANGELOG.md | scripts/release-notes.sh <version> /dev/stdin)" &&
+     printf '%s\n' "$notes" | wc -c && printf '%s\n' "$notes" | shasum -a 256
+   ```
+
+   While `Version.swift` holds the entry's version, the tests check that the entry still starts
+   with its pinned text, so new lines can go at its end until the next version change moves
+   them; once the version is past it, the entry must equal its pin. After a later run of the
+   same version, such as the release after its prerelease, replace the pin the same way.
 4. Update the tap by hand (see Update the tap below).
 
 ## Update the tap
@@ -136,7 +156,8 @@ Topics: `claude-code`, `claude`, `usage-limits`, `rate-limits`, `multiple-accoun
    the way the install section of `docs/GUIDE.md` says.
 4. Only then start the `release` workflow with version `1.1.0` and the prerelease switch off. It
    creates the `v1.1.0` tag and the release, with the `1.1.0` entry of `CHANGELOG.md` as notes,
-   the checksums and the attestations.
+   the checksums and the attestations. Then replace the `1.1.0` pin as step 3 of Cut a release
+   says.
 5. Update the tap by hand from the printed checksums, then run `brew update && brew upgrade
    agent-balancer` and check `agent-balancer --version`.
 

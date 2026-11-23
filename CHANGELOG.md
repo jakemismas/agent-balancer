@@ -109,6 +109,15 @@
   ruleset limits creating, moving and deleting `v*` tags to the release workflow and the maintainer.
   The release check now fails when the workflow stops creating the tag through `gh release create`
   or the guide stops naming it.
+- The tests pin each shipped changelog entry, not only 1.0.0, to the byte count and SHA-256 of its
+  notes at its release. Once the version is past an entry, its notes must equal the pin, so a line
+  left in a shipped entry at a version change fails the checks; while the version equals it, the
+  notes must start with the pinned text, so an edit inside that text, or a pin of other text, fails
+  at once. Step 1 of "Cut a release" in `docs/RELEASING.md` says to move every line added since the
+  last release under the new heading, unchanged and in order, and to leave the shipped entry as it
+  was at its release. Step 3, which ships a release, gives commands that print the pin and stop when
+  the tag or the entry is missing, and the tests refuse the SHA-256 of no notes as a pin. "After the
+  flip" says to replace the 1.1.0 pin after the 1.1.0 release.
 
 ## 1.0.0
 

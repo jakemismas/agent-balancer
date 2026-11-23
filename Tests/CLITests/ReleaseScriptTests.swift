@@ -123,19 +123,238 @@ import Testing
         #expect(!out.stdout.isEmpty)
     }
 
-    /// The 1.0.0 entry is history, so its notes keep the SHA-256 they had at that build.
-    static let shippedNotes = "ee18d094748a6553066cac0a0dc40829dc4324f04b64ef72ba92ee1d57f40771"
+    /// A shipped entry's notes at its release: their length in bytes and their SHA-256.
+    struct Pin {
+        let bytes: Int
+        let sha256: String
+    }
 
-    @Test func theShippedEntryKeepsItsTextByteForByte() throws {
-        let out = try Self.notes("1.0.0")
-        #expect(out.status == 0)
+    /// Each shipped entry's notes at its release; only the newest may grow, and only at its end.
+    static let shippedNotes = [
+        "1.0.0": Pin(
+            bytes: 40519,
+            sha256: "ee18d094748a6553066cac0a0dc40829dc4324f04b64ef72ba92ee1d57f40771"),
+        "1.1.0": Pin(
+            bytes: 7615,
+            sha256: "5fa489f8df83d14a5bf2bfc9da39a686d1d494cb3cd474038dd38052b8b96600"),
+    ]
+
+    /// What a pin step prints when it read no notes.
+    static let emptySHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+    static func numbers(_ version: String) -> [Int]? {
+        let parts = version.split(separator: ".", omittingEmptySubsequences: false)
+        let values = parts.compactMap { part in
+            part.allSatisfy { "0123456789".contains($0) } ? Int(part) : nil
+        }
+        return parts.count == 3 && values.count == 3 ? values : nil
+    }
+
+    static func sha256(_ data: Data) throws -> String {
         let sum = try Support.run(
             URL(fileURLWithPath: "/usr/bin/shasum"), ["-a", "256"], env: ["PATH": "/usr/bin:/bin"],
-            stdin: out.stdout)
+            stdin: data)
         #expect(sum.status == 0)
+        return String(String(decoding: sum.stdout, as: UTF8.self).prefix(64))
+    }
+
+    /// An entry below the version must equal its pin; the entry at the version must start with it.
+    static func pinProblems(
+        _ changelog: String? = nil, current: String, pins: [String: Pin]
+    ) throws -> [String] {
+        guard let now = numbers(current) else { return ["\(current) is not a version"] }
+        let text =
+            try changelog
+            ?? String(
+                contentsOf: Support.root.appendingPathComponent("CHANGELOG.md"), encoding: .utf8)
+        var problems: [String] = []
+        var seen: Set<String> = []
+        for line in text.split(separator: "\n") where line.hasPrefix("## ") {
+            let version = String(line.dropFirst(3))
+            guard seen.insert(version).inserted else {
+                problems.append("\(line) is there twice")
+                continue
+            }
+            guard let entry = numbers(version) else {
+                problems.append("\(line) is not a version")
+                continue
+            }
+            if entry.lexicographicallyPrecedes(now) && pins[version] == nil {
+                problems.append("\(line) shipped and has no pin")
+            }
+        }
+        for (version, pin) in pins.sorted(by: { $0.key < $1.key }) {
+            guard let entry = numbers(version) else {
+                problems.append("the pin \(version) is not a version")
+                continue
+            }
+            guard pin.bytes > 0 && pin.sha256 != emptySHA256 else {
+                problems.append("the pin of \(version) holds no notes")
+                continue
+            }
+            guard pin.sha256.count == 64, pin.sha256.allSatisfy({ "0123456789abcdef".contains($0) })
+            else {
+                problems.append("the pin of \(version) is not a SHA-256")
+                continue
+            }
+            guard !now.lexicographicallyPrecedes(entry) else {
+                problems.append("the pin \(version) is past \(current)")
+                continue
+            }
+            let out = try notes(version, changelog: changelog)
+            guard out.status == 0 else {
+                problems.append("## \(version) is gone")
+                continue
+            }
+            let sum = try sha256(out.stdout.prefix(pin.bytes))
+            if entry.lexicographicallyPrecedes(now) {
+                if out.stdout.count != pin.bytes || sum != pin.sha256 {
+                    problems.append("## \(version) differs from its pin")
+                }
+            } else if out.stdout.count < pin.bytes || sum != pin.sha256 {
+                problems.append("## \(version) no longer starts with its pin")
+            }
+        }
+        return problems
+    }
+
+    @Test func everyShippedEntryKeepsItsTextByteForByte() throws {
+        let problems = try Self.pinProblems(current: Version.current, pins: Self.shippedNotes)
+        #expect(problems.isEmpty, "\(problems): see Cut a release in docs/RELEASING.md")
+    }
+
+    // Fixture entries, so the rule's tests pin text of their own and never the real file's.
+    static let entry110 = "## 1.1.0\n\n- Fix one.\n- Fix two.\n"
+    static let entry100 = "## 1.0.0\n\n- First.\n"
+
+    static func log(_ entries: String...) -> String {
+        "# Changelog\n\n" + entries.joined(separator: "\n")
+    }
+
+    static func pin(_ version: String, in changelog: String) throws -> Pin {
+        let out = try notes(version, changelog: changelog)
+        #expect(out.status == 0)
+        let sum = try sha256(out.stdout)
+        return Pin(bytes: out.stdout.count, sha256: sum)
+    }
+
+    static func shippedPins() throws -> [String: Pin] {
+        let shipped = log(entry110, entry100)
+        return try ["1.0.0": pin("1.0.0", in: shipped), "1.1.0": pin("1.1.0", in: shipped)]
+    }
+
+    @Test func theNewestEntryTakesNewLinesWhileTheVersionIsItsOwn() throws {
+        let grown = Self.log(Self.entry110 + "- Fix three.\n", Self.entry100)
+        let pins = try Self.shippedPins()
+        #expect(try Self.pinProblems(grown, current: "1.1.0", pins: pins) == [])
+    }
+
+    @Test func theNewestEntryKeepsItsShippedTextWhileItGrows() throws {
+        let pins = try Self.shippedPins()
+        var other = pins
+        other["1.1.0"] = pins["1.0.0"]
+        let cases: [(String, [String: Pin])] = [
+            (Self.log("## 1.1.0\n\n- Fix 1.\n- Fix two.\n- Fix three.\n", Self.entry100), pins),
+            (Self.log("## 1.1.0\n\n- Fix one.\n- Fix three.\n- Fix two.\n", Self.entry100), pins),
+            (Self.log("## 1.1.0\n\n- Fix one.\n", Self.entry100), pins),
+            (Self.log(Self.entry110, Self.entry100), other),
+        ]
+        for (changelog, given) in cases {
+            let problems = try Self.pinProblems(changelog, current: "1.1.0", pins: given)
+            #expect(problems == ["## 1.1.0 no longer starts with its pin"], "\(changelog)")
+        }
+    }
+
+    @Test func aLineLeftInAShippedEntryFailsOnceTheVersionIsPastIt() throws {
+        let pins = try Self.shippedPins()
+        let left = Self.log(
+            "## 1.2.0\n\n- Fix four.\n", Self.entry110 + "- Fix three.\n", Self.entry100)
         #expect(
-            String(decoding: sum.stdout, as: UTF8.self).prefix(64) == Self.shippedNotes,
-            "a new line goes at the end of the newest entry")
+            try Self.pinProblems(left, current: "1.2.0", pins: pins) == [
+                "## 1.1.0 differs from its pin"
+            ])
+        let moved = Self.log(
+            "## 1.2.0\n\n- Fix three.\n- Fix four.\n", Self.entry110, Self.entry100)
+        #expect(try Self.pinProblems(moved, current: "1.2.0", pins: pins) == [])
+    }
+
+    @Test func everyOtherBreakOfThePinRuleFails() throws {
+        let pins = try Self.shippedPins()
+        let shipped = Self.log(Self.entry110, Self.entry100)
+        let moved = Self.log("## 1.2.0\n\n- Fix three.\n", Self.entry110, Self.entry100)
+        let pin110 = pins["1.1.0"] ?? Pin(bytes: 0, sha256: "")
+        func with(_ version: String, _ pin: Pin?) -> [String: Pin] {
+            var changed = pins
+            changed[version] = pin
+            return changed
+        }
+        let entry190 = "## 1.9.0\n\n- Nine.\n"
+        let entry1100 = "## 1.10.0\n\n- Ten.\n"
+        let pin190 = try Self.pin("1.9.0", in: Self.log(entry190))
+        let cases: [(String, String, [String: Pin], [String])] = [
+            (
+                Self.log(Self.entry110, Self.entry100 + "- Late.\n"), "1.1.0", pins,
+                ["## 1.0.0 differs from its pin"]
+            ),
+            (moved, "1.2.0", with("1.1.0", nil), ["## 1.1.0 shipped and has no pin"]),
+            (shipped, "1.1.0", with("1.2.0", pin110), ["the pin 1.2.0 is past 1.1.0"]),
+            (
+                shipped, "1.1.0",
+                with("1.1.0", Pin(bytes: pin110.bytes, sha256: pin110.sha256 + "  -")),
+                ["the pin of 1.1.0 is not a SHA-256"]
+            ),
+            (
+                shipped, "1.1.0",
+                with("1.1.0", Pin(bytes: pin110.bytes, sha256: String(pin110.sha256.dropLast()))),
+                ["the pin of 1.1.0 is not a SHA-256"]
+            ),
+            (
+                shipped, "1.1.0",
+                with("1.1.0", Pin(bytes: pin110.bytes, sha256: pin110.sha256.uppercased())),
+                ["the pin of 1.1.0 is not a SHA-256"]
+            ),
+            (
+                shipped, "1.1.0", with("1.1.0", Pin(bytes: pin110.bytes, sha256: Self.emptySHA256)),
+                ["the pin of 1.1.0 holds no notes"]
+            ),
+            (
+                shipped, "1.1.0", with("1.1.0", Pin(bytes: 0, sha256: pin110.sha256)),
+                ["the pin of 1.1.0 holds no notes"]
+            ),
+            (shipped, "1.1.0", with("v1.0.0", pins["1.0.0"]), ["the pin v1.0.0 is not a version"]),
+            (Self.log(Self.entry110), "1.1.0", pins, ["## 1.0.0 is gone"]),
+            (
+                Self.log(Self.entry110, Self.entry100, "## 1.0.0\n\n- Late.\n"), "1.1.0", pins,
+                ["## 1.0.0 is there twice", "## 1.0.0 differs from its pin"]
+            ),
+            (
+                Self.log("## Next\n\n- Fix three.\n", Self.entry110, Self.entry100), "1.1.0", pins,
+                ["## Next is not a version"]
+            ),
+            (
+                Self.log("## 1.1.0.x\n\n- Fix three.\n", Self.entry110, Self.entry100), "1.1.0",
+                pins, ["## 1.1.0.x is not a version"]
+            ),
+            (
+                Self.log("## +1.1.0\n\n- Fix three.\n", Self.entry110, Self.entry100), "1.1.0",
+                pins, ["## +1.1.0 is not a version"]
+            ),
+            (
+                Self.log("## 1..1.0\n\n- Fix three.\n", Self.entry110, Self.entry100), "1.1.0",
+                pins, ["## 1..1.0 is not a version"]
+            ),
+            (shipped, "1.1", pins, ["1.1 is not a version"]),
+            (Self.log(entry1100, entry190), "1.10.0", [:], ["## 1.9.0 shipped and has no pin"]),
+            (
+                Self.log(entry1100, entry190 + "- Late.\n"), "1.10.0", ["1.9.0": pin190],
+                ["## 1.9.0 differs from its pin"]
+            ),
+            (Self.log(entry190), "1.9.0", ["1.10.0": pin190], ["the pin 1.10.0 is past 1.9.0"]),
+        ]
+        for (changelog, current, given, want) in cases {
+            let problems = try Self.pinProblems(changelog, current: current, pins: given)
+            #expect(problems == want, "\(want)")
+        }
     }
 
     // MARK: Output folder guard

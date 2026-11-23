@@ -229,6 +229,11 @@ import Testing
         (".github/workflows/release.yml", "build/release/AgentBalancerBar.zip", "build/x.zip"),
         (".github/workflows/release.yml", "actions/attest-build-provenance@", "actions/other@"),
         ("docs/RELEASING.md", "SHA256SUMS", "SUMS"),
+        ("docs/RELEASING.md", "gh release create", "gh release new"),
+        (
+            ".github/workflows/release.yml", "gh release create \"v$VERSION\"",
+            "gh release upload \"v$VERSION\""
+        ),
         (".github/workflows/release.yml", "if: github.ref == 'refs/heads/main'", "if: true"),
         (".github/workflows/release.yml", "git merge-base --is-ancestor", "git log"),
         (

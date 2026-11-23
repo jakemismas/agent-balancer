@@ -79,8 +79,25 @@ needs the maintainer's yes.
 5. Enable secret scanning, push protection, private vulnerability reporting and the CodeQL
    default setup.
 6. Add a ruleset on `main` (linear history, the CI check required, no force pushes, no deletion).
-7. Add a tag ruleset that limits creating, moving and deleting `v*` tags to the release workflow
-   and the maintainer.
+7. Check that a tag ruleset lets only the maintainer move or delete a `v*` tag, or add one:
+   - Set its enforcement status to Active. The form starts at Disabled.
+   - Target `v*` tags, and select only the Restrict updates and Restrict deletions rules.
+   - Add the maintainer's own account, a user and not a role, as the only entry in its Bypass list.
+   - Leave Restrict creations clear. The release workflow creates the tag through
+     `gh release create` with its `GITHUB_TOKEN`, a token of the GitHub Actions app, and GitHub
+     refuses that app as a bypass actor whoever owns the repository ("Actor GitHub Actions
+     integration must be part of the ruleset source or owner organization"). A Restrict creations
+     rule would block the release workflow, so creating a `v*` tag stays with every account and
+     workflow with write access.
+   - Moving the repository from a personal account to an organization does not change this by
+     itself. There, restricting creation takes a GitHub App of the maintainer's own, installed on
+     the organization, as the bypass of a second tag ruleset for `v*` tags, set to Active, that
+     holds only the Restrict creations rule, with the maintainer's own account as its other
+     bypass. It also takes a change to the release workflow: the workflow must create the tag
+     with that app's token, and getting the token takes the app's private key as a secret, which
+     the workflow does not hold and `scripts/check-release.sh` refuses. Until then, creation stays
+     with write access. Keep the app out of the first ruleset: a bypass covers every rule of its
+     ruleset, so there the app could move and delete `v*` tags.
 8. Protect the tap repository's `main` the same way, and add Scorecard.
 
 ## Repository description and topics

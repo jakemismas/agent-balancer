@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Checks that the README's quick start, docs/RELEASING.md, the release workflow and the formula
 # template agree with what scripts/package-release.sh makes: the formula name, the tap, the artifact
-# names, the attestation line and the skill path. It also checks that CI keeps its jobs' time
-# limits and its concurrency group, with no job-level group and no other workflow named ci.
+# names, the attestation line and the skill path. It also checks that the release workflow creates
+# the tag, as docs/RELEASING.md says, and that CI keeps its jobs' time limits and its concurrency
+# group, with no job-level group and no other workflow named ci.
 # Usage: check-release.sh [root]
 set -euo pipefail
 # Under pipefail, a pipe into grep -q or head fails when its writer is cut off, so none is used.
@@ -115,6 +116,10 @@ for want in "$APP_ZIP" "${CLI_TEMPLATE//\$VERSION/<version>}.tar.gz" 'SHA256SUMS
   'scripts/release-version.sh' "brew install local/ab/$NAME" "brew trust --formula local/ab/$NAME"; do
   has "$DOC" "$want"
 done
+
+# The release page leaves tag creation open because the workflow creates the tag itself.
+has "$WORKFLOW" 'gh release create "v$VERSION"'
+has "$DOC" 'gh release create'
 
 # CI installs the formula the script writes.
 has "$CI_WORKFLOW" 'build/release/agent-balancer.rb'

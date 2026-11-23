@@ -98,6 +98,17 @@
   now steps the running loop one pass at a time and waits on no timer or deadline, so a busy CI
   runner no longer fails it. It used to give two timed passes 300 seconds, which a runner busy with
   the rest of the suite could outlast.
+- The release guide's tag ruleset step matches what GitHub allows. The ruleset, set to Active,
+  restricts moving and deleting `v*` tags, with the maintainer's own account as the only bypass, and
+  leaves creating one to write access: the release workflow creates the tag with a token of the
+  GitHub Actions app, which GitHub refuses as a bypass actor whoever owns the repository, so a
+  creation rule blocks it. For an organization, the step says what restricting creation takes: a
+  GitHub App of the maintainer's own, installed on the organization, as the bypass of a second
+  ruleset that restricts only creating `v*` tags, and a change to the release workflow so it creates
+  the tag with that app's token, which needs a secret the release check refuses. It used to say the
+  ruleset limits creating, moving and deleting `v*` tags to the release workflow and the maintainer.
+  The release check now fails when the workflow stops creating the tag through `gh release create`
+  or the guide stops naming it.
 
 ## 1.0.0
 

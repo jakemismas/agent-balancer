@@ -176,19 +176,25 @@ struct AccountListRow: View {
             HStack(spacing: 8) {
                 Circle().fill(row.signedIn ? palette.good : palette.crit).frame(width: 8, height: 8)
                     .overlay(
-                        Circle().stroke(Color.white.opacity(selected ? 0.9 : 0), lineWidth: 1.5)
-                            .padding(-1.5))
+                        Circle().stroke(
+                            selected ? palette.onAccent.opacity(0.9) : .clear, lineWidth: 1.5
+                        )
+                        .padding(-1.5))
                 VStack(alignment: .leading, spacing: 0) {
                     Text(row.label).font(.ui(13, .semibold))
                     Text(row.subtitle).font(.ui(10.5))
-                        .foregroundStyle(selected ? Color.white.opacity(0.88) : palette.text2)
+                        .foregroundStyle(selected ? palette.onAccentSoft : palette.text2)
                 }
                 Spacer(minLength: 0)
                 if row.isMain { SmallBadge(text: "main", main: true, selected: selected) }
             }
-            .foregroundStyle(selected ? Color.white : palette.text1)
+            .foregroundStyle(selected ? palette.onAccent : palette.text1)
             .padding(.horizontal, 8).padding(.vertical, 6)
-            .background(RoundedRectangle(cornerRadius: 7).fill(selected ? palette.accent : .clear))
+            .background {
+                RoundedRectangle(cornerRadius: 7).fill(selected ? palette.accentRing : .clear)
+                RoundedRectangle(cornerRadius: 7).inset(by: 1)
+                    .fill(selected ? palette.accent : .clear)
+            }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

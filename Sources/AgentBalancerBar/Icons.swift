@@ -11,18 +11,18 @@ struct TileIcon: View {
                     roundedRect: CGRect(x: x * k, y: y * k, width: w * k, height: h * k),
                     cornerRadius: r * k, style: .continuous)
             }
-            let gradient = Gradient(colors: [Palette.rgb(0xDE8160), Palette.rgb(0xB9583A)])
+            let gradient = Gradient(colors: [Palette.rgb(0x7C3AED), Palette.rgb(0x2563EB)])
             ctx.fill(
                 rr(100, 100, 824, 824, 185),
                 with: .linearGradient(
                     gradient, startPoint: CGPoint(x: 0, y: 100 * k),
                     endPoint: CGPoint(x: 0, y: 924 * k)))
-            let cream = Palette.rgb(0xFBF3E8)
+            let face = Palette.rgb(0xF5F3FF)
             for r in [
                 rr(290, 205, 150, 290, 34), rr(584, 205, 150, 290, 34),
                 rr(437, 560, 150, 260, 34), rr(262, 455, 500, 150, 48),
-            ] { ctx.fill(r, with: .color(cream)) }
-            let ink = Palette.rgb(0xC4643F)
+            ] { ctx.fill(r, with: .color(face)) }
+            let ink = Palette.rgb(0x4F46E5)
             for pts in [
                 [(325.0, 345.0), (365, 305), (405, 345)], [(619, 345), (659, 305), (699, 345)],
                 [(472, 745), (512, 705), (552, 745)],

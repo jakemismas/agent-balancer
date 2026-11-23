@@ -1395,7 +1395,8 @@ refuses (12), because such a command runs no rebuild of its own. A rename moves 
 the account's state stays as it was.
 
 `status` shows the age; the menu greys a row whose
-reading is older than twice the refresh interval. `pick` refreshes any candidate whose reading is
+reading is older than twice the refresh interval, all but the main badge, to keep its contrast.
+`pick` refreshes any candidate whose reading is
 older than `picker.maxReadingAgeMinutes` (default 15) and skips the probe when the reading is
 younger (unless `refresh --force`). If that refresh fails, the candidate is skipped with reason
 `stale reading, refresh failed`. For the protected account a stale reading is treated as worst

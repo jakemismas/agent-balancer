@@ -190,11 +190,15 @@ struct ActionRow: View {
                 Text(title).font(.ui(13))
                 Spacer(minLength: 0)
                 Text(shortcut).font(.ui(12))
-                    .foregroundStyle(hovering ? Color.white.opacity(0.85) : palette.text3)
+                    .foregroundStyle(hovering ? palette.onAccentSoft : palette.text3)
             }
-            .foregroundStyle(hovering ? Color.white : palette.text1)
+            .foregroundStyle(hovering ? palette.onAccent : palette.text1)
             .padding(.horizontal, 10).padding(.vertical, 4)
-            .background(RoundedRectangle(cornerRadius: 6).fill(hovering ? palette.accent : .clear))
+            .background {
+                RoundedRectangle(cornerRadius: 6).fill(hovering ? palette.accentRing : .clear)
+                RoundedRectangle(cornerRadius: 6).inset(by: 1)
+                    .fill(hovering ? palette.accent : .clear)
+            }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -227,7 +231,7 @@ struct NextCard: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 10).padding(.vertical, 8)
-        .background(RoundedRectangle(cornerRadius: 9).fill(palette.nextBg))
+        .background(RoundedRectangle(cornerRadius: 9).fill(palette.nextFill))
         .padding(.horizontal, 6).padding(.bottom, 6)
     }
 }
@@ -294,7 +298,7 @@ struct CardView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 10).padding(.vertical, 10)
-        .background(RoundedRectangle(cornerRadius: 9).fill(palette.nextBg))
+        .background(RoundedRectangle(cornerRadius: 9).fill(palette.nextFill))
         .padding(.horizontal, 6).padding(.bottom, 4)
     }
 }

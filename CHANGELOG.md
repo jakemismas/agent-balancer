@@ -38,6 +38,19 @@
   was at its release. Step 3, which ships a release, gives commands that print the pin and stop when
   the tag or the entry is missing, and the tests refuse the SHA-256 of no notes as a pin. "After the
   flip" says to replace the 1.2.0 pin after the 1.2.0 release.
+- The app's orange is now a violet to blue gradient, and its warm grays are cool grays. The usage
+  bars, the Next launch card's background, the empty menu's card and the app icon's tile run from
+  violet to blue in light and dark mode, and the main badge, the meter track and estimate, and the
+  Manage accounts window's selected account, primary buttons and chosen options are violet. The text
+  grays, the card, window, field and button backgrounds, and the pictures' menu panel and backdrop
+  keep their lightness and lose their warm tint. The icon keeps its shapes, and the warning,
+  critical and good colors keep their amber, red and green. Text on each violet surface reads at
+  4.5:1 or more, so in dark mode a selected account, a primary button and a hovered menu action sit
+  on light mode's violet, since white on the lighter violet of the dark bars reads at only 2.7:1. A
+  ring of that lighter violet edges a selected account, an enabled primary button, a hovered menu
+  action and a chosen option in dark mode, so each stands out at 3:1 or more on the dark window and
+  menu. A row greyed for a stale reading keeps its main badge at full strength. The README pictures
+  and the design reference show the new colors.
 
 ## 1.1.0
 

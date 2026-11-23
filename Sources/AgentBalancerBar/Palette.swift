@@ -5,6 +5,11 @@ import SwiftUI
 struct Palette {
     let text1, text2, text3, sep, hover, accent, track, estimate, warn, warnInk, crit, good: Color
     let badgeBg, badgeMainBg, badgeMainInk, nextBg, panelBorder, cardBg, endsBg, errBg: Color
+    let barStart, barEnd, nextBgEnd: Color
+    /// Tokens rather than inline white, so the contrast test sees each text on the accent.
+    let onAccent, onAccentSoft, onAccentBadge: Color
+    /// The edge of each accent fill, since on a dark surface the fill alone reads under 3:1.
+    let accentRing: Color
     /// Stands in for the panel material in the flat render: the panel token of design/render.html
     /// over the plain page backdrop. The running app draws no panel color of its own; the system
     /// material of its menu bar window shows.
@@ -19,29 +24,44 @@ struct Palette {
             blue: Double(hex & 0xFF) / 255, opacity: alpha)
     }
 
+    var barFill: LinearGradient {
+        LinearGradient(colors: [barStart, barEnd], startPoint: .leading, endPoint: .trailing)
+    }
+
+    var nextFill: LinearGradient {
+        LinearGradient(colors: [nextBg, nextBgEnd], startPoint: .leading, endPoint: .trailing)
+    }
+
     static let light = Palette(
-        text1: rgb(0x1C1916), text2: rgb(0x5A524B), text3: rgb(0x8B837B),
-        sep: rgb(0x000000, 0.09), hover: rgb(0x000000, 0.055), accent: rgb(0xC4613D),
-        track: rgb(0xC4613D, 0.20), estimate: rgb(0xC4613D, 0.75), warn: rgb(0xFAB219),
+        text1: rgb(0x19191A), text2: rgb(0x535358), text3: rgb(0x84848C),
+        sep: rgb(0x000000, 0.09), hover: rgb(0x000000, 0.055), accent: rgb(0x7C3AED),
+        track: rgb(0x7C3AED, 0.20), estimate: rgb(0x7C3AED, 0.75), warn: rgb(0xFAB219),
         warnInk: rgb(0x8A5A00), crit: rgb(0xD03B3B), good: rgb(0x0CA30C),
-        badgeBg: rgb(0x000000, 0.06), badgeMainBg: rgb(0xC4613D, 0.15),
-        badgeMainInk: rgb(0x94431F), nextBg: rgb(0xC4613D, 0.10), panelBorder: rgb(0x000000, 0.14),
-        cardBg: rgb(0xFBF8F4), endsBg: rgb(0xFAB219, 0.18), errBg: rgb(0xD03B3B, 0.10),
-        flatPanel: rgb(0xF8F5F1), page: rgb(0xEFE9E2),
-        winBg: rgb(0xF6F3EE), winSide: rgb(0xECE7E0), winBar: rgb(0xE9E4DD), fieldBg: rgb(0xFFFFFF),
+        badgeBg: rgb(0x000000, 0.06), badgeMainBg: rgb(0x7C3AED, 0.15),
+        badgeMainInk: rgb(0x5B21B6), nextBg: rgb(0x7C3AED, 0.10), panelBorder: rgb(0x000000, 0.14),
+        cardBg: rgb(0xF8F8FE), endsBg: rgb(0xFAB219, 0.18), errBg: rgb(0xD03B3B, 0.10),
+        barStart: rgb(0x7C3AED), barEnd: rgb(0x2563EB), nextBgEnd: rgb(0x2563EB, 0.10),
+        onAccent: rgb(0xFFFFFF), onAccentSoft: rgb(0xFFFFFF, 0.88),
+        onAccentBadge: rgb(0xFFFFFF, 0.12), accentRing: rgb(0x7C3AED),
+        flatPanel: rgb(0xF5F5FC), page: rgb(0xE8E9F6),
+        winBg: rgb(0xF3F3FA), winSide: rgb(0xE6E7F2), winBar: rgb(0xE3E4EF), fieldBg: rgb(0xFFFFFF),
         fieldBorder: rgb(0x000000, 0.17), btnBg: rgb(0xFFFFFF))
 
+    /// White text on the bars' violet here reads at 2.7:1, so text sits on light mode's violet.
     static let dark = Palette(
-        text1: rgb(0xF4EFE9), text2: rgb(0xBDB4AB), text3: rgb(0x8F867E),
-        sep: rgb(0xFFFFFF, 0.09), hover: rgb(0xFFFFFF, 0.07), accent: rgb(0xE57D55),
-        track: rgb(0xE57D55, 0.24), estimate: rgb(0xE57D55, 0.85), warn: rgb(0xFAB219),
+        text1: rgb(0xEEEFFA), text2: rgb(0xB5B5C0), text3: rgb(0x87878F),
+        sep: rgb(0xFFFFFF, 0.09), hover: rgb(0xFFFFFF, 0.07), accent: rgb(0x7C3AED),
+        track: rgb(0xA78BFA, 0.24), estimate: rgb(0xA78BFA, 0.85), warn: rgb(0xFAB219),
         warnInk: rgb(0xFAB219), crit: rgb(0xD03B3B), good: rgb(0x0CA30C),
-        badgeBg: rgb(0xFFFFFF, 0.08), badgeMainBg: rgb(0xE57D55, 0.20),
-        badgeMainInk: rgb(0xF2A385), nextBg: rgb(0xE57D55, 0.12), panelBorder: rgb(0xFFFFFF, 0.13),
-        cardBg: rgb(0x221E1B), endsBg: rgb(0xFAB219, 0.18), errBg: rgb(0xD03B3B, 0.10),
-        flatPanel: rgb(0x25211E), page: rgb(0x171412),
-        winBg: rgb(0x2A2623), winSide: rgb(0x221F1C), winBar: rgb(0x34302C), fieldBg: rgb(0x1D1A18),
-        fieldBorder: rgb(0xFFFFFF, 0.17), btnBg: rgb(0x3D3834))
+        badgeBg: rgb(0xFFFFFF, 0.08), badgeMainBg: rgb(0xA78BFA, 0.20),
+        badgeMainInk: rgb(0xC4B5FD), nextBg: rgb(0xA78BFA, 0.12), panelBorder: rgb(0xFFFFFF, 0.13),
+        cardBg: rgb(0x1F1F20), endsBg: rgb(0xFAB219, 0.18), errBg: rgb(0xD03B3B, 0.10),
+        barStart: rgb(0xA78BFA), barEnd: rgb(0x60A5FA), nextBgEnd: rgb(0x60A5FA, 0.12),
+        onAccent: rgb(0xFFFFFF), onAccentSoft: rgb(0xFFFFFF, 0.88),
+        onAccentBadge: rgb(0xFFFFFF, 0.12), accentRing: rgb(0xA78BFA),
+        flatPanel: rgb(0x222223), page: rgb(0x141415),
+        winBg: rgb(0x272728), winSide: rgb(0x1F1F20), winBar: rgb(0x313033), fieldBg: rgb(0x1A1A1B),
+        fieldBorder: rgb(0xFFFFFF, 0.17), btnBg: rgb(0x39393A))
 
     static func of(_ scheme: ColorScheme) -> Palette { scheme == .dark ? dark : light }
 }

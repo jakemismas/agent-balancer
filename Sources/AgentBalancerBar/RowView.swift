@@ -93,22 +93,29 @@ struct RowView: View {
         _showSteps = State(initialValue: stepsOpen)
     }
 
+    /// The dim of a stale row; the main badge stays out of it so its text keeps 4.5:1.
+    private var dim: Double { model.dimmed ? 0.65 : 1 }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 6) {
                 Text(model.label).font(.ui(13, .semibold))
-                    .foregroundStyle(palette.text1)
+                    .foregroundStyle(palette.text1).opacity(dim)
                 Badge(
                     text: model.roleBadge,
                     background: model.isMain ? palette.badgeMainBg : palette.badgeBg,
-                    ink: model.isMain ? palette.badgeMainInk : palette.text2)
+                    ink: model.isMain ? palette.badgeMainInk : palette.text2
+                )
+                .opacity(model.isMain ? 1 : dim)
                 if let end = model.endBadge {
                     Badge(
-                        text: end, background: palette.endsBg, ink: palette.warnInk, warning: true)
+                        text: end, background: palette.endsBg, ink: palette.warnInk, warning: true
+                    )
+                    .opacity(dim)
                 }
                 if let email = model.email {
                     Text(email).font(.ui(11)).foregroundStyle(palette.text2)
-                        .lineLimit(1).truncationMode(.tail).padding(.leading, 2)
+                        .lineLimit(1).truncationMode(.tail).padding(.leading, 2).opacity(dim)
                 }
                 Spacer(minLength: 0)
                 if let inUse = model.inUseText {
@@ -117,19 +124,20 @@ struct RowView: View {
                             .overlay(Circle().stroke(palette.good.opacity(0.18), lineWidth: 2))
                         Text(inUse).font(.ui(11)).foregroundStyle(palette.text2)
                     }
-                    .fixedSize()
+                    .fixedSize().opacity(dim)
                 }
             }
-            bodyView
+            bodyView.opacity(dim)
             ForEach(Array(model.notes.enumerated()), id: \.offset) { _, note in
                 Text(note.text).font(.ui(10.5))
                     .foregroundStyle(note.style == .warning ? palette.warnInk : palette.text3)
-                    .padding(.top, 3).padding(.leading, 72)
+                    .padding(.top, 3).padding(.leading, 72).opacity(dim)
             }
         }
         .padding(.horizontal, 10).padding(.top, 8).padding(.bottom, 9)
-        .background(RoundedRectangle(cornerRadius: 8).fill(hovering ? palette.hover : .clear))
-        .opacity(model.dimmed ? 0.65 : 1)
+        .background(
+            RoundedRectangle(cornerRadius: 8).fill(hovering ? palette.hover : .clear).opacity(dim)
+        )
         .onHover { hovering = $0 }
         .accessibilityElement(children: .contain)
     }

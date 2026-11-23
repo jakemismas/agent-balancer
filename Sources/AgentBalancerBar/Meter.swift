@@ -7,11 +7,11 @@ struct MeterBar: View {
     let model: MeterModel
     let palette: Palette
 
-    private var fill: Color {
+    private var fill: AnyShapeStyle {
         switch model.tone {
-        case .normal: palette.accent
-        case .warn: palette.warn
-        case .crit: palette.crit
+        case .normal: AnyShapeStyle(palette.barFill)
+        case .warn: AnyShapeStyle(palette.warn)
+        case .crit: AnyShapeStyle(palette.crit)
         }
     }
 

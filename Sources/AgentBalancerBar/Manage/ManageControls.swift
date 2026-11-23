@@ -34,7 +34,10 @@ struct ChromeButton: View {
             Text(title).font(.ui(small ? 11 : 12))
                 .foregroundStyle(ink)
                 .padding(.horizontal, small ? 8 : 11).padding(.vertical, small ? 1 : 3)
-                .background(RoundedRectangle(cornerRadius: 6).fill(fill))
+                .background {
+                    if let ring { RoundedRectangle(cornerRadius: 6).fill(ring) }
+                    RoundedRectangle(cornerRadius: 6).inset(by: ring == nil ? 0 : 1).fill(fill)
+                }
                 .overlay(
                     RoundedRectangle(cornerRadius: 6).stroke(
                         style == .primary ? Color.clear : palette.fieldBorder, lineWidth: 0.5)
@@ -49,10 +52,13 @@ struct ChromeButton: View {
 
     private var fill: Color { style == .primary ? palette.accent : palette.btnBg }
 
+    /// An inactive button needs no 3:1 edge, so a disabled one keeps its plain faded fill.
+    private var ring: Color? { style == .primary && enabled ? palette.accentRing : nil }
+
     private var ink: Color {
         switch style {
         case .normal: return palette.text1
-        case .primary: return .white
+        case .primary: return palette.onAccent
         case .danger: return palette.crit
         }
     }
@@ -66,8 +72,8 @@ struct RadioDot: View {
         let palette = Palette.of(scheme)
         ZStack {
             Circle().fill(on ? palette.accent : palette.fieldBg)
-            Circle().stroke(on ? palette.accent : palette.fieldBorder, lineWidth: 1)
-            if on { Circle().fill(.white).frame(width: 5.5, height: 5.5) }
+            Circle().stroke(on ? palette.accentRing : palette.fieldBorder, lineWidth: 1)
+            if on { Circle().fill(palette.onAccent).frame(width: 5.5, height: 5.5) }
         }
         .frame(width: 13, height: 13)
     }
@@ -173,12 +179,14 @@ struct SmallBadge: View {
     var body: some View {
         let palette = Palette.of(scheme)
         Text(text.uppercased()).font(.ui(10, .semibold)).tracking(0.2)
-            .foregroundStyle(selected ? .white : (main ? palette.badgeMainInk : palette.text2))
+            .foregroundStyle(
+                selected ? palette.onAccent : (main ? palette.badgeMainInk : palette.text2)
+            )
             .padding(.horizontal, 6).padding(.vertical, 1)
             .background(
                 RoundedRectangle(cornerRadius: 5).fill(
                     selected
-                        ? Color.white.opacity(0.22) : (main ? palette.badgeMainBg : palette.badgeBg)
+                        ? palette.onAccentBadge : (main ? palette.badgeMainBg : palette.badgeBg)
                 ))
     }
 }

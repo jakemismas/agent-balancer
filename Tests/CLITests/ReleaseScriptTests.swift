@@ -55,8 +55,8 @@ import Testing
     }
 
     /// The release this tree builds and the one before it. A new version changes both.
-    static let release = "1.1.0"
-    static let previous = "1.0.0"
+    static let release = "1.2.0"
+    static let previous = "1.1.0"
 
     @Test func theVersionIsThisRelease() throws {
         #expect(Version.current == Self.release)

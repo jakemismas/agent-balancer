@@ -1,5 +1,44 @@
 # Changelog
 
+## 1.2.0
+
+- The folder that holds the `claude` binary's real target counts too. Every command that would
+  start `claude` refuses a binary whose real target sits in a folder that is not owned by you or
+  root, that group or others can write, or whose access list lets another user or group change
+  it, as it refuses `~/.local/bin`; Homebrew's bin folders stay unchecked. The refusal names that
+  folder and, where running it clears the refusal, `chmod go-w` or `chmod -N` on it, after the
+  `chflags` that clears a lock, and `doctor` prints it and exits 1. Before, that folder at mode
+  0777 or with an `everyone allow add_file,delete_child` entry left `doctor` at exit 0. `pick` and
+  `run --print-command` refuse every binary these checks refuse, with the same text, before they
+  write a launch file, where they used to hand out a token account's launch file for it. The menu
+  bar app refuses the command line tool when its access list lets another user or group change it
+  or its lookup stops, as the runner does for `claude`, where it used to test only the owner and
+  the mode.
+- The test that each pass of the menu app's file loop tells the Manage window to read `status.json`
+  now steps the running loop one pass at a time and waits on no timer or deadline, so a busy CI
+  runner no longer fails it. It used to give two timed passes 300 seconds, which a runner busy with
+  the rest of the suite could outlast.
+- The release guide's tag ruleset step matches what GitHub allows. The ruleset, set to Active,
+  restricts moving and deleting `v*` tags, with the maintainer's own account as the only bypass, and
+  leaves creating one to write access: the release workflow creates the tag with a token of the
+  GitHub Actions app, which GitHub refuses as a bypass actor whoever owns the repository, so a
+  creation rule blocks it. For an organization, the step says what restricting creation takes: a
+  GitHub App of the maintainer's own, installed on the organization, as the bypass of a second
+  ruleset that restricts only creating `v*` tags, and a change to the release workflow so it creates
+  the tag with that app's token, which needs a secret the release check refuses. It used to say the
+  ruleset limits creating, moving and deleting `v*` tags to the release workflow and the maintainer.
+  The release check now fails when the workflow stops creating the tag through `gh release create`
+  or the guide stops naming it.
+- The tests pin each shipped changelog entry, not only 1.0.0, to the byte count and SHA-256 of its
+  notes at its release. Once the version is past an entry, its notes must equal the pin, so a line
+  left in a shipped entry at a version change fails the checks; while the version equals it, the
+  notes must start with the pinned text, so an edit inside that text, or a pin of other text, fails
+  at once. Step 1 of "Cut a release" in `docs/RELEASING.md` says to move every line added since the
+  last release under the new heading, unchanged and in order, and to leave the shipped entry as it
+  was at its release. Step 3, which ships a release, gives commands that print the pin and stop when
+  the tag or the entry is missing, and the tests refuse the SHA-256 of no notes as a pin. "After the
+  flip" says to replace the 1.2.0 pin after the 1.2.0 release.
+
 ## 1.1.0
 
 - The packaging run's checks give the same answer on an input of any length. Under pipefail, a pipe
@@ -82,42 +121,6 @@
   `chflags` that clears a lock. `doctor` prints the refusal and exits 1. Before, the check read
   modes only, so an `everyone allow write,append` entry on `~/.local/bin/claude` left `doctor` at
   exit 0, while `chmod go+w` on the same file made it exit 1.
-- The folder that holds the `claude` binary's real target counts too. Every command that would
-  start `claude` refuses a binary whose real target sits in a folder that is not owned by you or
-  root, that group or others can write, or whose access list lets another user or group change
-  it, as it refuses `~/.local/bin`; Homebrew's bin folders stay unchecked. The refusal names that
-  folder and, where running it clears the refusal, `chmod go-w` or `chmod -N` on it, after the
-  `chflags` that clears a lock, and `doctor` prints it and exits 1. Before, that folder at mode
-  0777 or with an `everyone allow add_file,delete_child` entry left `doctor` at exit 0. `pick` and
-  `run --print-command` refuse every binary these checks refuse, with the same text, before they
-  write a launch file, where they used to hand out a token account's launch file for it. The menu
-  bar app refuses the command line tool when its access list lets another user or group change it
-  or its lookup stops, as the runner does for `claude`, where it used to test only the owner and
-  the mode.
-- The test that each pass of the menu app's file loop tells the Manage window to read `status.json`
-  now steps the running loop one pass at a time and waits on no timer or deadline, so a busy CI
-  runner no longer fails it. It used to give two timed passes 300 seconds, which a runner busy with
-  the rest of the suite could outlast.
-- The release guide's tag ruleset step matches what GitHub allows. The ruleset, set to Active,
-  restricts moving and deleting `v*` tags, with the maintainer's own account as the only bypass, and
-  leaves creating one to write access: the release workflow creates the tag with a token of the
-  GitHub Actions app, which GitHub refuses as a bypass actor whoever owns the repository, so a
-  creation rule blocks it. For an organization, the step says what restricting creation takes: a
-  GitHub App of the maintainer's own, installed on the organization, as the bypass of a second
-  ruleset that restricts only creating `v*` tags, and a change to the release workflow so it creates
-  the tag with that app's token, which needs a secret the release check refuses. It used to say the
-  ruleset limits creating, moving and deleting `v*` tags to the release workflow and the maintainer.
-  The release check now fails when the workflow stops creating the tag through `gh release create`
-  or the guide stops naming it.
-- The tests pin each shipped changelog entry, not only 1.0.0, to the byte count and SHA-256 of its
-  notes at its release. Once the version is past an entry, its notes must equal the pin, so a line
-  left in a shipped entry at a version change fails the checks; while the version equals it, the
-  notes must start with the pinned text, so an edit inside that text, or a pin of other text, fails
-  at once. Step 1 of "Cut a release" in `docs/RELEASING.md` says to move every line added since the
-  last release under the new heading, unchanged and in order, and to leave the shipped entry as it
-  was at its release. Step 3, which ships a release, gives commands that print the pin and stop when
-  the tag or the entry is missing, and the tests refuse the SHA-256 of no notes as a pin. "After the
-  flip" says to replace the 1.1.0 pin after the 1.1.0 release.
 
 ## 1.0.0
 

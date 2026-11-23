@@ -145,6 +145,13 @@ Do these four steps again after each upgrade until the app is notarized. Upgrade
   entry that lets another user or group in. It refuses a folder of its own whose access list lets
   one in or cannot be read, and `agent-balancer doctor` names each such folder and file with the
   command that clears it.
+- It starts `claude` only from `~/.local/bin`, `/opt/homebrew/bin` or `/usr/local/bin`. It refuses
+  one when another user or group can change, by its mode or an access list, the file its path
+  resolves to, the folder that holds that file unless it is `/opt/homebrew/bin` or
+  `/usr/local/bin`, or `~/.local/bin` when `claude` sits there. `agent-balancer doctor` names what
+  it refuses and the command that clears it, and `agent-balancer pick` and
+  `agent-balancer run --print-command` refuse such a `claude` before they write a launch file. The
+  menu bar app starts `agent-balancer` only after the same test of the file its path resolves to.
 - With safe mode off (`probe.safeMode` set to false), your hooks run in every probe the tool
   starts: in `agent-balancer refresh`, in `agent-balancer pick` and in the first check that
   `agent-balancer login` runs after it saves a token. Safe mode is on by default.

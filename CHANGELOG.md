@@ -82,6 +82,18 @@
   `chflags` that clears a lock. `doctor` prints the refusal and exits 1. Before, the check read
   modes only, so an `everyone allow write,append` entry on `~/.local/bin/claude` left `doctor` at
   exit 0, while `chmod go+w` on the same file made it exit 1.
+- The folder that holds the `claude` binary's real target counts too. Every command that would
+  start `claude` refuses a binary whose real target sits in a folder that is not owned by you or
+  root, that group or others can write, or whose access list lets another user or group change
+  it, as it refuses `~/.local/bin`; Homebrew's bin folders stay unchecked. The refusal names that
+  folder and, where running it clears the refusal, `chmod go-w` or `chmod -N` on it, after the
+  `chflags` that clears a lock, and `doctor` prints it and exits 1. Before, that folder at mode
+  0777 or with an `everyone allow add_file,delete_child` entry left `doctor` at exit 0. `pick` and
+  `run --print-command` refuse every binary these checks refuse, with the same text, before they
+  write a launch file, where they used to hand out a token account's launch file for it. The menu
+  bar app refuses the command line tool when its access list lets another user or group change it
+  or its lookup stops, as the runner does for `claude`, where it used to test only the owner and
+  the mode.
 
 ## 1.0.0
 

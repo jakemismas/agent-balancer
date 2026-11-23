@@ -126,7 +126,7 @@ extension PickService {
 
     /// `printOnly` is a typing caller: the line is typed in a terminal whose environment this tool
     /// does not control, so the ambient rule and the inherited token or key rule apply as for a
-    /// typed `pick`.
+    /// typed `pick`, and so does its refusal of a binary the runner refuses.
     public func prepareRun(label: String, arguments: [String], printOnly: Bool = false) throws
         -> RunLaunch
     {
@@ -142,6 +142,8 @@ extension PickService {
                     "A token or API key is set in this shell, so a line typed here would not use '\(label)'. Run `agent-balancer run \(label)` without --print-command."
                 )
             }
+            // The line starts claude with this account, so a refused binary gets no launch file.
+            try runner.checkFound()
         } else {
             _ = try runner.locate()
         }

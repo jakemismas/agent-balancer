@@ -205,9 +205,10 @@ public enum Messages {
         "Refused `\(place)`: its access list lets another user or group in, or cannot be read. Run `chmod -N \(place)` in Terminal."
     }
 
-    /// What every command that would start `claude` says when the access list of the binary's
-    /// real target, the file that the path at `shown` resolves to, lets another user or group
-    /// change it or cannot be read. `fix` is the sentence that clears that list.
+    /// What every command that would start `claude`, and the menu app's lookup of the command
+    /// line tool, says when the access list of the binary's real target, the file that the path
+    /// at `shown` resolves to, lets another user or group change it or cannot be read. `fix` is
+    /// the sentence that clears that list.
     public static func claudeSharedByAccessList(_ shown: String, fix: String) -> String {
         "Refused \(shown): its real target's access list lets another user or group change it, or cannot be read. \(fix)"
     }
@@ -217,13 +218,31 @@ public enum Messages {
         "Refused \(shown): its folder's access list lets another user or group change it, or cannot be read. \(fix)"
     }
 
-    /// What every command that would start `claude` says when the lookup of the binary, or of
-    /// `~/.local/bin` when `ofFolder` is true, stops: `because` says where, when a step can be
-    /// named, and `fix` is the command that lets the lookup through, when one is known to.
-    public static func claudeUnchecked(
-        _ shown: String, ofFolder: Bool, because: String?, fix: String?
+    /// What every command that would start `claude` says when the folder that holds the binary's
+    /// real target, `place` as a person types it, is not owned by the user or root or is writable
+    /// by group or others. `fix` is the sentence that clears that mode, when one is known to.
+    public static func claudeTargetFolderRefused(_ shown: String, _ place: String, fix: String?)
+        -> String
+    {
+        "Refused \(shown): its real target's folder `\(place)` must be owned by you or root and not writable by others."
+            + (fix.map { " " + $0 } ?? "")
+    }
+
+    /// The same when the access list of that folder lets another user or group change it, or
+    /// cannot be read. `fix` is the sentence that clears that list.
+    public static func claudeTargetFolderSharedByAccessList(
+        _ shown: String, _ place: String, fix: String
     ) -> String {
-        let what = ofFolder ? "its folder" : "it"
+        "Refused \(shown): the access list of its real target's folder `\(place)` lets another user or group change it, or cannot be read. \(fix)"
+    }
+
+    /// What every command that would start `claude`, and the menu app's lookup of the command
+    /// line tool, says when the lookup of what `what` names stops: the binary (`it`),
+    /// `~/.local/bin` or the folder that holds the real target. `because` says where, when a step
+    /// can be named, and `fix` is the command that lets the lookup through, when one is known to.
+    public static func claudeUnchecked(
+        _ shown: String, what: String, because: String?, fix: String?
+    ) -> String {
         let why = because.map { ", because " + $0 } ?? ""
         return "Refused \(shown): \(what) cannot be checked\(why)." + (fix.map { " " + $0 } ?? "")
     }

@@ -1,7 +1,7 @@
 import Foundation
 
 /// Starts the agent-balancer command line tool for the menu app and nothing else. The app never
-/// runs `claude`. The tool is found only at two fixed paths, after the owner and mode test of
+/// runs `claude`. The tool is found only at two fixed paths, after the test of a binary of
 /// docs/ARCHITECTURE.md section 6.2, and no path comes from config or any file.
 public struct CLIRunner: Sendable {
     public static let fixedPaths = [
@@ -25,18 +25,15 @@ public struct CLIRunner: Sendable {
     /// The paths the lookup tries, for the "not found" card.
     public var triedPaths: [String] { candidates.map { context.display($0) } }
 
-    /// The first candidate that exists, used by the path found there. A candidate whose real
-    /// target is not owned by the user or root, or is writable by group or others, is refused.
+    /// The first candidate that exists, used by the path found there, after the runner's test of
+    /// a binary: a candidate whose real target is not owned by the user or root, is writable by
+    /// group or others, has an access list that lets another user or group change it or that
+    /// cannot be read, or cannot be checked at all, is refused. No folder is judged.
     public func locate() throws -> URL {
+        let runner = ClaudeRunner(context: context)
         for candidate in candidates {
-            guard let facts = FileFacts.inspect(candidate), facts.isRegularFile else { continue }
             let shown = context.display(candidate)
-            guard facts.ownerIsUserOrRoot, !facts.writableByOthers, facts.isExecutable else {
-                throw ToolError(
-                    "Refused \(shown): it must be an executable owned by you or root and not writable by others.",
-                    code: .checkFailed)
-            }
-            return candidate
+            if try runner.lookUpProgram(candidate, shown: shown) != nil { return candidate }
         }
         throw ToolError("agent-balancer was not found.", code: .checkFailed)
     }

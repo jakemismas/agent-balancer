@@ -171,6 +171,8 @@ public struct PickService: Sendable {
             guard let index = decision.chosen else { break }
             let account = inputs[index].account
             if request.dryRun { break }
+            // The recipe starts claude with this account, so a refused binary gets no launch file.
+            try runner.checkFound()
             let id = freshLeaseId(leases)
             // Render the typed recipe before any file exists, so a refusal leaves nothing behind.
             if request.caller == .typed {

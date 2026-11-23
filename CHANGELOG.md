@@ -94,6 +94,10 @@
   bar app refuses the command line tool when its access list lets another user or group change it
   or its lookup stops, as the runner does for `claude`, where it used to test only the owner and
   the mode.
+- The test that each pass of the menu app's file loop tells the Manage window to read `status.json`
+  now steps the running loop one pass at a time and waits on no timer or deadline, so a busy CI
+  runner no longer fails it. It used to give two timed passes 300 seconds, which a runner busy with
+  the rest of the suite could outlast.
 
 ## 1.0.0
 

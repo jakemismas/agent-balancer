@@ -33,6 +33,8 @@ public final class MenuController {
     /// Runs after each pass of the file loop, so an open Manage accounts window reads the same
     /// file on the same beat.
     @ObservationIgnored public var afterFileRead: (@MainActor () -> Void)?
+    /// When set, replaces the sleep before each pass of the file loop, so a test can step it.
+    @ObservationIgnored var fileWait: (@MainActor () async -> Void)?
 
     public init(
         context: ToolContext, runner: CLIRunner? = nil, timing: MenuTiming = MenuTiming(),
@@ -116,7 +118,11 @@ public final class MenuController {
 
     private func fileLoop() async {
         while !Task.isCancelled {
-            try? await Task.sleep(for: .seconds(timing.fileReadSeconds))
+            if let fileWait {
+                await fileWait()
+            } else {
+                try? await Task.sleep(for: .seconds(timing.fileReadSeconds))
+            }
             if Task.isCancelled { return }
             reload()
             afterFileRead?()

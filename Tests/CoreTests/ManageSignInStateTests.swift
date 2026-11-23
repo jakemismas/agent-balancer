@@ -240,22 +240,46 @@ extension ManageViewModelTests {
     }
 }
 
+/// The file loop's passes and waits as a test sees them, and the test's own wait.
+@MainActor private final class LoopSteps {
+    var passes = 0
+    var told: [Int] = []
+    var waiting: CheckedContinuation<Void, Never>?
+
+    /// Ends the test's wait once, whichever side calls first.
+    func endWait() {
+        waiting?.resume()
+        waiting = nil
+    }
+}
+
 extension MenuControllerTests {
     @Test @MainActor func eachPassOfTheFileLoopAlsoTellsTheManageWindow() async throws {
         let fake = try Fake()
-        try fake.writeConfig()
-        try fake.writeStatus(generatedAt: Date())
+        // A fresh status and hour-long timers keep the refresh and status loops idle.
+        try fake.writeConfigAndStatus()
         var timing = MenuTiming()
-        timing.fileReadSeconds = 0.05
         timing.refreshSecondsOverride = 3600
         timing.statusPollSeconds = 3600
         let controller = MenuController(context: fake.context, runner: fake.runner, timing: timing)
-        var passes = 0
-        controller.afterFileRead = { passes += 1 }
-        controller.start()
-        let seen = await Self.waitFor(300) { passes >= 2 }
+        let steps = LoopSteps()
+        controller.afterFileRead = { steps.passes += 1 }
+        // Stepping the loop by its own wait leaves no timer or deadline for a busy machine to miss.
+        controller.fileWait = {
+            steps.told.append(steps.passes)
+            if steps.told.count == 3 {
+                withUnsafeCurrentTask { $0?.cancel() }
+                steps.endWait()
+            }
+        }
+        await withCheckedContinuation { waiting in
+            steps.waiting = waiting
+            controller.start()
+            // Runs after the loops start() queued, so it ends the wait only if no file loop ran.
+            Task { steps.endWait() }
+        }
         controller.stop()
-        #expect(seen)
+        #expect(steps.told == [0, 1, 2])
     }
 }
 

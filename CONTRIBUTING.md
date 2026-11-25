@@ -21,8 +21,8 @@ scripts/check.sh
 ```
 
 `scripts/check.sh` runs the typecheck, the format lint, the tests, the safety scan, the README
-check and the secret scan, and fails on any step. It needs gitleaks on your `PATH` and fails
-without it. CI runs the same script on every pull request.
+check, the release check and the secret scan, and fails on any step. It needs gitleaks on your
+`PATH` and fails without it. CI runs the same script on every pull request.
 
 `scripts/build-app.sh` builds the menu bar app into `build/`. `scripts/render-views.sh` builds the
 app and the command line tool, draws the app's views into `build/renders/`, copies the README

@@ -48,11 +48,22 @@ jobs:
           VERSION: ${{ inputs.version }}
           PRERELEASE: ${{ inputs.prerelease }}
           GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
         run: |
           scripts/release-version.sh check "$VERSION" "$PRERELEASE"
           scripts/release-notes.sh "$VERSION" >/dev/null
           if gh release view "v$VERSION" >/dev/null 2>&1; then
             echo "Release v$VERSION already exists." >&2
+            exit 1
+          fi
+          # gh release create keeps a tag that already exists, whatever commit it names.
+          if ! tag_refs="$(git ls-remote --tags origin "refs/tags/v$VERSION" "refs/tags/v$VERSION^{}")"; then
+            echo "Could not list the tags on origin." >&2
+            exit 1
+          fi
+          tag_commit="$(awk -v ref="refs/tags/v$VERSION" '$2 == ref { tag = $1 } $2 == ref "^{}" { peeled = $1 } END { print (peeled != "" ? peeled : tag) }' <<<"$tag_refs")"
+          if [ -n "$tag_commit" ] && [ "$tag_commit" != "$SHA" ]; then
+            echo "Tag v$VERSION already exists on origin at $tag_commit, not at $SHA, the commit this run builds." >&2
             exit 1
           fi
       - name: Record the toolchain
@@ -82,6 +93,16 @@ jobs:
           PRERELEASE: ${{ inputs.prerelease }}
           SHA: ${{ github.sha }}
         run: |
+          # A tag made at another commit while the run built stops it here, before it publishes.
+          if ! tag_refs="$(git ls-remote --tags origin "refs/tags/v$VERSION" "refs/tags/v$VERSION^{}")"; then
+            echo "Could not list the tags on origin." >&2
+            exit 1
+          fi
+          tag_commit="$(awk -v ref="refs/tags/v$VERSION" '$2 == ref { tag = $1 } $2 == ref "^{}" { peeled = $1 } END { print (peeled != "" ? peeled : tag) }' <<<"$tag_refs")"
+          if [ -n "$tag_commit" ] && [ "$tag_commit" != "$SHA" ]; then
+            echo "Tag v$VERSION already exists on origin at $tag_commit, not at $SHA, the commit this run builds." >&2
+            exit 1
+          fi
           scripts/release-notes.sh "$VERSION" > "$RUNNER_TEMP/release-notes.md"
           flag=()
           if [ "$PRERELEASE" = "true" ]; then flag=(--prerelease); fi

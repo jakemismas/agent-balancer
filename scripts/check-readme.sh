@@ -29,10 +29,10 @@
 # - Pictures: the eight PNGs exist and carry no compressed chunk, and their metadata chunks hold no
 #   absolute path of two or more parts (also right after a URL's scheme and host), home path (~/,
 #   ~user/ or $HOME/), address outside example.com, org id or token.
-# - Scene sources the pictures are drawn from: accounts named only by the five made-up labels,
-#   every word with a letter in their strings and comments (lowercased, ISO times aside) a label
-#   or on the word list below, and only those labels' example.com addresses (each with at most
-#   one leading hyphen) and the fixture's paths.
+# - Scene sources the pictures are drawn from: only printable ASCII and tabs, accounts named only
+#   by the five made-up labels, every word with a letter in their strings and comments
+#   (lowercased, ISO times aside) a label or on the word list below, and only those labels'
+#   example.com addresses (each with at most one leading hyphen) and the fixture's paths.
 # - When the local banned-string list is present, neither the metadata nor the scene sources hold
 #   a banned string.
 # Usage: check-readme.sh [path to the agent-balancer binary]
@@ -534,6 +534,9 @@ if [ -f "$README_SCENES" ]; then
 fi
 for src in $SCENES; do
   [ -f "$src" ] || { bad "missing scene source $src"; continue; }
+  # The word and address rules below read ASCII only, so a name in another script would pass them.
+  nonascii="$(grep -n $'[^\t -~]' "$src" | cut -d: -f1 | tr '\n' ' ' | sed 's/ $//' || true)"
+  [ -z "$nonascii" ] || bad "$src holds a character that is not printable ASCII or a tab, on lines $nonascii"
   # Where the scenes name an account: JSON and Swift label fields, selections, typed labels,
   # opened steps, account folder paths and the command lines in texts.
   labels="$(

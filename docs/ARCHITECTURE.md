@@ -164,15 +164,29 @@ agent-balancer/
                              color is the design's panel token over that plain desktop
   skill/agent-balancer/SKILL.md   the skill file for a user's Claude (4A.7)
   scripts/check.sh           the test command: typecheck, format lint, tests, the safety scan
-                             (`scripts/check-safety.sh`), the README check, the secret scan
+                             (`scripts/check-safety.sh`), the README check, the release check
+                             and the secret scan
   scripts/build-app.sh       build/AgentBalancerBar.app: release build, hand-made bundle, iconutil
                              icon, ad hoc signature, no Xcode; it refuses a written Info.plist
                              that declares a scripting, URL, service, document or extension key
   scripts/package-release.sh the release files in build/release/: the app zip, the CLI archive,
                              SHA256SUMS and the formula filled from packaging/agent-balancer.rb;
                              `--dry-run` publishes nothing and points the formula at the folder
+  scripts/check-release.sh   the release check: the README's quick start, docs/RELEASING.md, the
+                             release workflow and the formula template agree with what
+                             scripts/package-release.sh makes; read as text, the workflow creates
+                             the tag and stops on one that names another commit; CI keeps its
+                             time limits and its concurrency group
+  scripts/release-version.sh the release version rules: `current` prints the Version.swift value,
+                             and `check <version> <true|false>` takes that value with the switch
+                             off, or that value plus -rcN with it on; the release workflow and
+                             scripts/package-release.sh both call it
+  scripts/release-notes.sh   prints the release notes of a version: its CHANGELOG.md entry, or the
+                             base version's entry for a -rcN version
   packaging/agent-balancer.rb  the formula template: prebuilt CLI, skill folder in the share folder
-  .github/workflows/release.yml  the release run started by hand (version input, prerelease switch)
+  .github/workflows/release.yml  the release run started by hand (version input, prerelease switch);
+                             it stops before it packages, and again before it publishes, when the
+                             tag already exists on origin at another commit
   docs/RELEASING.md          cutting a release, the install smoke and the draft repository
                              description and topics for the public flip
   docs/GUIDE.md              the user guide the README links: the first open of the app, the
@@ -223,8 +237,10 @@ agent-balancer/
                              scheme and host), home path (`~/`, `~user/` or `$HOME/`), address
                              outside example.com, org id or token. The scene sources the pictures
                              are drawn from (`ReadmeScenes.swift`, `ManageScenes.swift`,
-                             `RenderScenes.swift`) name accounts only by the labels main,
-                             personal, lab, spare-a and spare-b; every word with a letter in
+                             `RenderScenes.swift`) hold only printable ASCII and tabs, so a name
+                             in another script cannot slip past the word list, and name accounts
+                             only by the labels main, personal, lab, spare-a and spare-b; every
+                             word with a letter in
                              their strings and comments, lowercased and ISO times aside, is a
                              label or on the check's word list; and they hold only those labels'
                              example.com addresses, each with at most one leading hyphen, and the

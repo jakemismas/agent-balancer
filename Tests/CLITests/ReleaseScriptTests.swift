@@ -401,6 +401,118 @@ import Testing
         #expect(tail.contains("formula sha256 $SHA"))
     }
 
+    // MARK: The release guide
+
+    static func releasingGuide() throws -> String {
+        try String(
+            contentsOf: Support.root.appendingPathComponent("docs/RELEASING.md"), encoding: .utf8)
+    }
+
+    /// What the packaging script's closing lines print for the folder `out`, run in bash on a
+    /// SHA256SUMS whose checksums are `<SHA-256>`, with the temporary folder named as `out`.
+    static func printedLines(out: String, version: String, baseURL: String, dryRun: Bool)
+        throws -> [String]
+    {
+        let lines = try packagingText()
+        let first = try #require(
+            lines.firstIndex { $0.hasPrefix("echo \"package-release: $VERSION\"") })
+        let dir = try Support.makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try "<SHA-256>  agent-balancer-\(version)-arm64.tar.gz\n<SHA-256>  AgentBalancerBar.zip\n"
+            .write(to: dir.appendingPathComponent("SHA256SUMS"), atomically: true, encoding: .utf8)
+        let harness =
+            [
+                #"OUT="$1" VERSION="$2" BASE_URL="$3" DRY="$4" SHA="<SHA-256>""#,
+                #"CLI_ARCHIVE="agent-balancer-$VERSION-arm64.tar.gz" APP_ZIP="AgentBalancerBar.zip""#,
+            ] + lines[first...]
+        let run = try Support.run(
+            URL(fileURLWithPath: "/bin/bash"),
+            [
+                "-c", harness.joined(separator: "\n"), "print", dir.path, version,
+                baseURL.replacingOccurrences(of: out, with: dir.path), dryRun ? "1" : "0",
+            ], env: ["PATH": "/usr/bin:/bin"])
+        #expect(run.status == 0, "\(String(decoding: run.stderr, as: UTF8.self))")
+        return String(decoding: run.stdout, as: UTF8.self)
+            .replacingOccurrences(of: dir.path, with: out).split(separator: "\n").map(String.init)
+    }
+
+    /// The lines of the fenced block of `section` in docs/RELEASING.md whose first line is
+    /// `first`, with the block's indent taken off.
+    static func guideBlock(_ section: String, startingWith first: String) throws -> [String] {
+        let text = try ReadmeTests.section(section, of: releasingGuide())
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let start = try #require(
+            lines.firstIndex { $0.trimmingCharacters(in: .whitespaces) == first }, "\(section)")
+        let indent = lines[start].prefix { $0 == " " }.count
+        return lines[start...].prefix { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("```") }
+            .map { String($0.dropFirst(indent)) }
+    }
+
+    /// The install smoke shows what the dry run prints for its folder, the Update the tap example
+    /// what the Package step of a release run prints: full paths, then the checksum lines.
+    @Test func theReleaseGuideShowsWhatThePackagingScriptPrints() throws {
+        let home = "/Users/example/release"
+        let smoke = try Self.guideBlock("Install smoke", startingWith: "package-release: 1.0.0")
+        let dryRun = try Self.printedLines(
+            out: home, version: "1.0.0", baseURL: "file://\(home)", dryRun: true)
+        #expect(smoke == dryRun, "\(smoke)\n\(dryRun)")
+        let checkout = "/Users/runner/work/agent-balancer/agent-balancer/build/release"
+        let tap = try Self.guideBlock("Update the tap", startingWith: "package-release: 1.0.0")
+        let run = try Self.printedLines(
+            out: checkout, version: "1.0.0",
+            baseURL: "https://github.com/<owner>/agent-balancer/releases/download/v1.0.0",
+            dryRun: false)
+        #expect(tap == run, "\(tap)\n\(run)")
+    }
+
+    /// The steps of the install smoke after the dry run name each file they use by its path.
+    @Test func theInstallSmokeNamesEachFileByItsPath() throws {
+        let smoke = ReadmeTests.flat(
+            try ReadmeTests.section("Install smoke", of: Self.releasingGuide()))
+        let order = [
+            "scripts/package-release.sh --dry-run --out ~/release",
+            "edit the `url` line of `~/release/agent-balancer.rb`",
+            "`~/release/agent-balancer-<version>-arm64.tar.gz`", "`~/release/SHA256SUMS`",
+            "cp ~/release/agent-balancer.rb", "Mark `~/release/AgentBalancerBar.zip` as downloaded",
+        ]
+        let miss = ReadmeTests.outOfOrder(order, in: smoke)
+        #expect(miss == nil, "\(miss ?? "")")
+    }
+
+    /// A release run stops on a tag that already names another commit, and the guide says so.
+    @Test func theGuideSaysTheRunStopsOnATagAtAnotherCommit() throws {
+        let cut = ReadmeTests.flat(
+            try ReadmeTests.section("Cut a release", of: Self.releasingGuide()))
+        #expect(
+            cut.contains(
+                "the run stops before it packages anything, and again just before it publishes, when `v<version>` already exists on origin at another commit; its error names the tag."
+            ))
+    }
+
+    /// The make-public steps name no commit count, set the `main` ruleset Active, and give the
+    /// organization path for restricting tag creation: an app the organization owns, its key in
+    /// an environment only the release job reads, the workflow changed first, and the rulesets
+    /// checked again after a move.
+    @Test func theMakePublicStepsGiveTheOrganizationPathAndNoCommitCount() throws {
+        let steps = ReadmeTests.flat(
+            try ReadmeTests.section("Make the repository public", of: Self.releasingGuide()))
+        #expect(steps.firstMatch(of: /[0-9]+ commits/) == nil, "\(steps)")
+        let order = [
+            "`git log --merges origin/main` prints nothing", "6. Add a ruleset on `main`",
+            "Set its enforcement status to Active. The form starts at Disabled, and a disabled ruleset restricts nothing.",
+            "7. Check that a tag ruleset",
+            "a GitHub App that the organization owns, installed on this repository only, with write access to contents only.",
+            "GitHub installs a private app only on the account that owns it",
+            "Keep the app's private key where only the release job, run from `main` with the maintainer's approval, can read it: a secret of a deployment environment that the release job names, whose only deployment branch is `main` and whose required reviewer is the maintainer.",
+            "Change the release workflow before you add the second ruleset",
+            "Added first and set to Active, the Restrict creations rule blocks the release workflow at its Publish step.",
+            "After a move, check the first ruleset again",
+            "does not list rulesets among what moves with it", "8. Protect the tap repository",
+        ]
+        let miss = ReadmeTests.outOfOrder(order, in: steps)
+        #expect(miss == nil, "\(miss ?? "")")
+    }
+
     // MARK: README and release page against the packaging
 
     static let files = [
@@ -430,64 +542,114 @@ import Testing
         #expect(out.status == 0, "\(String(decoding: out.stderr, as: UTF8.self))")
     }
 
-    @Test(arguments: [
-        ("README.md", "AgentBalancerBar.zip --repo", "AgentBalancerBar.zip --rep0"),
-        (
-            "README.md", "brew install jakemismas/tap/agent-balancer",
-            "brew install jakemismas/tap/other"
-        ),
-        (
-            "README.md", "brew install jakemismas/tap/agent-balancer",
-            "brew install someone/tap/agent-balancer"
-        ),
-        (
-            "README.md", "AgentBalancerBar.zip --repo jakemismas/agent-balancer",
-            "AgentBalancerBar.zip --repo someone/agent-balancer"
-        ),
-        ("README.md", "`AgentBalancerBar.app`", "`Other.app`"),
-        (".github/workflows/release.yml", "build/release/AgentBalancerBar.zip", "build/x.zip"),
-        (".github/workflows/release.yml", "actions/attest-build-provenance@", "actions/other@"),
-        ("docs/RELEASING.md", "SHA256SUMS", "SUMS"),
-        ("docs/RELEASING.md", "gh release create", "gh release new"),
-        (
-            ".github/workflows/release.yml", "gh release create \"v$VERSION\"",
-            "gh release upload \"v$VERSION\""
-        ),
-        (".github/workflows/release.yml", "if: github.ref == 'refs/heads/main'", "if: true"),
-        (".github/workflows/release.yml", "git merge-base --is-ancestor", "git log"),
-        (
-            ".github/workflows/release.yml", "permissions:\n  contents: read",
-            "permissions:\n  contents: write"
-        ),
-        (
-            ".github/workflows/release.yml", "      contents: write\n",
-            "      contents: write\n      x: ${{ secrets.TAP_TOKEN }}\n"
-        ),
-        (
-            ".github/workflows/release.yml", "checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
-            "checkout@v4"
-        ),
-        (
-            ".github/workflows/ci.yml", "checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
-            "checkout@v4"
-        ),
-        (
-            ".github/workflows/ci.yml", "permissions:\n  contents: read",
-            "permissions:\n  contents: write"
-        ),
-        ("packaging/agent-balancer.rb", "class AgentBalancer < Formula", "class Other < Formula"),
-    ])
-    func aDriftedFileFails(file: String, from: String, to: String) throws {
+    /// One change to a copy of the files, and the text that the check's error must name: what the
+    /// change took out of a line the check requires, or what it put in that the check refuses.
+    struct Drift: Sendable, CustomTestStringConvertible {
+        let file: String
+        let from: String
+        let to: String
+        let names: String
+        var testDescription: String { "\(file): \(names)" }
+    }
+
+    static func drifts() -> [Drift] {
+        let readme = "README.md"
+        let guide = "docs/RELEASING.md"
+        let workflow = ".github/workflows/release.yml"
+        let ci = ".github/workflows/ci.yml"
+        let install = "brew install jakemismas/tap/agent-balancer"
+        let trust = "brew trust --formula jakemismas/tap/agent-balancer"
+        let attest = "AgentBalancerBar.zip --repo jakemismas/agent-balancer"
+        let create = "gh release create \"v$VERSION\""
+        let publish = "      - name: Publish\n"
+        let pushStep =
+            "      - name: Push the tag\n"
+            + "        run: git tag \"v$VERSION\" \"$SHA\" && git push origin \"v$VERSION\"\n"
+        let notes = "          scripts/release-notes.sh \"$VERSION\" >/dev/null\n"
+        let lsRemote =
+            "          git ls-remote --exit-code origin \"refs/tags/v$VERSION\" >/dev/null\n"
+        let revParse = "          git rev-parse --verify \"v$VERSION\"\n"
+        let reuse = "          [ -n \"$tag_commit\" ] || exit 1\n"
+        let inputsCheck =
+            "          # gh release create keeps a tag that already exists, whatever commit it"
+            + " names.\n          if ! tag_refs="
+        let publishCheck =
+            "          # A tag made at another commit while the run built stops it here, before it"
+            + " publishes.\n          if ! tag_refs="
+        let tagLine = "the tag check line: if ! tag_refs="
+        let pinned = "checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+        let read = "permissions:\n  contents: read"
+        let write = "permissions:\n  contents: write"
+        func drift(_ file: String, _ from: String, _ to: String, _ names: String) -> Drift {
+            Drift(file: file, from: from, to: to, names: names)
+        }
+        return [
+            drift(
+                readme, "AgentBalancerBar.zip --repo", "AgentBalancerBar.zip --rep0",
+                "AgentBalancerBar.zip --repo"),
+            drift(readme, install, "brew install jakemismas/tap/other", install),
+            drift(readme, install, "brew install someone/tap/agent-balancer", install),
+            drift(readme, attest, "AgentBalancerBar.zip --repo someone/agent-balancer", attest),
+            drift(readme, "`AgentBalancerBar.app`", "`Other.app`", "`AgentBalancerBar.app`"),
+            drift(readme, "   brew tap jakemismas/tap\n", "", "brew tap jakemismas/tap"),
+            drift(readme, trust, "brew trust jakemismas/tap", trust),
+            drift(
+                workflow, "build/release/AgentBalancerBar.zip", "build/x.zip",
+                "build/release/AgentBalancerBar.zip"),
+            drift(
+                workflow, "actions/attest-build-provenance@", "actions/other@",
+                "actions/attest-build-provenance@"),
+            drift(guide, "SHA256SUMS", "SUMS", "SHA256SUMS"),
+            drift(guide, "gh release create", "gh release new", "gh release create"),
+            drift(workflow, create, "gh release upload \"v$VERSION\"", create),
+            drift(workflow, create, "gh release create \"$VERSION\"", create),
+            drift(workflow, "--target \"$SHA\"", "--verify-tag --target \"$SHA\"", "--verify-tag"),
+            drift(workflow, publish, publish + "        if: false\n", "if: false"),
+            drift(workflow, publish, pushStep + publish, "git push"),
+            drift(workflow, notes, notes + lsRemote, "ls-remote"),
+            drift(workflow, notes, notes + revParse, "v$VERSION"),
+            drift(workflow, notes, notes + reuse, "tag_commit"),
+            drift(
+                workflow, "[ \"$tag_commit\" != \"$SHA\" ]", "[ \"$tag_commit\" = \"$SHA\" ]",
+                "[ \"$tag_commit\" != \"$SHA\" ]"),
+            drift(workflow, inputsCheck, inputsCheck + "x", "lacks " + tagLine),
+            drift(
+                workflow, publishCheck, publishCheck + "x",
+                "lacks, before gh release create, " + tagLine),
+            drift(
+                workflow, "if: github.ref == 'refs/heads/main'", "if: true",
+                "if: github.ref == 'refs/heads/main'"),
+            drift(
+                workflow, "git merge-base --is-ancestor", "git log",
+                "git merge-base --is-ancestor"),
+            drift(workflow, read, write, "permissions: contents: read"),
+            drift(
+                workflow, "      contents: write\n",
+                "      contents: write\n      x: ${{ secrets.TAP_TOKEN }}\n", "TAP_TOKEN"),
+            drift(workflow, pinned, "checkout@v4", "actions/checkout@v4"),
+            drift(ci, pinned, "checkout@v4", "actions/checkout@v4"),
+            drift(ci, read, write, "contents: write"),
+            drift(
+                "packaging/agent-balancer.rb", "class AgentBalancer < Formula",
+                "class Other < Formula", "class AgentBalancer < Formula"),
+        ]
+    }
+
+    @Test(arguments: drifts())
+    func aDriftedFileFails(drift: Drift) throws {
         let fm = FileManager.default
         let root = try Support.makeTempDir()
         defer { try? fm.removeItem(at: root) }
         try Self.copy(to: root)
-        let url = root.appendingPathComponent(file)
+        let url = root.appendingPathComponent(drift.file)
         let text = try String(contentsOf: url, encoding: .utf8)
-        #expect(text.contains(from))
-        try text.replacingOccurrences(of: from, with: to)
+        #expect(text.contains(drift.from))
+        try text.replacingOccurrences(of: drift.from, with: drift.to)
             .write(to: url, atomically: true, encoding: .utf8)
-        #expect(try Self.runCheck(in: root).status != 0)
+        let out = try Self.runCheck(in: root)
+        let printed = String(decoding: out.stderr, as: UTF8.self)
+        #expect(out.status == 1, "\(printed)")
+        #expect(printed.contains("FAIL release: ") && printed.contains(drift.names), "\(printed)")
     }
 
     // Far more than a pipe holds, so a writer into a reader that stops early is always cut off.

@@ -80,6 +80,39 @@
   account or the other one prints its label and reason. An end date of today set before midnight
   counts as ended after it, so a slow run that crossed midnight saw both accounts end and no
   account chosen.
+- The README check refuses a scene source the README pictures are drawn from that holds a
+  character other than printable ASCII or a tab, and names the file and each such line, so a name
+  written in another script, with or without a leading hyphen, no longer slips past its word and
+  address rules, which read ASCII only.
+- The architecture layout has a row for each of `scripts/check-release.sh`,
+  `scripts/release-version.sh` and `scripts/release-notes.sh`, and CONTRIBUTING.md, the layout and
+  the header of `scripts/check.sh` name every step of the gate in the order it runs them, the
+  release check included. The install smoke in `docs/RELEASING.md` shows what the dry run prints
+  (the full path of each file it made, the formula's `file://` URL and the checksums) and names
+  each file by its path in the later steps, and the Update the tap example shows the full paths,
+  then the checksum lines, as the Package step prints them.
+- The quick start and the install section of `docs/GUIDE.md` tap `jakemismas/tap` and trust the
+  one formula with `brew trust --formula jakemismas/tap/agent-balancer` before they install it,
+  and say why: Homebrew 7 refuses a formula from a tap you have not trusted, except to install or
+  upgrade it by its full name, so `brew info` after the tap, or an upgrade by short name of a
+  formula never trusted, could fail. The guide says the upgrade line works once the formula is
+  trusted.
+- The release workflow stops before it packages anything, and again just before it publishes,
+  when the tag `v<version>` already exists on origin at a commit other than the one the run builds,
+  and its error names the tag. `gh release create` used to keep such a tag, so the release, its
+  notes and its source archives would sit on that other commit. The release check now also fails
+  when the Publish step gains an `if:`, passes `--verify-tag` or drops the `v` from
+  `gh release create "v$VERSION"`, when a step runs `git push`, and when another line names the
+  tag, such as a check that stops unless the tag is already on origin; it reads the workflow's text
+  only. Each case of the drifted-file test now also expects the check's error to name the text it
+  changed.
+- The make-public steps of `docs/RELEASING.md` name no commit count, which went stale with each
+  change: step 3 checks that `main` holds no merge commit. Step 6 sets the `main` ruleset Active.
+  For an organization, step 7 names a GitHub App that the organization owns, installed on this
+  repository only, with write access to contents only; keeps its private key in a deployment
+  environment that only the release job, run from `main` with the maintainer's approval, can read;
+  says to change the release workflow before adding the second ruleset; and says to check the
+  first ruleset again after a move.
 
 ## 1.1.0
 

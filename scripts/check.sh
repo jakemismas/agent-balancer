@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# The project gate: typecheck, lint, tests, safety scan, secret scan. Any failing step fails the run.
+# The project gate: typecheck, format lint, tests, safety scan, README check, release check and
+# secret scan. Any failing step fails the run.
 set -euo pipefail
 
 cd "$(cd "$(dirname "$0")/.." && pwd)"

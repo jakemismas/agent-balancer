@@ -172,4 +172,44 @@ import Testing
                 "or leaves unopened an entry that may hold one: one named like a token file or a launch folder in other letter case, or a link, a file, another user's folder or an entry it cannot check where a label's launch folder belongs."
             ))
     }
+
+    /// The file layout of section 4: the fenced block under its heading.
+    static func layout() throws -> String {
+        let doc = try String(
+            contentsOf: Support.root.appendingPathComponent("docs/ARCHITECTURE.md"),
+            encoding: .utf8)
+        let heading = try #require(doc.range(of: "\n## 4. Architecture and module map\n"))
+        let open = try #require(doc.range(of: "\n```\n", range: heading.upperBound..<doc.endIndex))
+        let close = try #require(doc.range(of: "\n```\n", range: open.upperBound..<doc.endIndex))
+        return String(doc[open.upperBound..<close.lowerBound])
+    }
+
+    /// The row of the layout that starts with `path`, its wrapped lines joined by single spaces.
+    static func layoutRow(_ path: String) throws -> String {
+        let lines = try layout().split(separator: "\n").map(String.init)
+        let first = try #require(lines.firstIndex { $0.hasPrefix("  \(path) ") }, "\(path)")
+        let rest = lines[(first + 1)...].prefix { $0.hasPrefix("   ") }
+        return ([lines[first]] + rest).joined(separator: " ")
+            .split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    }
+
+    /// The layout names every script under scripts/, and each release script has a row that
+    /// says what it does.
+    @Test func theLayoutNamesEveryScript() throws {
+        let layout = try Self.layout()
+        let scripts = try FileManager.default.contentsOfDirectory(
+            atPath: Support.root.appendingPathComponent("scripts").path)
+        #expect(scripts.count >= 9)
+        for name in scripts.sorted() {
+            #expect(layout.contains("scripts/\(name)"), "\(name)")
+        }
+        for (script, says) in [
+            ("scripts/check-release.sh", "the release check:"),
+            ("scripts/release-version.sh", "the release version rules"),
+            ("scripts/release-notes.sh", "prints the release notes of a version"),
+        ] {
+            let row = try Self.layoutRow(script)
+            #expect(row.contains(says), "\(script): \(row)")
+        }
+    }
 }

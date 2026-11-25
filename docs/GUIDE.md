@@ -8,7 +8,14 @@ uninstalling.
 
 The [quick start](../README.md#quick-start) installs the command line tool with Homebrew and
 downloads and checks the app. Homebrew installs a prebuilt tool, so your Mac needs no developer
-tools.
+tools. Homebrew 7 refuses an untrusted tap's formula, so tap, trust the one formula (not the whole
+tap), then install:
+
+```
+brew tap jakemismas/tap
+brew trust --formula jakemismas/tap/agent-balancer
+brew install jakemismas/tap/agent-balancer
+```
 
 The app is ad hoc signed and not notarized, so macOS stops its first open. On macOS 14 that open
 takes four steps (newer versions may word them differently):
@@ -20,7 +27,8 @@ takes four steps (newer versions may word them differently):
 4. macOS asks whether you are sure you want to open it. Choose Open.
 
 Do these four steps again after each upgrade until the app is notarized. Upgrade the tool with
-`brew upgrade agent-balancer` and replace the app from the new zip.
+`brew upgrade agent-balancer`, which works once the formula is trusted, and replace the app from
+the new zip.
 
 ## First five minutes
 

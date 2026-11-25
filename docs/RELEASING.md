@@ -44,7 +44,10 @@ when the tool links anything else.
    call it. A prerelease of `1.0.0` is `1.0.0-rc1`, `1.0.0-rc2` and so on; `1.0.0-rc` and
    `1.0.0-rc1abc` fail, and so does a plain version with the switch on.
 3. The run checks the tree, packages the files, attests the archive and the zip, and creates the
-   GitHub release with the notes. Then pin the entry it released: add its version to
+   GitHub release and its tag `v<version>` with the notes. `gh release create` keeps a tag that
+   already exists, whatever commit it names, so the run stops before it packages anything, and
+   again just before it publishes, when `v<version>` already exists on origin at another commit;
+   its error names the tag. Then pin the entry it released: add its version to
    `shippedNotes` in `Tests/CLITests/ReleaseScriptTests.swift` with the byte count and the SHA-256
    of its notes at the run's tag, as `"<version>": Pin(bytes: <count>, sha256: "<SHA-256>")`, and
    land the change. After `git fetch --tags`, these commands print the count, then the SHA-256
@@ -65,24 +68,31 @@ when the tool links anything else.
 
 ## Update the tap
 
-1. Open the run's log. The Package step ends with the paths of the files and the formula's URL:
+1. Open the run's log. The Package step prints the full path of each file it made, under the
+   run's checkout, and the formula's URL, then the checksum lines. For version 1.0.0 it prints:
 
    ```
    package-release: 1.0.0
-     build/release/agent-balancer-1.0.0-arm64.tar.gz
-     build/release/AgentBalancerBar.zip
-     build/release/SHA256SUMS
-     build/release/agent-balancer.rb (url https://github.com/<owner>/agent-balancer/releases/download/v1.0.0/agent-balancer-1.0.0-arm64.tar.gz)
+     /Users/runner/work/agent-balancer/agent-balancer/build/release/agent-balancer-1.0.0-arm64.tar.gz
+     /Users/runner/work/agent-balancer/agent-balancer/build/release/AgentBalancerBar.zip
+     /Users/runner/work/agent-balancer/agent-balancer/build/release/SHA256SUMS
+     /Users/runner/work/agent-balancer/agent-balancer/build/release/agent-balancer.rb (url https://github.com/<owner>/agent-balancer/releases/download/v1.0.0/agent-balancer-1.0.0-arm64.tar.gz)
+   package-release: checksums (SHA-256)
+     <SHA-256>  agent-balancer-1.0.0-arm64.tar.gz
+     <SHA-256>  AgentBalancerBar.zip
+   package-release: formula sha256 <SHA-256>
    ```
 
-   The same files are attached to the release.
+   Each `<SHA-256>` is 64 hex digits. The same files are attached to the release.
 2. Download `agent-balancer.rb` and `SHA256SUMS` from the release.
 3. Check that the `sha256` line in `agent-balancer.rb` equals the line for the
    `agent-balancer-<version>-arm64.tar.gz` file in `SHA256SUMS`, and that `url` names the
    release's tag.
 4. Copy `agent-balancer.rb` into the `Formula` folder of the tap repository, commit it and push.
    Do not run `brew bump-formula-pr`: it computes its own checksum from the URL.
-5. Run `brew update` and `brew info <owner>/tap/agent-balancer`. It shows the new version.
+5. Run `brew update` and `brew info <owner>/tap/agent-balancer`. It shows the new version. On a
+   Mac where Homebrew 7 has not trusted the formula, `brew info` refuses it until you run
+   `brew trust --formula <owner>/tap/agent-balancer`.
 
 ## Make the repository public
 
@@ -93,12 +103,16 @@ needs the maintainer's yes.
    only `example.com`, the commit identity and `users.noreply.github.com`.
 2. Run `git log --all -p`, every issue and pull request title, body and comment, and the release
    notes through the local banned-string list. Any hit blocks the flip.
-3. Confirm that no `CLAUDE.md` or `.claude/` file ever entered history, that
-   `git log --merges origin/main` prints nothing, and that `main` has 27 commits or fewer.
+3. Confirm that no `CLAUDE.md` or `.claude/` file ever entered history, and that
+   `git log --merges origin/main` prints nothing: each change lands as one commit by a
+   fast-forward push, so `main` holds no merge commit. The step checks that shape, not a count
+   of commits, which grows with every change.
 4. Change the visibility to public.
 5. Enable secret scanning, push protection, private vulnerability reporting and the CodeQL
    default setup.
 6. Add a ruleset on `main` (linear history, the CI check required, no force pushes, no deletion).
+   Set its enforcement status to Active. The form starts at Disabled, and a disabled ruleset
+   restricts nothing.
 7. Check that a tag ruleset lets only the maintainer move or delete a `v*` tag, or add one:
    - Set its enforcement status to Active. The form starts at Disabled.
    - Target `v*` tags, and select only the Restrict updates and Restrict deletions rules.
@@ -108,16 +122,28 @@ needs the maintainer's yes.
      refuses that app as a bypass actor whoever owns the repository ("Actor GitHub Actions
      integration must be part of the ruleset source or owner organization"). A Restrict creations
      rule would block the release workflow, so creating a `v*` tag stays with every account and
-     workflow with write access.
+     workflow with write access. A `v*` tag made first at another commit stops the release run,
+     whose error names the tag; as the ruleset's bypass, you can delete that tag.
    - Moving the repository from a personal account to an organization does not change this by
-     itself. There, restricting creation takes a GitHub App of the maintainer's own, installed on
-     the organization, as the bypass of a second tag ruleset for `v*` tags, set to Active, that
-     holds only the Restrict creations rule, with the maintainer's own account as its other
-     bypass. It also takes a change to the release workflow: the workflow must create the tag
-     with that app's token, and getting the token takes the app's private key as a secret, which
-     the workflow does not hold and `scripts/check-release.sh` refuses. Until then, creation stays
-     with write access. Keep the app out of the first ruleset: a bypass covers every rule of its
+     itself. There, restricting creation takes a GitHub App that the organization owns, installed
+     on this repository only, with write access to contents only. GitHub installs a private app
+     only on the account that owns it, so an app of the maintainer's personal account cannot be
+     installed on the organization. The app is the bypass of a second tag ruleset for `v*` tags,
+     set to Active, that holds only the Restrict creations rule, with the maintainer's own account
+     as its other bypass. Keep the app out of the first ruleset: a bypass covers every rule of its
      ruleset, so there the app could move and delete `v*` tags.
+   - Keep the app's private key where only the release job, run from `main` with the
+     maintainer's approval, can read it: a secret of a deployment environment that the release
+     job names, whose only deployment branch is `main` and whose required reviewer is the
+     maintainer. Not a repository secret: every account with write access can push a workflow
+     that reads one, then make a `v*` tag through the second ruleset's bypass or copy the key.
+   - Change the release workflow before you add the second ruleset: the workflow must create the
+     tag with the app's token, made from that key, which it does not do today, and
+     `scripts/check-release.sh` refuses the secret it needs. Added first and set to Active, the
+     Restrict creations rule blocks the release workflow at its Publish step. Until the workflow
+     changes, creation stays with write access.
+   - After a move, check the first ruleset again, and the `main` ruleset of step 6: GitHub's page
+     on transferring a repository does not list rulesets among what moves with it.
 8. Protect the tap repository's `main` the same way, and add Scorecard.
 
 ## Repository description and topics
@@ -169,16 +195,36 @@ Code installed and one test account signed in. The maintainer reviews the result
 first release goes public.
 
 1. Put the release files in a folder with no spaces in its path, for example `~/release`.
-2. Fill the formula for that folder. This makes `~/release/agent-balancer.rb` with `file://` URLs:
+2. Fill the formula for that folder. The dry run writes the archive, the app zip, `SHA256SUMS`
+   and the formula, with a `file://` URL, to that folder and checks them:
 
    ```
    scripts/package-release.sh --dry-run --out ~/release
    ```
 
    The script refuses a folder that holds files it did not make, so use a new or empty folder.
+   It ends by printing the full path of each file it made, the formula's `file://` URL and the
+   checksums. For version 1.0.0 and a home folder of `/Users/example`, it prints:
 
-   On a machine without the source tree, edit the `url` line of the downloaded formula to the
-   `file://` path of the archive and check that `sha256` equals the line in `SHA256SUMS`.
+   ```
+   package-release: 1.0.0
+     /Users/example/release/agent-balancer-1.0.0-arm64.tar.gz
+     /Users/example/release/AgentBalancerBar.zip
+     /Users/example/release/SHA256SUMS
+     /Users/example/release/agent-balancer.rb (url file:///Users/example/release/agent-balancer-1.0.0-arm64.tar.gz)
+   package-release: checksums (SHA-256)
+     <SHA-256>  agent-balancer-1.0.0-arm64.tar.gz
+     <SHA-256>  AgentBalancerBar.zip
+   package-release: formula sha256 <SHA-256>
+   package-release: dry run, nothing published
+   ```
+
+   The steps below name these files by those paths, with `~` for the home folder.
+
+   On a machine without the source tree, put the downloaded files in `~/release` instead, edit
+   the `url` line of `~/release/agent-balancer.rb` to the `file://` URL of
+   `~/release/agent-balancer-<version>-arm64.tar.gz`, written with the full path as above, and
+   check that the formula's `sha256` equals that file's line in `~/release/SHA256SUMS`.
 3. Make a local tap and install from it:
 
    ```
@@ -205,9 +251,9 @@ first release goes public.
    `which` prints `$(brew --prefix)/bin/agent-balancer`. `doctor` says setup has not run. `brew
    info` shows the caveat to run `agent-balancer uninstall` before you remove the tool. The last
    command fails, because the tool writes nothing before `init`.
-5. Open the app the way a download opens it. Mark the zip as downloaded, unzip it, move the app to
-   Applications and follow the four steps of the install section of `docs/GUIDE.md`. Check that
-   they match what macOS shows.
+5. Open the app the way a download opens it. Mark `~/release/AgentBalancerBar.zip` as downloaded,
+   unzip it, move the app to Applications and follow the four steps of the install section of
+   `docs/GUIDE.md`. Check that they match what macOS shows.
 6. Run the smoke list of section 15 of `docs/ARCHITECTURE.md`.
 7. Remove the formula with `brew uninstall local/ab/agent-balancer` and the tap with
    `brew untap local/ab`.

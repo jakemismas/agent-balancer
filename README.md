@@ -24,16 +24,19 @@ For anyone with several Claude Code accounts or subscriptions who runs into five
 You need macOS 14 or later on Apple silicon, the GitHub CLI (signed in for the check), Claude Code
 signed in and two or more Claude accounts.
 
-1. Install the tool, download `AgentBalancerBar.zip` and check it:
+1. Install the tool, download `AgentBalancerBar.zip` and check it.
+   Homebrew 7 refuses an untrusted tap's formula, so trust it:
 
    ```
+   brew tap jakemismas/tap
+   brew trust --formula jakemismas/tap/agent-balancer
    brew install jakemismas/tap/agent-balancer
    gh release download --repo jakemismas/agent-balancer --pattern AgentBalancerBar.zip
    gh attestation verify AgentBalancerBar.zip --repo jakemismas/agent-balancer
    ```
 
-2. Unzip it and drag `AgentBalancerBar.app` to Applications; as it is not notarized, its first open
-   takes [four steps](docs/GUIDE.md#install).
+2. Unzip it and drag `AgentBalancerBar.app` to Applications; its first open takes
+   [four steps](docs/GUIDE.md#install).
 3. Register the signed-in account, then the others;
    `agent-balancer login <label>` opens the browser to approve as that account.
 
@@ -58,13 +61,13 @@ signed in and two or more Claude accounts.
    next for fable: lab
    ```
 
-5. Launch with `agent-balancer run <label>`, or link the skill for Claude's launches:
+5. Launch with `agent-balancer run <label>`, or link the skill:
 
    ```
    mkdir -p ~/.claude/skills && ln -s "$(brew --prefix)/share/agent-balancer/skill/agent-balancer" ~/.claude/skills/agent-balancer
    ```
 
-Upgrade with `brew upgrade agent-balancer` and the new zip; the [guide](docs/GUIDE.md) has the rest.
+Upgrade with `brew upgrade agent-balancer` and the new zip; see the [guide](docs/GUIDE.md).
 
 ## The app
 

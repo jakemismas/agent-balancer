@@ -184,7 +184,9 @@ import Testing
         let quick = try Self.section("Quick start", of: Self.read("README.md"))
         let order = [
             "macOS 14 or later on Apple silicon", "two or more Claude",
-            "`AgentBalancerBar.zip`", "   brew install jakemismas/tap/agent-balancer\n",
+            "`AgentBalancerBar.zip`", Self.trustReason, "   brew tap jakemismas/tap\n",
+            "   brew trust --formula jakemismas/tap/agent-balancer\n",
+            "   brew install jakemismas/tap/agent-balancer\n",
             "   gh release download --repo jakemismas/agent-balancer --pattern AgentBalancerBar.zip\n",
             "   gh attestation verify AgentBalancerBar.zip --repo jakemismas/agent-balancer\n",
             "`AgentBalancerBar.app` to Applications", "[four steps](docs/GUIDE.md#install)",
@@ -198,6 +200,31 @@ import Testing
         let miss = Self.outOfOrder(order, in: quick)
         #expect(miss == nil, "\(miss ?? "")")
         #expect(!quick.contains("<user>") && !quick.contains("<owner>"))
+    }
+
+    /// Why the trust line is there, in the words both files use.
+    static let trustReason = "Homebrew 7 refuses an untrusted tap's formula"
+    static let trustedInstall = [
+        "brew tap jakemismas/tap", "brew trust --formula jakemismas/tap/agent-balancer",
+        "brew install jakemismas/tap/agent-balancer",
+    ]
+
+    /// Homebrew 7 refuses an untrusted tap's formula, so the quick start and the guide's install
+    /// section tap, trust the one formula and install it, on lines that follow each other, after
+    /// the line that says why; neither trusts the whole tap.
+    @Test func theQuickStartAndTheGuideTrustTheOneFormulaBeforeTheInstall() throws {
+        for (file, title) in [("README.md", "Quick start"), (Self.guide, "Install")] {
+            let text = try Self.section(title, of: Self.read(file))
+            let lines = text.split(separator: "\n").map {
+                $0.trimmingCharacters(in: .whitespaces)
+            }
+            let tap = try #require(lines.firstIndex(of: Self.trustedInstall[0]), "\(file)")
+            #expect(Array(lines[tap...].prefix(3)) == Self.trustedInstall, "\(file)")
+            let why = try #require(lines.firstIndex { $0.contains(Self.trustReason) }, "\(file)")
+            #expect(why < tap, "\(file)")
+            #expect(
+                lines.filter { $0.hasPrefix("brew trust") } == [Self.trustedInstall[1]], "\(file)")
+        }
     }
 
     /// The opening line and the FAQ name the problem in the words people use when they ask, in
@@ -296,7 +323,8 @@ import Testing
         let install = Self.flat(try Self.section("Install", of: Self.read(Self.guide)))
         let steps = [
             "[quick start](../README.md#quick-start)", "a prebuilt tool",
-            "your Mac needs no developer tools",
+            "your Mac needs no developer tools", Self.trustReason,
+            Self.trustedInstall.joined(separator: " "),
             "The app is ad hoc signed and not notarized", "On macOS 14 that open takes four steps",
             "1. Open the app.", "shows only an OK button. Choose OK.",
             "2. Open System Settings, then Privacy & Security.", "Under Security",
@@ -304,7 +332,8 @@ import Testing
             "3. Enter an administrator's password when asked, and choose Modify Settings.",
             "4. macOS asks whether you are sure you want to open it. Choose Open.",
             "Do these four steps again after each upgrade until the app is notarized.",
-            "`brew upgrade agent-balancer`", "replace the app from the new zip",
+            "`brew upgrade agent-balancer`", "which works once the formula is trusted",
+            "replace the app from the new zip",
         ]
         let miss = Self.outOfOrder(steps, in: install)
         #expect(miss == nil, "\(miss ?? "")")
@@ -530,7 +559,7 @@ import Testing
                 (
                     "Build and check",
                     [
-                        "swift build -c release", "the README check",
+                        "swift build -c release", "the README check", "the release check",
                         "builds the app and the command line tool",
                         "copies the README pictures that run drew into `docs/media/`",
                     ]
@@ -561,6 +590,34 @@ import Testing
                 ),
                 ("License", ["licensed under the MIT license"]),
             ], in: doc)
+    }
+
+    /// The words CONTRIBUTING.md, the layout and the gate's own header use for each step of
+    /// `scripts/check.sh`.
+    static let gateStepNames = [
+        "typecheck": "typecheck", "lint": "format lint", "tests": "tests",
+        "safety": "safety scan", "readme": "README check", "release": "release check",
+        "secrets": "secret scan",
+    ]
+
+    /// CONTRIBUTING.md, the layout row of `scripts/check.sh` and the script's header comment name
+    /// each step that the script runs, in the order it runs them; a new step needs a name here.
+    @Test func theGateStepsAreNamedInTheOrderTheGateRunsThem() throws {
+        let script = try Self.read("scripts/check.sh")
+        let steps = script.matches(of: /\nstep "([a-z]+)"\n/).map { String($0.output.1) }
+        #expect(steps.count >= 7)
+        let names = try steps.map { try #require(Self.gateStepNames[$0], "no name for \($0)") }
+        let header = script.split(separator: "\n").dropFirst().prefix { $0.hasPrefix("#") }
+            .map { $0.drop { $0 == "#" || $0 == " " } }.joined(separator: " ")
+        let contributing = try Self.section("Build and check", of: Self.read("CONTRIBUTING.md"))
+        for (what, text) in [
+            ("the header of scripts/check.sh", header),
+            ("CONTRIBUTING.md", Self.flat(contributing)),
+            ("the layout row", try ContractAndArchitectureTextTests.layoutRow("scripts/check.sh")),
+        ] {
+            let miss = Self.outOfOrder(names, in: text)
+            #expect(miss == nil, "\(what): \(miss ?? "")")
+        }
     }
 
     /// The process rule names exactly what the safety scan's process pattern matches.
@@ -669,6 +726,11 @@ import Testing
         var testDescription: String { name }
     }
 
+    /// What the scene check prints for a character outside printable ASCII and tabs.
+    static let scriptKey = "is not printable ASCII or a tab"
+    /// A word in Japanese script, standing for a name written outside ASCII.
+    static let nameOutsideASCII = "\u{30C6}\u{30B9}\u{30C8}"
+
     static func guardCases() -> [GuardCase] {
         let readme = "README.md"
         let readmeScenes = "Sources/AgentBalancerBar/ReadmeScenes.swift"
@@ -713,6 +775,8 @@ import Testing
         let path = "metadata holds a path"
         let account = "names an account outside the fixture"
         let word = "has a word that is neither"
+        let script = Self.scriptKey
+        let name = Self.nameOutsideASCII
         return [
             edit(
                 "a bare `link --repairs`", span, guide, "`agent-balancer link <label> --repair`",
@@ -1041,6 +1105,19 @@ import Testing
                 "a hyphen before no fixture label in a reused scene",
                 "holds an address other than", manageScenes, "\"-lab@" + "example.com\"",
                 "\"-x@" + "example.com\""),
+            // The word and address rules read ASCII only, so these pass every rule but one.
+            edit(
+                "a name outside ASCII in a reason text of the README fixture", script, readmeScenes,
+                "reason\": \"Soonest weekly reset:", "reason\": \"\(name) Soonest weekly reset:"),
+            edit(
+                "a name outside ASCII in a warning text", script, renderScenes,
+                "Same reset times as main.", "Same reset times as \(name)."),
+            edit(
+                "a name outside ASCII as an address in a reused scene", script, manageScenes,
+                "\"spare-b@" + "example.com\"", "\"\(name)@" + "example.com\""),
+            edit(
+                "a name outside ASCII after a leading hyphen in a reused scene", script,
+                manageScenes, "\"-lab@" + "example.com\"", "\"-\(name)@" + "example.com\""),
             edit(
                 "a home path in the README fixture", "source holds a path outside", readmeScenes,
                 "~/.agent-balancer/accounts/lab/.claude", "/Users/" + "someone/.claude"),
@@ -1063,6 +1140,35 @@ import Testing
         #expect(status == 1, "\(printed)")
         #expect(printed.contains("FAIL readme: ") && printed.contains(guardCase.key), "\(printed)")
         #expect(cleaned, "the temporary file outlived the run")
+    }
+
+    /// The scene check names each scene source and every line of it that holds a name outside
+    /// ASCII, and prints none of the name.
+    @Test func theSceneCheckNamesTheFileAndTheLinesOfANameOutsideASCII() throws {
+        let edits = [
+            ("Sources/AgentBalancerBar/ReadmeScenes.swift", "Soonest weekly reset:"),
+            ("Sources/AgentBalancerBar/Manage/ManageScenes.swift", "\"-lab@" + "example.com\""),
+            ("Sources/AgentBalancerBar/RenderScenes.swift", "Same reset times as main."),
+        ]
+        var expected: [String] = []
+        let (status, cleaned, printed) = try Self.checkCopy { root in
+            for (file, old) in edits {
+                let url = root.appendingPathComponent(file)
+                let text = try String(contentsOf: url, encoding: .utf8)
+                let lines = text.components(separatedBy: "\n").enumerated()
+                    .filter { $0.element.contains(old) }.map { String($0.offset + 1) }
+                #expect(!lines.isEmpty, "\(file): \(old)")
+                expected.append(
+                    "FAIL readme: \(file) holds a character that is not printable ASCII or a tab,"
+                        + " on lines \(lines.joined(separator: " "))\n")
+                try text.replacingOccurrences(of: old, with: Self.nameOutsideASCII + old)
+                    .write(to: url, atomically: true, encoding: .utf8)
+            }
+        }
+        #expect(status == 1, "\(printed)")
+        #expect(cleaned, "the temporary file outlived the run")
+        for line in expected { #expect(printed.contains(line), "\(printed)") }
+        #expect(!printed.contains(Self.nameOutsideASCII), "\(printed)")
     }
 
     /// Inputs the check must let through: the copy as it is, a link to a heading of a file, a

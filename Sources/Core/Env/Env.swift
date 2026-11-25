@@ -5,6 +5,13 @@ public enum Env {
     public static func snapshot() -> [String: String] {
         ProcessInfo.processInfo.environment
     }
+
+    /// The real user's home folder as the user database names it, or nil when it names none. No
+    /// environment variable moves it, `CFFIXED_USER_HOME` included.
+    static func userDatabaseHome() -> String? {
+        guard let entry = getpwuid(getuid()), let dir = entry.pointee.pw_dir else { return nil }
+        return String(cString: dir)
+    }
 }
 
 /// Where the tool runs: the home folder and the environment it was started with.
@@ -22,11 +29,33 @@ public struct ToolContext: Sendable {
         self.ownerId = ownerId
     }
 
-    public static func current() -> ToolContext {
-        let env = Env.snapshot()
-        let home = env["HOME"].flatMap { $0.isEmpty ? nil : $0 } ?? NSHomeDirectory()
-        return ToolContext(home: URL(fileURLWithPath: home), ambient: env)
+    /// The context every command and the menu app start from, before they read or write a file.
+    /// An unset or empty HOME falls back to the home folder the user database names. A HOME or
+    /// fallback that `isUsableHome` refuses throws, and so does a database that names no home.
+    public static func current() throws -> ToolContext {
+        try current(environment: Env.snapshot())
     }
+
+    /// `userDatabaseHome` stands in for the user database, so a test can name the fallback.
+    static func current(
+        environment: [String: String], userDatabaseHome: () -> String? = Env.userDatabaseHome
+    ) throws -> ToolContext {
+        let named = environment["HOME"].flatMap { $0.isEmpty ? nil : $0 }
+        guard let home = named ?? userDatabaseHome(), isUsableHome(home) else {
+            throw homeRefusal
+        }
+        return ToolContext(home: URL(fileURLWithPath: home), ambient: environment)
+    }
+
+    /// The one HOME rule, which the render flags share: an absolute path with no `..` segment,
+    /// checked as written. A relative HOME would move the data folder with the current folder.
+    static func isUsableHome(_ home: String) -> Bool {
+        home.hasPrefix("/") && !home.split(separator: "/").contains("..")
+    }
+
+    static let homeRefusal = ToolError(
+        "HOME must be an absolute path with no .. segment. Set it to the full path of your home folder and try again. Nothing was read or written."
+    )
 
     public var dataRoot: URL { home.appendingPathComponent(".agent-balancer") }
 

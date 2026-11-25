@@ -26,7 +26,7 @@ struct EventsCommand: ParsableCommand {
     var limit: Int?
 
     func run() throws {
-        let context = ToolContext.current()
+        let context = try ToolContext.current()
         let answer = try EventLog(context: context).answer(
             EventsQuery(after: after, since: since, label: label, type: type, limit: limit))
         if json {

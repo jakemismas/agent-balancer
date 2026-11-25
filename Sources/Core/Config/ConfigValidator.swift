@@ -45,60 +45,34 @@ public enum ConfigValidator {
     public static func validate(_ config: Config, context: ToolContext? = nil) throws {
         guard config.schemaVersion == Config.currentSchema else {
             throw ToolError(
-                "Config schema version \(config.schemaVersion) is not supported. This version reads version \(Config.currentSchema)."
+                "Config schemaVersion \(config.schemaVersion) is not supported. This version reads version \(Config.currentSchema)."
             )
         }
-        if config.refresh.backgroundMinutes < 1 {
-            throw ToolError("refresh.backgroundMinutes must be at least 1.")
-        }
-        if config.probe.timeoutSeconds < 1 {
-            throw ToolError("probe.timeoutSeconds must be at least 1.")
-        }
+        let minutes = 1...ConfigLimits.spanMinutes
+        let seconds = 1...ConfigLimits.spanSeconds
+        try require("refresh.backgroundMinutes", config.refresh.backgroundMinutes, minutes)
+        try require("probe.timeoutSeconds", config.probe.timeoutSeconds, seconds)
         let fable = config.fable
-        if fable.capPercentOfWeekly < 1 || fable.capPercentOfWeekly > 100 {
-            throw ToolError("fable.capPercentOfWeekly must be from 1 to 100.")
-        }
+        try require("fable.capPercentOfWeekly", fable.capPercentOfWeekly, 1...100)
         if !(fable.probeBudgetUsd > 0) || fable.probeBudgetUsd > 100 {
             throw ToolError("fable.probeBudgetUsd must be more than 0 and at most 100.")
         }
-        if fable.probeTimeoutSeconds < 1 {
-            throw ToolError("fable.probeTimeoutSeconds must be at least 1.")
-        }
-        if fable.minRoomPercentOfCap < 0 || fable.minRoomPercentOfCap > 100 {
-            throw ToolError("fable.minRoomPercentOfCap must be from 0 to 100.")
-        }
-        if fable.recheckAfterWeeklyRisePercent < 0 || fable.recheckAfterWeeklyRisePercent > 100 {
-            throw ToolError("fable.recheckAfterWeeklyRisePercent must be from 0 to 100.")
-        }
+        try require("fable.probeTimeoutSeconds", fable.probeTimeoutSeconds, seconds)
+        try require("fable.minRoomPercentOfCap", fable.minRoomPercentOfCap, 0...100)
+        try require(
+            "fable.recheckAfterWeeklyRisePercent", fable.recheckAfterWeeklyRisePercent, 0...100)
         let picker = config.picker
-        if picker.maxReadingAgeMinutes < 1 {
-            throw ToolError("picker.maxReadingAgeMinutes must be at least 1.")
-        }
-        if picker.limitedAtPercent < 1 || picker.limitedAtPercent > 100 {
-            throw ToolError("picker.limitedAtPercent must be from 1 to 100.")
-        }
-        if picker.minRoomPercent < 0 || picker.minRoomPercent > 100 {
-            throw ToolError("picker.minRoomPercent must be from 0 to 100.")
-        }
-        if picker.deadlineSeconds < 1 {
-            throw ToolError("picker.deadlineSeconds must be at least 1.")
-        }
-        if picker.leaseMinutes < 1 {
-            throw ToolError("picker.leaseMinutes must be at least 1.")
-        }
-        if picker.expectedRunPercent < 0 || picker.expectedRunPercent > 100 {
-            throw ToolError("picker.expectedRunPercent must be from 0 to 100.")
-        }
-        if picker.endingSoonAssumeDays < 0 {
-            throw ToolError("picker.endingSoonAssumeDays must not be negative.")
-        }
-        if config.history.retentionDays < 0 {
-            throw ToolError("history.retentionDays must not be negative.")
-        }
+        try require("picker.maxReadingAgeMinutes", picker.maxReadingAgeMinutes, minutes)
+        try require("picker.limitedAtPercent", picker.limitedAtPercent, 1...100)
+        try require("picker.minRoomPercent", picker.minRoomPercent, 0...100)
+        try require("picker.deadlineSeconds", picker.deadlineSeconds, seconds)
+        try require("picker.leaseMinutes", picker.leaseMinutes, minutes)
+        try require("picker.expectedRunPercent", picker.expectedRunPercent, 0...100)
+        try require(
+            "picker.endingSoonAssumeDays", picker.endingSoonAssumeDays, 0...ConfigLimits.days)
+        try require("history.retentionDays", config.history.retentionDays, 0...ConfigLimits.days)
         let launch = config.launch
-        if launch.keepDays < 1 {
-            throw ToolError("launch.keepDays must be at least 1.")
-        }
+        try require("launch.keepDays", launch.keepDays, 1...ConfigLimits.days)
         for key in launch.settingsKeys
         where key.range(of: "^[A-Za-z][A-Za-z0-9_]{0,63}$", options: .regularExpression) == nil {
             throw ToolError("launch.settingsKeys holds a name that is not valid.")
@@ -148,13 +122,14 @@ public enum ConfigValidator {
                     "Account '\(label)': noLimit must be [\(accepted.joined(separator: ", "))].")
             }
             if let reserve = account.reserve {
-                for point in reserve.points
-                where point.daysLeft < 0 || point.maxUsedPercent < 0 || point.maxUsedPercent > 100 {
-                    throw ToolError("Account '\(label)': a reserve point is out of range.")
+                let point = "Account '\(label)': a reserve point's"
+                for each in reserve.points {
+                    try require("\(point) daysLeft", each.daysLeft, 0...ConfigLimits.days)
+                    try require("\(point) maxUsedPercent", each.maxUsedPercent, 0...100)
                 }
-                if reserve.marginPercent < 0 || reserve.marginPercent > 100 {
-                    throw ToolError("Account '\(label)': the reserve margin is out of range.")
-                }
+                try require(
+                    "Account '\(label)': the reserve's marginPercent", reserve.marginPercent,
+                    0...100)
                 if account.role == Role.main && reserve.allowAbove90 != true
                     && reserve.points.contains(where: { $0.maxUsedPercent > 90 })
                 {
@@ -167,4 +142,20 @@ public enum ConfigValidator {
             throw ToolError("Only one login account is allowed: it is the default folder's.")
         }
     }
+
+    /// Refuses a number outside its range with a message that names the field and the range.
+    private static func require(_ field: String, _ value: Int, _ range: ClosedRange<Int>) throws {
+        guard range.contains(value) else {
+            throw ToolError("\(field) must be from \(range.lowerBound) to \(range.upperBound).")
+        }
+    }
+}
+
+/// The upper bounds of the numbers in `config.json` (docs/ARCHITECTURE.md section 7.1).
+public enum ConfigLimits {
+    /// One week, the range `config set` takes for the refresh interval, caps every span.
+    public static let spanMinutes = 10_080
+    public static let spanSeconds = spanMinutes * 60
+    /// A hundred years caps every count of days.
+    public static let days = 36_500
 }

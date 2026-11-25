@@ -113,7 +113,7 @@ public enum SessionsReader {
                 }
                 // A record without a session id or pid still protects the files it names.
                 guard let id = object["sessionId"] as? String, !id.isEmpty,
-                    let pid = (object["pid"] as? NSNumber)?.intValue
+                    let pid = wholeNumber(object["pid"])
                 else {
                     anonymousRefs += refs(in: object)
                     continue
@@ -199,6 +199,15 @@ public enum SessionsReader {
         } catch {
             return ([], false)
         }
+    }
+
+    /// A whole JSON number that a `Double` holds inside `Int`'s range. A boolean, which reads as a
+    /// number too, and a fraction such as `123.9` are none, so neither names a process.
+    static func wholeNumber(_ value: Any?) -> Int? {
+        guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
+            Int(exactly: number.doubleValue) != nil
+        else { return nil }
+        return number.intValue
     }
 
     public static func processIsAlive(_ pid: Int) -> Bool {

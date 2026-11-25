@@ -17,7 +17,7 @@ struct RefreshCommand: ParsableCommand {
     var force = false
 
     func run() throws {
-        let context = ToolContext.current()
+        let context = try ToolContext.current()
         let config = try ConfigStore(context: context).loadRequired()
         // Read before this run's probes record anything, so a clock that moved forward ages
         // nothing by itself.

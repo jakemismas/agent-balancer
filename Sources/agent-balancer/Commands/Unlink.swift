@@ -13,7 +13,7 @@ struct UnlinkCommand: ParsableCommand {
     @Argument(help: "The label of a folder account.") var label: String
 
     func run() throws {
-        let context = ToolContext.current()
+        let context = try ToolContext.current()
         try Shared.requireOwnTerminal(context)
         try Shared.requireTerminal()
         let config = try ConfigStore(context: context).loadRequired()

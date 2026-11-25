@@ -574,6 +574,43 @@ import Testing
         #expect(object["dryRun"] as? Bool == true)
     }
 
+    @Test func aPickReasonIsScrubbedBeforeThePickLogKeepsIt() throws {
+        let t = try TestHome()
+        let reason =
+            "Picked for pat.example@example.com, j\u{F6}s\u{E9}@example.com and pat@mailhost."
+        PickService(context: t.context).logPick(
+            time: Date(), model: "default", label: "pool-a", leaseId: "l-0a0b0c0d", reason: reason,
+            writer: NoFollowWriter(root: t.context.dataRoot))
+        let log = try String(
+            contentsOf: t.context.dataRoot.appendingPathComponent("state/picks.log"),
+            encoding: .utf8)
+        #expect(log.contains(" default pool-a l-0a0b0c0d Picked for [email], [email] and [email]."))
+        #expect(!log.contains("@"))
+    }
+
+    /// Both passes run before the 300-scalar cap: a token-shaped run is redacted, and an address
+    /// the cap would cut leaves no piece of itself.
+    @Test func aPickReasonIsScrubbedBeforeItIsCut() throws {
+        let t = try TestHome()
+        let token = Canaries.oauth()
+        let filler = String(repeating: "x", count: 290)
+        let reasons = ["Picked with \(token) in its text.", filler + " pat.example@example.com"]
+        for reason in reasons {
+            PickService(context: t.context).logPick(
+                time: Date(), model: "default", label: "pool-a", leaseId: nil, reason: reason,
+                writer: NoFollowWriter(root: t.context.dataRoot))
+        }
+        let log = try String(
+            contentsOf: t.context.dataRoot.appendingPathComponent("state/picks.log"),
+            encoding: .utf8)
+        let lines = log.split(separator: "\n")
+        #expect(lines.count == 2)
+        #expect(lines.first?.hasSuffix(" pool-a - Picked with [redacted] in its text.") == true)
+        #expect(lines.last?.hasSuffix(" pool-a - \(filler) [email]") == true)
+        #expect(!log.contains(token))
+        #expect(!log.contains("pat"))
+    }
+
     @Test func aHeldPickLockGivesPickBusy() throws {
         let (t, service) = try setUp([login()])
         var quick = service

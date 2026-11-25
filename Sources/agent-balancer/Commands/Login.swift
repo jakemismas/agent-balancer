@@ -20,7 +20,7 @@ struct LoginCommand: ParsableCommand {
     var browser = false
 
     func run() throws {
-        let context = ToolContext.current()
+        let context = try ToolContext.current()
         try Shared.requireOwnTerminal(context)
         let store = ConfigStore(context: context)
         let before = try store.loadRequired()

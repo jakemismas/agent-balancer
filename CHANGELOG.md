@@ -189,6 +189,25 @@
   a token file it could not check at the save as replaced: it prints how many launch files it
   rewrote and that the old token may keep working, and records `token_replaced`, where it reported a
   first save.
+- Every number in `config.json` has an upper bound as well as a lower one, so a hand edit can no
+  longer crash the menu app: a span is at most one week (10080 minutes or 604800 seconds, the range
+  `config set` takes for the refresh interval), a count of days at most 36500, and a percent at
+  most 100. A command that reads the config stops on a value past its bound, with a message that
+  names the field and the range, and docs/ARCHITECTURE.md 7.1 lists every range. The menu app works
+  out its refresh interval and stale bound in arithmetic that cannot overflow, and reads a percent
+  in the status file that is not a finite number from 0 to 100 as missing. A session record whose
+  `pid` is a boolean or not a whole number counts as a record without a pid, which still protects
+  the launch files it names.
+- The personal-data scrub redacts the whole name of your own home folder when it holds a space,
+  an address whose local part holds letters outside ASCII, and an address at a bare host name with
+  no dot after the `@`. Each pick reason goes through the same scrub before `state/picks.log`
+  keeps it.
+- A HOME that is not an absolute path, or that has a `..` segment, stops every command and the
+  menu app with a message that names HOME, before they read or write anything, and the render
+  flags check HOME by the same rule. A relative HOME used to move the data folder with the folder
+  you ran the command from, and a `..` segment could move it through a link. An unset or empty
+  HOME falls back to the home folder the user database names, checked by the same rule; it used to
+  follow `CFFIXED_USER_HOME`, which can name a folder under the current one.
 
 ## 1.1.0
 

@@ -14,7 +14,8 @@ struct ConfigCommand: ParsableCommand {
         @Flag(help: "Show email addresses.") var emails = false
 
         func run() throws {
-            let config = try ConfigStore(context: .current()).loadRequired()
+            let context = try ToolContext.current()
+            let config = try ConfigStore(context: context).loadRequired()
             print("schemaVersion: \(config.schemaVersion)")
             print("sharedSource: \(Display.safe(config.sharedSource))")
             print("probe.safeMode: \(config.probe.safeMode)")
@@ -42,7 +43,8 @@ struct ConfigCommand: ParsableCommand {
             commandName: "validate", abstract: "Check the registry against the rules.")
 
         func run() throws {
-            _ = try ConfigStore(context: .current()).loadRequired()
+            let context = try ToolContext.current()
+            _ = try ConfigStore(context: context).loadRequired()
             print("Config is valid.")
         }
     }
@@ -54,7 +56,7 @@ struct ConfigCommand: ParsableCommand {
         @Argument var label: String
 
         func run() throws {
-            let context = ToolContext.current()
+            let context = try ToolContext.current()
             try Shared.requireOwnTerminal(context)
             // Under the pick lock, so the role never changes while `remove` checks it and deletes.
             let config = try TokenAccounts.updateConfig(context: context, backup: true) { config in
@@ -79,7 +81,7 @@ struct ConfigCommand: ParsableCommand {
         @Argument var label: String
 
         func run() throws {
-            let context = ToolContext.current()
+            let context = try ToolContext.current()
             try Shared.requireOwnTerminal(context)
             try TokenAccounts.updateConfig(context: context, backup: true) { config in
                 guard let index = config.accounts.firstIndex(where: { $0.label == label }) else {
@@ -108,7 +110,7 @@ struct ConfigCommand: ParsableCommand {
         @Argument(parsing: .remaining) var words: [String] = []
 
         func run() throws {
-            let context = ToolContext.current()
+            let context = try ToolContext.current()
             try Shared.requireOwnTerminal(context)
             var lines: [String] = []
             var observations = StatusObservations()
@@ -173,9 +175,11 @@ struct ConfigCommand: ParsableCommand {
         /// Applies one change to `config` and returns the lines to print.
         static func change(_ words: [String], in config: inout Config) throws -> [String] {
             if words.count == 2, words[0] == "refresh.backgroundMinutes" {
-                guard let minutes = Int(words[1]), minutes >= 1, minutes <= 10_080 else {
+                guard let minutes = Int(words[1]), (1...ConfigLimits.spanMinutes).contains(minutes)
+                else {
                     throw ToolError(
-                        "refresh.backgroundMinutes must be a whole number from 1 to 10080.")
+                        "refresh.backgroundMinutes must be a whole number from 1 to \(ConfigLimits.spanMinutes)."
+                    )
                 }
                 config.refresh.backgroundMinutes = minutes
                 return ["refresh.backgroundMinutes is \(minutes)."]

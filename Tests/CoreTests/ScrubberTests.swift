@@ -69,9 +69,46 @@ import Testing
 
     @Test func emailScanMatchesTheAddressForms() {
         #expect(Scrubber.personalPass("mail a.b+c@mail.example.com now") == "mail [email] now")
-        #expect(Scrubber.personalPass("x@y z@w.example.com") == "x@y [email]")
-        #expect(Scrubber.personalPass("a@b@c.example.com") == "a@[email]")
-        #expect(Scrubber.personalPass("@x.example.com a@ a@b.") == "@x.example.com a@ a@b.")
+        #expect(Scrubber.personalPass("x@y z@w.example.com") == "[email] [email]")
+        #expect(Scrubber.personalPass("a@b@c.example.com") == "[email]")
+        #expect(Scrubber.personalPass("@x.example.com a@ a@b.") == "@x.example.com a@ [email].")
+    }
+
+    @Test func anAddressWithALocalPartOutsideASCIIIsRedacted() {
+        #expect(Scrubber.personalPass("to j\u{F6}s\u{E9}@example.com now") == "to [email] now")
+        #expect(Scrubber.personalPass("to \u{5C71}\u{7530}@example.com now") == "to [email] now")
+        #expect(Scrubber.personalPass("to jose\u{301}@example.com now") == "to [email] now")
+        #expect(
+            Scrubber.personalPass("\u{300C}pat@example.com\u{300D}") == "\u{300C}[email]\u{300D}")
+    }
+
+    @Test func anAddressAtABareHostIsRedacted() {
+        #expect(Scrubber.personalPass("ssh pat@mailhost failed") == "ssh [email] failed")
+        #expect(Scrubber.personalPass("(pat@localhost).") == "([email]).")
+    }
+
+    @Test func aHostLabelOutsideASCIIIsRedacted() {
+        #expect(Scrubber.personalPass("to pat@\u{4F8B}\u{3048}.jp now") == "to [email] now")
+    }
+
+    /// Many separate addresses cost linear time too, since the walk builds its output once.
+    @Test func manySeparateAddressesScrubInLinearTime() {
+        let count = 1_000_000
+        let start = Date()
+        let out = Scrubber.personalPass(String(repeating: "a@b ", count: count))
+        let seconds = Date().timeIntervalSince(start)
+        #expect(seconds < 60, "\(seconds) s")
+        let everyAddressRedacted = out == String(repeating: "[email] ", count: count)
+        #expect(everyAddressRedacted)
+    }
+
+    /// Each rule is one walk over its input, so a long run outside ASCII costs linear time too.
+    @Test func aLongRunOutsideASCIIScrubsInLinearTime() {
+        let start = Date()
+        _ = Scrubber.personalPass(String(repeating: "\u{E9}", count: 262_144) + "@x")
+        _ = Scrubber.personalPass(String(repeating: "\u{E9}@", count: 100_000))
+        _ = Scrubber.personalPass(String(repeating: "/Users/a b", count: 100_000))
+        #expect(Date().timeIntervalSince(start) < 60)
     }
 
     @Test func aLongRunWithNoAtSignScrubsInLinearTime() {

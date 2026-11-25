@@ -17,7 +17,7 @@ struct RunCommand: ParsableCommand {
     var arguments: [String] = []
 
     func run() throws {
-        let context = ToolContext.current()
+        let context = try ToolContext.current()
         let service = PickService(context: context)
         // A chat shell gets the line to type in your own terminal and nothing else: no launch file,
         // no lease, no token read and no session, with or without --print-command.

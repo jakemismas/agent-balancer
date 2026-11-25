@@ -24,15 +24,14 @@ public enum RenderOutput {
     static let toolFolderNames = Set(toolFolders)
 
     /// HOME, or the default home when HOME is not set, and the home the user database names.
-    /// HOME is checked as written, before it becomes a path: a path made from a relative HOME is
-    /// joined to the current folder with each `..` dropped by name, while the system resolves a
-    /// `..` after a link from where the link points, and a path made from an empty HOME names the
-    /// current folder (`ToolContext.current()` reads an empty HOME as the default home).
+    /// HOME is checked as written, by the rule every command shares (`ToolContext.isUsableHome`),
+    /// before it becomes a path: a path made from a relative HOME is joined to the current folder
+    /// with each `..` dropped by name, while the system resolves a `..` after a link from where the
+    /// link points, and a path made from an empty HOME names the current folder
+    /// (`ToolContext.current()` reads an empty HOME as the default home).
     static func homes(environment: [String: String]) throws -> [URL] {
         let home = environment["HOME"] ?? NSHomeDirectory()
-        guard home.hasPrefix("/"), !home.split(separator: "/").contains("..") else {
-            throw toolFolderRefusal
-        }
+        guard ToolContext.isUsableHome(home) else { throw toolFolderRefusal }
         var homes = [URL(fileURLWithPath: home)]
         if let entry = getpwuid(getuid()), let dir = entry.pointee.pw_dir {
             homes.append(URL(fileURLWithPath: String(cString: dir)))

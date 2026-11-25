@@ -10,7 +10,7 @@ struct RemoveCommand: ParsableCommand {
     @Argument(help: "The label of the account.") var label: String
 
     func run() throws {
-        let context = ToolContext.current()
+        let context = try ToolContext.current()
         try Shared.requireOwnTerminal(context)
         let config = try ConfigStore(context: context).loadRequired()
         let index = config.accounts.firstIndex(where: { $0.label == label })

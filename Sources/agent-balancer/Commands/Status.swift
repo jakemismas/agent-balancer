@@ -14,7 +14,7 @@ struct StatusCommand: ParsableCommand {
     var cached = false
 
     func run() throws {
-        let context = ToolContext.current()
+        let context = try ToolContext.current()
         let config = try ConfigStore(context: context).loadRequired()
         var observations = StatusObservations()
         if !cached {

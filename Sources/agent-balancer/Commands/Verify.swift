@@ -16,7 +16,7 @@ struct VerifyCommand: ParsableCommand {
     var noReading = false
 
     func run() throws {
-        let context = ToolContext.current()
+        let context = try ToolContext.current()
         let config = try ConfigStore(context: context).loadRequired()
         guard ConfigValidator.isValidLabel(label), let account = config.account(label),
             account.kind == Kind.folder

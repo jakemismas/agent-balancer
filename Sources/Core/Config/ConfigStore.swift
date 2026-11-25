@@ -27,7 +27,7 @@ public struct ConfigStore: Sendable {
         }
         guard version == Config.currentSchema else {
             throw ToolError(
-                "Config schema version \(version) is not supported. This version reads version \(Config.currentSchema)."
+                "Config schemaVersion \(version) is not supported. This version reads version \(Config.currentSchema)."
             )
         }
         let config: Config

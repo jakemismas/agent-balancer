@@ -28,7 +28,7 @@ struct LinkCommand: ParsableCommand {
     var label: String?
 
     func run() throws {
-        let context = ToolContext.current()
+        let context = try ToolContext.current()
         try Shared.requireOwnTerminal(context)
         if acceptSourceChange {
             guard !repair else {

@@ -12,10 +12,32 @@ public struct SnapshotIssue: Decodable, Equatable, Sendable {
     }
 }
 
+/// A percent from the status file. One that is not finite or lies outside 0 to 100 reads as
+/// missing, so no rewritten file can feed the menu a number it cannot show.
+enum SnapshotPercent {
+    static func read<K: CodingKey>(_ c: KeyedDecodingContainer<K>, _ key: K) throws -> Double? {
+        guard let value = try c.decodeIfPresent(Double.self, forKey: key), value.isFinite,
+            (0...100).contains(value)
+        else { return nil }
+        return value
+    }
+}
+
 public struct SnapshotWindow: Decodable, Equatable, Sendable {
     public var usedPercent: Double?
     public var resetsAt: Date?
     public var source: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case usedPercent, resetsAt, source
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        usedPercent = try SnapshotPercent.read(c, .usedPercent)
+        resetsAt = try c.decodeIfPresent(Date.self, forKey: .resetsAt)
+        source = try c.decodeIfPresent(String.self, forKey: .source)
+    }
 }
 
 public struct SnapshotFable: Decodable, Equatable, Sendable {
@@ -24,6 +46,19 @@ public struct SnapshotFable: Decodable, Equatable, Sendable {
     public var possibleLeftPercentOfCap: Double?
     public var resetsAt: Date?
     public var source: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case usedPercent, guaranteedLeftPercentOfCap, possibleLeftPercentOfCap, resetsAt, source
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        usedPercent = try SnapshotPercent.read(c, .usedPercent)
+        guaranteedLeftPercentOfCap = try SnapshotPercent.read(c, .guaranteedLeftPercentOfCap)
+        possibleLeftPercentOfCap = try SnapshotPercent.read(c, .possibleLeftPercentOfCap)
+        resetsAt = try c.decodeIfPresent(Date.self, forKey: .resetsAt)
+        source = try c.decodeIfPresent(String.self, forKey: .source)
+    }
 }
 
 public struct SnapshotInUse: Decodable, Equatable, Sendable {
@@ -215,6 +250,6 @@ public struct StatusReader: Sendable {
 
     static func backgroundMinutes(_ config: Config?) -> Int {
         guard let config else { return RefreshSettings().backgroundMinutes }
-        return max(1, config.refresh.backgroundMinutes)
+        return min(max(1, config.refresh.backgroundMinutes), ConfigLimits.spanMinutes)
     }
 }

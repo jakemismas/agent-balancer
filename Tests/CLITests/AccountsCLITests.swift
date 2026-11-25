@@ -369,7 +369,7 @@ private let refusal = "Run this in your own terminal, outside a Claude Code sess
             to: h.dataRoot.appendingPathComponent("config.json"))
         let bad = try h.run(["config", "validate"])
         #expect(bad.status == 1)
-        #expect(text(bad.stderr).contains("version 7"))
+        #expect(text(bad.stderr).contains("schemaVersion 7"))
     }
 
     @Test func configCommandsBeforeInitSaySetupHasNotRun() throws {
@@ -435,10 +435,13 @@ private let refusal = "Run this in your own terminal, outside a Claude Code sess
             ["set", "main", "ends", "tomorrow"], ["set", "main", "ending-soon", "maybe"],
             ["set", "main", "label", "Bad Label"], ["set", "main", "email", "nope"],
             ["set", "main", "colour", "red"], ["set", "refresh.backgroundMinutes", "0"],
+            ["set", "refresh.backgroundMinutes", "10081"],
             ["set", "ghost", "email", "a@example.com"],
         ] {
             #expect(try h.run(["config"] + args).status == 1, "\(args)")
         }
+        let past = try h.run(["config", "set", "refresh.backgroundMinutes", "10081"])
+        #expect(text(past.stderr).contains("whole number from 1 to 10080"))
     }
 
     // MARK: chat shell

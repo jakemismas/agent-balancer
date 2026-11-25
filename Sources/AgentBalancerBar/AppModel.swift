@@ -13,7 +13,14 @@ final class AppModel {
     private(set) var loginItemError: String?
 
     init() {
-        let context = ToolContext.current()
+        let context: ToolContext
+        do {
+            context = try ToolContext.current()
+        } catch {
+            // Before the controller exists, so the app stops before it reads or writes a file.
+            print(error.localizedDescription)
+            exit(1)
+        }
         controller = MenuController(context: context)
         manage = ManageViewModel(context: context, dock: { DockMode.apply(shown: $0) })
         controller.afterFileRead = { [manage] in manage.statusMayHaveChanged() }

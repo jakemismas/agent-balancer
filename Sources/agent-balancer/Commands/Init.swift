@@ -11,7 +11,7 @@ struct InitCommand: ParsableCommand {
     var label: String?
 
     func run() throws {
-        let context = ToolContext.current()
+        let context = try ToolContext.current()
         // Init accepts the default folder's hooks as the trusted baseline, so it needs a person.
         try Shared.requireOwnTerminal(context)
         try Shared.requireTerminal()

@@ -36,7 +36,7 @@ struct PickCommand: ParsableCommand {
         guard let applyAs = PickCaller(rawValue: caller) else {
             throw ToolError("--caller must be typed or launcher.")
         }
-        let context = ToolContext.current()
+        let context = try ToolContext.current()
         let request = PickRequest(
             model: model, settings: settings, fullLogin: fullLogin, caller: applyAs,
             exclude: exclude, dryRun: dryRun)

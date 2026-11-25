@@ -56,7 +56,7 @@ import Testing
     }
 
     @Test func rejectsUnknownSchemaVersions() {
-        #expect(message(Config(schemaVersion: 2))?.contains("version 2") == true)
+        #expect(message(Config(schemaVersion: 2))?.contains("schemaVersion 2") == true)
     }
 
     @Test func storeRoundTripsAndHoldsNoExecutablePath() throws {

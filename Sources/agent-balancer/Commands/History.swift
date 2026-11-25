@@ -19,7 +19,7 @@ struct HistoryCommand: ParsableCommand {
     var limit: Int?
 
     func run() throws {
-        let context = ToolContext.current()
+        let context = try ToolContext.current()
         let config = try ConfigStore(context: context).load()
         let answer = try ReadingHistory(context: context).answer(
             HistoryQuery(label: label, since: since, limit: limit), config: config)

@@ -8,7 +8,7 @@ struct UninstallCommand: ParsableCommand {
         abstract: "Remove the files this tool made. Account folders and logins stay.")
 
     func run() throws {
-        let context = ToolContext.current()
+        let context = try ToolContext.current()
         try Shared.requireOwnTerminal(context)
         try Shared.requireTerminal()
         let leaseMinutes = Uninstall.leaseWindow(context: context)

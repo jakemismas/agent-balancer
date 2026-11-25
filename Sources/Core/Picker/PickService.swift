@@ -447,7 +447,7 @@ public struct PickService: Sendable {
         let line =
             [
                 ISO8601DateFormatter().string(from: time), model, label ?? "none", leaseId ?? "-",
-                Display.safe(reason, limit: 300),
+                Display.safe(Scrubber.scrubText(reason), limit: 300),
             ].joined(separator: " ") + "\n"
         try? writer.append(Data(line.utf8), folders: Layout.stateFolders, name: Layout.picksLogName)
     }

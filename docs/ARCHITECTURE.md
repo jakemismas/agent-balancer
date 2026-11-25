@@ -1736,14 +1736,26 @@ is never mixed with the old one.
 
 An account may also carry `"fable": { "allowLaunches": false }` (7.2 rule 4; absent means
 allowed). An account's `endsAt` date is its last day: the account counts as ended once that local
-day is over. The validator refuses `picker.limitedAtPercent` outside 1 to 100,
-`picker.minRoomPercent` and `picker.expectedRunPercent` outside 0 to 100,
-`picker.deadlineSeconds`, `picker.leaseMinutes` and `launch.keepDays` below 1,
-`picker.endingSoonAssumeDays` below 0, a `launch.envNames` entry that does not match
-`^[A-Z][A-Z0-9_]{0,63}$`, a `launch.settingsKeys` entry that is not a plain name, and an entry of
-either list that 4A.2 never allows. A config may add `crossSessionInbound` to `settingsKeys` and
-names of its own, such as `CLAUDE_ROLE` and `CLAUDE_CLIENT`, to `envNames`. A key missing from a
-section takes the default shown above.
+day is over. The validator refuses every number outside its range, with a message that names the
+field and the range, so a hand-edited value never reaches arithmetic that cannot hold it:
+
+| Field | Range |
+|---|---|
+| `refresh.backgroundMinutes`, `picker.maxReadingAgeMinutes`, `picker.leaseMinutes` | 1 to 10080 |
+| `probe.timeoutSeconds`, `fable.probeTimeoutSeconds`, `picker.deadlineSeconds` | 1 to 604800 |
+| `picker.endingSoonAssumeDays`, `history.retentionDays`, a reserve point's `daysLeft` | 0 to 36500 |
+| `launch.keepDays` | 1 to 36500 |
+| `picker.limitedAtPercent`, `fable.capPercentOfWeekly` | 1 to 100 |
+| `picker.minRoomPercent`, `picker.expectedRunPercent`, `fable.minRoomPercentOfCap`, `fable.recheckAfterWeeklyRisePercent`, a reserve point's `maxUsedPercent`, the reserve's `marginPercent` | 0 to 100 |
+| `fable.probeBudgetUsd` | more than 0, at most 100 |
+| `schemaVersion` | 1 |
+
+A span is at most one week (10080 minutes, 604800 seconds), the range `config set` takes for the
+refresh interval, and a count of days at most a hundred years. The validator also refuses a
+`launch.envNames` entry that does not match `^[A-Z][A-Z0-9_]{0,63}$`, a `launch.settingsKeys`
+entry that is not a plain name, and an entry of either list that 4A.2 never allows. A config may
+add `crossSessionInbound` to `settingsKeys` and names of its own, such as `CLAUDE_ROLE` and
+`CLAUDE_CLIENT`, to `envNames`. A key missing from a section takes the default shown above.
 
 An account may also carry `"noLimit": ["five_hour"]`: the user's word that the account's plan has
 no 5-hour limit, which the tool cannot tell from a reading that lacks the window. It names windows
@@ -1960,9 +1972,11 @@ files its records name are protected like any other.
   a letter or digit. A record with any other id is treated as unreadable: the id is never printed
   or stored, the record's launch file names still count as named, and the pass is unclean. An
   entry of `jobs/` whose name has another shape, such as a hidden file, is not a job record.
-- A session is live when its `sessions/<pid>.json` entry names a process that is alive. A live
-  background session links to its job record by the entry's `jobId` (the `jobs/<jobId>/` folder)
-  or an equal `sessionId`. A job whose state is finished, stopped, failed or similar never counts.
+- A session is live when its `sessions/<pid>.json` entry names a process that is alive. A `pid`
+  that is a boolean or not a whole number names no process: the record counts as one without a
+  pid, which never makes a session live and still names its launch files. A live background
+  session links to its job record by the entry's `jobId` (the `jobs/<jobId>/` folder) or an equal
+  `sessionId`. A job whose state is finished, stopped, failed or similar never counts.
   Sessions are told apart by `sessionId`, so two sessions that share one launch file count twice.
 - A record names a launch file when any string in it, after `\/` is unescaped, contains
   `launch/<label>/l-<8 hex>.json`, whatever the JSON shape. The label comes from that path, never
@@ -2620,6 +2634,9 @@ empty lists, and the events record keeps only each label's newest line.
 - **Look:** system font, vibrancy material, macOS menu spacing, light and dark from the system,
   hover highlight on rows, full keyboard navigation, VoiceOver labels on meters.
 - **Data:** reads `~/.agent-balancer/state/status.json` and checks whether `config.json` exists.
+  A percent in `status.json` that is not a finite number from 0 to 100 reads as missing: a
+  missing weekly share draws no meter, a missing Fable share no solid Fable meter, and an estimate
+  whose guaranteed share is missing shows its worst case, "up to 100% used (est.)".
   The menu reads `status.json` every 5 seconds. While the Manage accounts window is open it reads
   the file on the same beat, when the window or one of its sheets becomes key, and after every
   command it runs, so a sheet follows a `link` run in Terminal. The timed reads stand in for a file
@@ -2992,7 +3009,7 @@ empty lists, and the events record keeps only each label's newest line.
   state/status.json                0600   last merged status (what the menu reads)
   state/readings/<label>.json      0600   last reading saved under the label, with source and time
   state/picks.log                  0600   one line per pick: time, model, label or none, lease id
-                                          or `-`, reason; no line for a dry run
+                                          or `-`, scrubbed reason; no line for a dry run
   state/history/<label>.jsonl      0600   readings history, one JSON line per changed reading (10.4)
   state/events.jsonl               0600   a header line with the record id, then state changes, one
                                           numbered JSON line each (10.3)
@@ -3023,6 +3040,16 @@ empty lists, and the events record keeps only each label's newest line.
 
 Every mode above also means no access list entry that lets another user or group in.
 ```
+
+`~` above is HOME. Every command and the menu app read HOME before they read or write anything.
+An unset or empty HOME falls back to the home folder the user database names, which no variable
+moves, `CFFIXED_USER_HOME` included. A HOME, or that fallback, that is not an absolute path or
+has a `..` segment stops the command, or the app, with a message that names HOME, and so does a
+user database that names no home folder. A relative HOME would move the data folder, and the
+default Claude Code folder the checks read, with the folder you run the command from. The app's
+render flags (section 4) check HOME by the same rule, in the same code, and also stop on a HOME
+that is set but empty. HOME need not name the home folder the user database names, so tests and
+other tools can set their own.
 
 The tool sets `umask 077` at start. The `Paths` module opens the data root and each subfolder with
 `O_DIRECTORY | O_NOFOLLOW`, refuses one that is a link, not owned by the user, wider than 0700, or

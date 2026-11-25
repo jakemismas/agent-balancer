@@ -82,7 +82,13 @@ public final class MenuController {
     }
 
     private func refreshIntervalSeconds() -> Double {
-        timing.refreshSecondsOverride ?? Double(reader.backgroundMinutes() * 60)
+        timing.refreshSecondsOverride
+            ?? Self.refreshSeconds(backgroundMinutes: reader.backgroundMinutes())
+    }
+
+    /// The refresh interval in seconds, worked out in `Double` so no interval can overflow.
+    nonisolated static func refreshSeconds(backgroundMinutes: Int) -> Double {
+        Double(backgroundMinutes) * 60
     }
 
     /// True when `status.json` is missing, cannot be read, or is older than the interval.

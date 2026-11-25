@@ -7,7 +7,7 @@ struct DoctorCommand: ParsableCommand {
         commandName: "doctor", abstract: "Check the setup and each account's sign-in state.")
 
     func run() throws {
-        let context = ToolContext.current()
+        let context = try ToolContext.current()
         // Such a list also stops the reads below, so each one is named first.
         let shared = DoctorChecks.accessListProblems(context: context)
         for text in shared {

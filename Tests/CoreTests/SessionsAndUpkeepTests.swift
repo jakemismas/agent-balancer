@@ -97,6 +97,35 @@ import Testing
         #expect(snapshot.live.first?.refs.count == 1)
     }
 
+    /// JSON reads `true` as the number 1, and `123.9` would read as 123.
+    @Test(arguments: ["true", "123.9"])
+    func aPidThatIsABooleanOrAFractionIsNoPidButStillNamesItsFile(pid: String) throws {
+        let t = try TestHome()
+        let url = try fileURL(t, "pool-a", leaseId)
+        try write(
+            "{\"pid\":\(pid),\"sessionId\":\"aaaaaaaa-1111\",\"args\":[\"--settings\",\"\(url.path)\"]}",
+            to: t.home.appendingPathComponent(".claude/sessions/s.json"))
+        let snapshot = SessionsReader.read(context: t.context, isAlive: { _ in true })
+        #expect(snapshot.live.isEmpty, "\(pid)")
+        #expect(snapshot.named == [LaunchRef(label: "pool-a", leaseId: leaseId)], "\(pid)")
+        #expect(snapshot.clean, "\(pid)")
+    }
+
+    @Test func aWholePidStillNamesALiveSession() throws {
+        let t = try TestHome()
+        let url = try fileURL(t, "pool-a", leaseId)
+        try write(
+            "{\"pid\":123,\"sessionId\":\"aaaaaaaa-1111\",\"args\":[\"--settings\",\"\(url.path)\"]}",
+            to: t.home.appendingPathComponent(".claude/sessions/s.json"))
+        var asked: [Int] = []
+        let snapshot = SessionsReader.read(context: t.context) { pid in
+            asked.append(pid)
+            return true
+        }
+        #expect(asked == [123])
+        #expect(snapshot.live.map(\.id) == ["aaaaaaaa-1111"])
+    }
+
     @Test func onlyAliveSessionsCountButEveryRecordNamesItsFile() throws {
         let t = try TestHome()
         let url = try fileURL(t, "pool-a", leaseId)

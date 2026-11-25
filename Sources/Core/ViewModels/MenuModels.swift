@@ -155,7 +155,7 @@ public enum MenuFormat {
     /// 41.0 becomes "41%", 12.5 stays "12.5%".
     public static func percent(_ value: Double) -> String {
         let rounded = (value * 10).rounded() / 10
-        if rounded == rounded.rounded() { return "\(Int(rounded))%" }
+        if let whole = Int(exactly: rounded) { return "\(whole)%" }
         return "\(rounded)%"
     }
 }
@@ -223,8 +223,14 @@ public enum MenuBuilder {
                 lines: []))
     }
 
+    /// Seconds after which a row's reading is stale: two refresh intervals, worked out in `Double`
+    /// so no interval can overflow.
+    static func staleAfterSeconds(backgroundMinutes: Int) -> Double {
+        Double(backgroundMinutes) * 120
+    }
+
     static func accounts(_ snapshot: StatusSnapshot, _ inputs: MenuInputs) -> AccountsScreen {
-        let staleAfter = inputs.backgroundMinutes * 60 * 2
+        let staleAfter = staleAfterSeconds(backgroundMinutes: inputs.backgroundMinutes)
         let rows = snapshot.accounts.map { row($0, staleAfter: staleAfter) }
         var banner: BannerModel?
         if let b = snapshot.banner {
@@ -338,7 +344,7 @@ public enum MenuBuilder {
         }
     }
 
-    static func row(_ a: AccountSnapshot, staleAfter: Int) -> RowModel {
+    static func row(_ a: AccountSnapshot, staleAfter: Double) -> RowModel {
         let isMain = a.role == "main"
         var endBadge: String?
         if let ends = a.endsAt, !ends.isEmpty {
@@ -350,7 +356,7 @@ public enum MenuBuilder {
         if let n = a.inUse?.count, n > 0 { inUse = "\(n) in use" }
 
         var notes: [RowNote] = []
-        let ageStale = (a.readingsAge ?? 0) > staleAfter
+        let ageStale = Double(a.readingsAge ?? 0) > staleAfter
         var dimmed = false
         let body: RowBody
         if a.state == "error", let e = a.error, e.code != "settings_changed" {

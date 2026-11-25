@@ -31,7 +31,7 @@ struct AddCommand: ParsableCommand {
     var endingSoon = false
 
     func run() throws {
-        let context = ToolContext.current()
+        let context = try ToolContext.current()
         var probeLocks: [FileLock] = []
         defer { for lock in probeLocks { lock.release() } }
         // Checked and saved under the pick lock, so a concurrent remove cannot drop this entry.

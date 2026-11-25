@@ -344,6 +344,37 @@ import Testing
 
     // MARK: Lock order
 
+    /// Polls `condition` for at most two minutes.
+    func waitUntil(_ condition: () -> Bool) -> Bool {
+        let end = Date().addingTimeInterval(120)
+        while Date() < end {
+            if condition() { return true }
+            usleep(20_000)
+        }
+        return condition()
+    }
+
+    /// Takes the status lock, trying again for at most two minutes while it stays held or does
+    /// not open, as on a loaded machine. Returns nil when it stayed held, and throws what the
+    /// last try met when it did not open.
+    func takeStatusLock(_ context: ToolContext) throws -> FileLock? {
+        let writer = NoFollowWriter(root: context.dataRoot)
+        let end = Date().addingTimeInterval(120)
+        while true {
+            do {
+                if let lock = try writer.acquireLock(
+                    folders: Layout.locksFolders, name: StatusBuilder.lockName, wait: 5)
+                {
+                    return lock
+                }
+                if Date() >= end { return nil }
+            } catch {
+                if Date() >= end { throw error }
+                usleep(50_000)
+            }
+        }
+    }
+
     @Test func aReadingThatLandsWhileTheLockIsHeldIsSeenOnceByTwoRebuilds() throws {
         let cli = try setUp()
         defer { cli.cleanup() }
@@ -360,10 +391,13 @@ import Testing
         }
         try store.save(reading(40), label: "main")
         try StatusBuilder.rebuild(context: context)
-        let writer = NoFollowWriter(root: context.dataRoot)
         let lock = try #require(
-            try writer.acquireLock(
-                folders: Layout.locksFolders, name: StatusBuilder.lockName, wait: 1))
+            try takeStatusLock(context), "the status lock stayed held for two minutes")
+        // A rebuild opens the lock to wait on it, and the writer's trace notes each open.
+        let root = context.dataRoot
+        let lockFile = NoFollowWriter.joined(Layout.locksFolders + [StatusBuilder.lockName])
+        NoFollowWriter.trace.watch(root)
+        defer { NoFollowWriter.trace.stop(root) }
         let group = DispatchGroup()
         let failures = Counter()
         for _ in 0..<2 {
@@ -375,10 +409,16 @@ import Testing
                 group.leave()
             }.start()
         }
-        Thread.sleep(forTimeInterval: 0.5)
+        let bothWait = waitUntil {
+            NoFollowWriter.trace.events(root).filter { $0 == .file(lockFile, .lockOpen) }.count
+                >= 2
+        }
+        try #require(bothWait, "the two rebuilds did not both wait on the lock within two minutes")
         try store.save(reading(98), label: "main")
         lock.release()
-        group.wait()
+        #expect(
+            group.wait(timeout: .now() + 300) == .success,
+            "the rebuilds still ran after five minutes")
         #expect(failures.value == 0)
         let types = try EventLog(context: context).answer(EventsQuery(), now: Date()).events
             .map(\.type)

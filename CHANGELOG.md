@@ -61,6 +61,25 @@
   or `folder` account clears it in the same save and says so, and no command sets it from a
   reading. Such an account used to be judged as one with no 5-hour reading: last among pool
   accounts, and never picked as the main account.
+- The test that two accounts are probed at the same time no longer times the refresh. The fake
+  `claude` holds each probe until the test lets it go, and the test lets both go once both wait,
+  so the probes overlap on any machine and a refresh that runs them one after the other still
+  fails it. It used to require the whole refresh to end within 1.9 seconds, which a loaded machine
+  could outlast, and the second probe to start within the first one's one-second run.
+- The three `remove` race tests wait, for at most two minutes, until the waiting `remove` has read
+  the account and come to the pick lock the test holds, which its open of the lock file shows, and
+  fail with a message that names that wait when it does not come. They used to sleep two seconds
+  and count on the `remove` having read the account by then, so on a loaded machine a `remove`
+  that read the account after the test changed it failed the test.
+- The status lock race test takes the status lock with retries for up to two minutes, where it
+  allowed one second, and saves its new reading once both competing rebuilds wait on the lock,
+  where it slept half a second, so a loaded machine no longer fails it and a rebuild that reads
+  the last state before it takes the lock still does.
+- The test that `pick` ranks a token account by the same end rules as a login account runs a pair
+  of rules again when the local day changes while the pair runs, and a pick that chooses no
+  account or the other one prints its label and reason. An end date of today set before midnight
+  counts as ended after it, so a slow run that crossed midnight saw both accounts end and no
+  account chosen.
 
 ## 1.1.0
 

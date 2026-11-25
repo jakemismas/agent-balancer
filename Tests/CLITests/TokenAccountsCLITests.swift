@@ -2157,18 +2157,46 @@ private final class Started: @unchecked Sendable {
         case none, endingSoon, endsToday
     }
 
-    func setEndRule(_ cli: CLIHome, _ label: String, _ rule: EndRule) throws {
-        let ends = rule == .endsToday ? Self.localDay(Date()) : "none"
+    /// Sets `rule` on `label`, with `today` as the date an end today names, and returns whether
+    /// both changes were saved.
+    func setEndRule(
+        _ cli: CLIHome, _ label: String, _ rule: EndRule,
+        today: String = TokenAccountsCLITests.localDay(Date())
+    ) throws -> Bool {
+        let ends = rule == .endsToday ? today : "none"
         let soon = rule == .endingSoon ? "true" : "false"
-        #expect(try cli.run(["config", "set", label, "ends", ends]).status == 0)
-        #expect(try cli.run(["config", "set", label, "ending-soon", soon]).status == 0)
+        let endsSaved = try cli.run(["config", "set", label, "ends", ends]).status == 0
+        let soonSaved = try cli.run(["config", "set", label, "ending-soon", soon]).status == 0
+        return endsSaved && soonSaved
     }
 
     /// The label a dry-run pick returns, and its reason. A dry run writes no lease, so the room of
     /// each account stays the same from one pick to the next.
     func dryPick(_ cli: CLIHome) throws -> (label: String?, reason: String) {
-        let doc = try object(try cli.run(["pick", "--dry-run", "--json"]))
+        let out = try cli.run(["pick", "--dry-run", "--json"])
+        let doc = try #require(
+            (try? JSONSerialization.jsonObject(with: out.stdout)) as? [String: Any],
+            "pick exited \(out.status) with no answer: \(text(out.stderr))")
         return (doc["label"] as? String, doc["reason"] as? String ?? "")
+    }
+
+    /// The dry-run pick with `first` set on `order[0]` and `second` on `order[1]`. An end today
+    /// set before midnight has ended after it, so a pair whose local day changed while it ran is
+    /// run again with the new day.
+    func pickForRules(_ cli: CLIHome, _ order: [String], _ first: EndRule, _ second: EndRule)
+        throws -> (label: String?, reason: String)
+    {
+        for _ in 0..<3 {
+            let today = Self.localDay(Date())
+            let firstSaved = try setEndRule(cli, order[0], first, today: today)
+            let secondSaved = try setEndRule(cli, order[1], second, today: today)
+            let picked = try dryPick(cli)
+            guard Self.localDay(Date()) == today else { continue }
+            #expect(firstSaved && secondSaved, "\(order) \(first) \(second): a rule was not saved")
+            return picked
+        }
+        Issue.record("\(order) \(first) \(second): the local day changed on every try")
+        return (nil, "")
     }
 
     @Test func pickRanksATokenAccountByTheSameEndRulesAsALoginAccount() throws {
@@ -2183,6 +2211,9 @@ private final class Started: @unchecked Sendable {
                 as? [[String: Any]])
         #expect(candidates.allSatisfy { $0["eligible"] as? Bool == true })
 
+        // none/none, then an ending-soon or ending-today second account goes first, and a known
+        // end today beats the ending-soon assumption of two days.
+        let expected = [0, 1, 1, 0, 0, 1, 0, 0, 0]
         // The winner by position for each pair of rules, the first account then the second.
         // Run once with the login account first and once with the token account first: the
         // same rules must give the same position whatever the kind.
@@ -2196,28 +2227,28 @@ private final class Started: @unchecked Sendable {
             var row: [Int] = []
             for firstRule in EndRule.allCases {
                 for secondRule in EndRule.allCases {
-                    try setEndRule(cli, order[0], firstRule)
-                    try setEndRule(cli, order[1], secondRule)
-                    let (label, reason) = try dryPick(cli)
-                    let position = try #require(label.flatMap { order.firstIndex(of: $0) })
+                    let (label, reason) = try pickForRules(cli, order, firstRule, secondRule)
+                    let rules = "\(order) \(firstRule) \(secondRule)"
+                    let said = "\(rules): picked \(label ?? "none"): \(reason)"
+                    let position = try #require(
+                        label.flatMap { order.firstIndex(of: $0) }, "\(said)")
+                    #expect(position == expected[row.count], "\(said)")
                     row.append(position)
                     let rule = position == 0 ? firstRule : secondRule
                     #expect(
                         reason.contains(rule == .none ? "weekly reset" : "Soonest expiry: ends"),
-                        "\(order) \(firstRule) \(secondRule): \(reason)")
+                        "\(said)")
                 }
             }
             answers.append(row)
         }
         #expect(answers[0] == answers[1])
-        // none/none, then an ending-soon or ending-today second account goes first, and a known
-        // end today beats the ending-soon assumption of two days.
-        #expect(answers[0] == [0, 1, 1, 0, 0, 1, 0, 0, 0])
+        #expect(answers[0] == expected)
 
         // An ended account is skipped, whatever its kind.
         for label in ["main", "lab"] {
-            try setEndRule(cli, "main", .none)
-            try setEndRule(cli, "lab", .none)
+            #expect(try setEndRule(cli, "main", .none))
+            #expect(try setEndRule(cli, "lab", .none))
             var registry = try store.loadRequired()
             if let index = registry.accounts.firstIndex(where: { $0.label == label }) {
                 registry.accounts[index].endsAt = "2000-01-01"

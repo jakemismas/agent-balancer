@@ -321,21 +321,47 @@ import Testing
         #expect(issue.code == .checkFailed)
     }
 
+    /// Polls `condition` for at most two minutes.
+    func waitUntil(_ condition: () -> Bool) -> Bool {
+        let end = Date().addingTimeInterval(120)
+        while Date() < end {
+            if condition() { return true }
+            usleep(20_000)
+        }
+        return condition()
+    }
+
+    /// True once the fake `claude` holds a probe of `label` until the test lets it go.
+    func held(_ t: TestHome, _ label: String) -> Bool {
+        FileManager.default.fileExists(
+            atPath: t.home.appendingPathComponent(".ab-fake/held-\(label)").path)
+    }
+
     @Test func twoAccountsAreProbedAtTheSameTime() throws {
         let t = try setUp()
-        try t.fake("delay", "1")
         _ = try t.makeTokenFile(label: "pool-a", secret: Canaries.oauth())
         _ = try t.makeTokenFile(label: "pool-b", secret: Canaries.oauth())
+        // Both probes are let go only once both wait, so no timing decides whether they overlap.
+        try t.fake("hold-pool-a", "")
+        try t.fake("hold-pool-b", "")
+        defer {
+            try? t.fake("go-pool-a", "")
+            try? t.fake("go-pool-b", "")
+        }
         let accounts = [token("pool-a"), token("pool-b")]
         let r = refresher(t, accounts: accounts, clock: ClockBox(Self.start)) {
             $0.fable.probe = false
+            // No probe timeout ends a held probe.
+            $0.probe.timeoutSeconds = 600
         }
-        let started = Date()
-        let results = r.refresh(accounts: accounts, force: false)
-        let elapsed = Date().timeIntervalSince(started)
+        let refresh = RefreshInBackground { r.refresh(accounts: accounts, force: false) }
+        let bothHeld = waitUntil { held(t, "pool-a") && held(t, "pool-b") }
+        try t.fake("go-pool-a", "")
+        try t.fake("go-pool-b", "")
+        let results = try #require(refresh.wait(), "the refresh still ran after five minutes")
+        #expect(bothHeld, "the two probes did not wait at the same time within two minutes")
         #expect(results.map(\.label) == ["pool-a", "pool-b"])
         #expect(results.allSatisfy { if case .probed = $0.status { true } else { false } })
-        #expect(elapsed < 1.9)
         #expect(t.fakeLines("models.log").count == 2)
         // The fake writes each probe's start and end in the order they happen: the two probes
         // overlap when each one started before the other ended.
@@ -1131,6 +1157,33 @@ import Testing
         #expect(r.fableDue(stored, now: Self.start))
         stored.fableProbedAt = Self.start.addingTimeInterval(30)
         #expect(!r.fableDue(stored, now: Self.start))
+    }
+}
+
+/// A refresh run on a thread of its own, so the test can let its held probes go while it runs.
+private final class RefreshInBackground: @unchecked Sendable {
+    private let lock = NSLock()
+    private let ended = DispatchSemaphore(value: 0)
+    private var results: [AccountRefresh]?
+
+    init(_ body: @escaping @Sendable () -> [AccountRefresh]) {
+        let thread = Thread { [self] in
+            let out = body()
+            lock.lock()
+            results = out
+            lock.unlock()
+            ended.signal()
+        }
+        thread.stackSize = 1 << 20
+        thread.start()
+    }
+
+    /// The results once the refresh has ended, or nil when it still runs after five minutes.
+    func wait() -> [AccountRefresh]? {
+        guard ended.wait(timeout: .now() + 300) == .success else { return nil }
+        lock.lock()
+        defer { lock.unlock() }
+        return results
     }
 }
 

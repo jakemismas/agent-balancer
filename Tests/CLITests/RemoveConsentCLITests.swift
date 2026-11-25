@@ -30,11 +30,13 @@ private func onOwnThread(_ body: @escaping @Sendable () -> Void) {
 private final class Outcome: @unchecked Sendable {
     private let lock = NSLock()
     private var stored: Support.Output?
+    private var finished = false
     let done = DispatchSemaphore(value: 0)
 
     func set(_ value: Support.Output?) {
         lock.lock()
         stored = value
+        finished = true
         lock.unlock()
         done.signal()
     }
@@ -44,12 +46,56 @@ private final class Outcome: @unchecked Sendable {
         defer { lock.unlock() }
         return stored
     }
+
+    /// True once the command has ended.
+    var hasEnded: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return finished
+    }
 }
 
 private func holdPickLock(_ cli: CLIHome) throws -> FileLock {
     let writer = NoFollowWriter(root: ToolContext(home: cli.home, ambient: [:]).dataRoot)
     return try #require(
         try writer.acquireLock(folders: Layout.locksFolders, name: Layout.pickLockName, wait: 5))
+}
+
+/// The change time of the pick lock's file. Opening the lock to wait on it sets the file's mode,
+/// which stamps that time.
+private func pickLockChanged(_ cli: CLIHome) -> timespec? {
+    let path = (Layout.locksFolders + [Layout.pickLockName])
+        .reduce(cli.dataRoot) { $0.appendingPathComponent($1) }.path
+    var info = stat()
+    guard stat(path, &info) == 0 else { return nil }
+    return info.st_ctimespec
+}
+
+/// Waits at most two minutes for a `remove` run on its own thread to come to the pick lock the
+/// test holds, which it does once it has read the account: its open of the lock changes the
+/// lock's change time from `since`. Returns the new time, or nil when the two minutes pass or the
+/// command ends first.
+private func cameToPickLock(_ cli: CLIHome, since: timespec, _ outcome: Outcome) -> timespec? {
+    let end = Date().addingTimeInterval(120)
+    while true {
+        if let now = pickLockChanged(cli),
+            now.tv_sec != since.tv_sec || now.tv_nsec != since.tv_nsec
+        {
+            return now
+        }
+        if outcome.hasEnded || Date() >= end { return nil }
+        usleep(20_000)
+    }
+}
+
+/// What a failed wait for `remove` to come to the pick lock says.
+private func noArrival(_ outcome: Outcome) -> String {
+    let state =
+        !outcome.hasEnded
+        ? "it still ran after two minutes"
+        : outcome.value.map { "it ended with exit \($0.status): \(shown($0.stderr))" }
+            ?? "it did not start"
+    return "The wait for remove to read the account and wait on the pick lock failed: \(state)."
 }
 
 private func labels(_ cli: CLIHome) throws -> [String] {
@@ -131,10 +177,11 @@ extension TokenAccountsCLITests {
         let token = try tokenFile(cli, "lab")
         let lock = try holdPickLock(cli)
         defer { lock.release() }
+        let taken = try #require(pickLockChanged(cli))
         let outcome = Outcome()
         onOwnThread { outcome.set(try? cli.run(["remove", "lab"])) }
         // The remove passes its first check, a pool account then, and waits for the lock.
-        Thread.sleep(forTimeInterval: 2)
+        _ = try #require(cameToPickLock(cli, since: taken, outcome), "\(noArrival(outcome))")
         // What `config set-main lab` saves, under the same lock.
         let store = ConfigStore(context: context)
         var config = try store.loadRequired()
@@ -205,12 +252,16 @@ extension TokenAccountsCLITests {
         let token = try tokenFile(cli, "lab")
         let lock = try holdPickLock(cli)
         defer { lock.release() }
+        let taken = try #require(pickLockChanged(cli))
         let first = Outcome()
         let second = Outcome()
+        // Both read `lab` and wait for the lock; the second starts once the first waits there.
         onOwnThread { first.set(try? cli.run(["remove", "lab"])) }
+        let firstCame = try #require(
+            cameToPickLock(cli, since: taken, first), "\(noArrival(first))")
         onOwnThread { second.set(try? cli.run(["remove", "lab"])) }
-        // Both read `lab` and wait for the lock; one removes it while the other still waits.
-        Thread.sleep(forTimeInterval: 2)
+        _ = try #require(cameToPickLock(cli, since: firstCame, second), "\(noArrival(second))")
+        // One removes it while the other still waits.
         lock.release()
         for outcome in [first, second] {
             #expect(outcome.done.wait(timeout: .now() + 60) == .success)
@@ -231,10 +282,11 @@ extension TokenAccountsCLITests {
         let key = try #require(try store.loadRequired().account("lab")?.accountKey)
         let lock = try holdPickLock(cli)
         defer { lock.release() }
+        let taken = try #require(pickLockChanged(cli))
         let outcome = Outcome()
         onOwnThread { outcome.set(try? cli.run(["remove", "lab"])) }
         // The remove reads `lab` and waits for the lock.
-        Thread.sleep(forTimeInterval: 2)
+        _ = try #require(cameToPickLock(cli, since: taken, outcome), "\(noArrival(outcome))")
         // Meanwhile `lab` was removed and added again: another account under the same label.
         var config = try store.loadRequired()
         let index = try #require(config.accounts.firstIndex { $0.label == "lab" })

@@ -155,11 +155,13 @@ public struct AccountStatus: Encodable, Equatable, Sendable {
     /// A folder account's last sign-in check result (`SignInSeen`), null before the first. Only
     /// folder rows carry the key.
     public var signInCheck: String? = nil
+    /// The account's `noLimit` from the registry. Only rows whose account carries it have the key.
+    public var noLimit: [String]? = nil
 
     private enum CodingKeys: String, CodingKey {
         case label, email, role, kind, fullLogin, configDir, accountKey, endingSoon, linked, state,
             stateSince, limited, error, warnings, planTier, weekly, fable, fiveHour, readingsAge,
-            inUse, endsAt, loginExpiresAt, loginExpiresSource, reserve, signInCheck
+            inUse, endsAt, loginExpiresAt, loginExpiresSource, reserve, signInCheck, noLimit
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -189,6 +191,7 @@ public struct AccountStatus: Encodable, Equatable, Sendable {
         try c.encodeNullable(loginExpiresSource, forKey: .loginExpiresSource)
         try c.encodeNullable(reserve, forKey: .reserve)
         if kind == Kind.folder { try c.encodeNullable(signInCheck, forKey: .signInCheck) }
+        if let noLimit { try c.encode(noLimit, forKey: .noLimit) }
     }
 }
 

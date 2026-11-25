@@ -60,6 +60,9 @@ struct StatusCommand: ParsableCommand {
                 "\(Display.safe(a.label)) [\(Display.safe(a.kind)), \(Display.safe(a.role))] "
                     + "\(Display.safe(a.state)) week \(percent(a.weekly)) 5h \(percent(a.fiveHour)) "
                     + "resets \(time(a.weekly.resetsAt)) in use \(uses)")
+            if let names = a.noLimit {
+                print("  no-limit: \(Display.safe(names.joined(separator: ", ")))")
+            }
             if let limited = a.limited {
                 print("  limited (\(Display.safe(limited.window))) until \(time(limited.until))")
             }

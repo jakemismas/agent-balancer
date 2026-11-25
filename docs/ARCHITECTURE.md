@@ -1580,12 +1580,12 @@ Every account also carries `expectedPlanTier` and `accountKey`. `init` records t
 `auth status` shows; for an added account the first `refresh`, or folder `login`, whose sign-in
 check placed the expected account's sign-in in its own folder, for the email the account has when
 the plan is saved, records it (10.1). `config set <label> email <new>` on a `login` or `folder`
-account forgets the tier in the same write that saves a new email, and records the new sign-in's
-when its own check places it; otherwise the next such `refresh` or folder `login` does, so the
-first check that places the new sign-in reports no `plan_changed` and ends no account marked
-`endingSoon` by plan. An ending-soon plan drop that a check of the old email marked (10.1) ends with
-that email: the first status rebuild after the email changes, the email change's own included,
-clears it, so `status` and `pick` agree on such an account.
+account forgets the tier and clears `noLimit` (below) in the same write that saves a new email, and
+records the new sign-in's tier when its own check places it; otherwise the next such `refresh` or
+folder `login` does, so the first check that places the new sign-in reports no `plan_changed` and
+ends no account marked `endingSoon` by plan. An ending-soon plan drop that a check of the old email
+marked (10.1) ends with that email: the first status rebuild after the email changes, the email
+change's own included, clears it, so `status` and `pick` agree on such an account.
 `accountKey` is a random id that `init` and `add` make. It is no secret, and it goes on every
 history and events line and into `status`, so a label removed and added again for another account
 is never mixed with the old one.
@@ -1600,6 +1600,14 @@ day is over. The validator refuses `picker.limitedAtPercent` outside 1 to 100,
 either list that 4A.2 never allows. A config may add `crossSessionInbound` to `settingsKeys` and
 names of its own, such as `CLAUDE_ROLE` and `CLAUDE_CLIENT`, to `envNames`. A key missing from a
 section takes the default shown above.
+
+An account may also carry `"noLimit": ["five_hour"]`: the user's word that the account's plan has
+no 5-hour limit, which the tool cannot tell from a reading that lacks the window. It names windows
+as readings name them (6.2). This version accepts only `["five_hour"]`; the validator refuses every
+other value, the empty list included. `config set <label> no-limit five_hour` adds it, and
+`config set <label> no-limit none` removes the key. No command sets it from a reading, and an
+earlier version ignores and keeps it. It changes a pick only while the stored reading holds no
+5-hour window (7.2 rules 5, 9 and 10).
 
 `minRoomPercent` and every room figure are in percent of the weekly limit, except a Fable room
 read from a Fable reading, which `fable.minRoomPercentOfCap` compares in percent of the Fable cap
@@ -1622,12 +1630,13 @@ the last point at which a launch may start. A validator refuses any point above 
    `100 - usedPercent >= fable.minRoomPercentOfCap`, both in percent of the Fable cap; with no
    reading, the guaranteed room of the fallback `>= minRoomPercent`. Skip any account with
    `fable.allowLaunches: false`.
-5. Rank first the eligible that have a 5-hour window, then those without one (rule 10); within
-   each group, by effective expiry `min(weekly reset, endsAt)`, soonest first. An account marked
-   `endingSoon` with no `endsAt` ranks as if its `endsAt` were `picker.endingSoonAssumeDays`
-   (default 2) from now; a known `endsAt` sooner than that still ranks ahead of it. Ties go to the
-   most room (`line - marginPercent - used` for a protected account, `limitedAtPercent - used` for
-   a pool account), then to config order, so the answer never flips between runs.
+5. Rank first the eligible that have a 5-hour window or whose `noLimit` lists `five_hour` (7.1),
+   then the rest (rule 10); within each group, by effective expiry `min(weekly reset, endsAt)`,
+   soonest first. An account marked `endingSoon` with no `endsAt` ranks as if its `endsAt` were
+   `picker.endingSoonAssumeDays` (default 2) from now; a known `endsAt` sooner than that still
+   ranks ahead of it. Ties go to the most room (`line - marginPercent - used` for a protected
+   account, `limitedAtPercent - used` for a pool account), then to config order, so the answer
+   never flips between runs.
 6. Nothing eligible: return `label: null` with one reason per account; exit code 2. Never fall
    back past the line.
 7. Lease: `pick` runs its refreshes first, then holds an exclusive lock on `locks/pick.lock` (wait
@@ -1653,15 +1662,19 @@ the last point at which a launch may start. A validator refuses any point above 
 9. A protected account also needs a 5-hour window and
    `fiveHour used + expectedRunPercent < limitedAtPercent`, so a worker cannot lock the user out
    of the main account until the 5-hour reset. A window with a use and no reset time is present.
-   Without one it is not eligible: `No 5-hour reading, which the main account needs.`
+   Without one it is not eligible: `No 5-hour reading, which the main account needs.` A protected
+   account whose `noLimit` lists `five_hour` needs no 5-hour window (rule 10); a window its reading
+   holds still needs the run room.
 10. No 5-hour reading. A protected account whose stored reading, the one under its current label
-    (6.3), holds no 5-hour window is never picked (rule 9), and with nothing else eligible the
-    pick returns `label: null` (rule 6); `config clear-main` makes it a pool account, without its
-    reserve line. A pool account with no 5-hour window is judged on its weekly use (rules 3, 4 and
-    7) and ranks after every eligible account that has one (rule 5). When it is eligible, its
-    candidate reason ends with `5-hour use unknown.`, and so does the pick's reason when it is
-    picked, after any Fable note. A pick of an account that has a 5-hour window, made while an
-    account without one is eligible, ends with `Accounts with no 5-hour reading go last.` Whether
+    (6.3), holds no 5-hour window and whose `noLimit` does not list `five_hour` is never picked
+    (rule 9), and with nothing else eligible the pick returns `label: null` (rule 6);
+    `config clear-main` makes it a pool account, without its reserve line. A pool account that
+    has no 5-hour window and whose `noLimit` does not list `five_hour` is judged on its weekly use
+    (rules 3, 4 and 7) and ranks after every eligible account that has one or that setting
+    (rule 5). When it is eligible, its candidate reason ends with `5-hour use unknown.`, and so
+    does the pick's reason when it is picked, after any Fable note. A pick of an account that has
+    a 5-hour window or that setting, made while an account with neither is eligible, ends with
+    `Accounts with no 5-hour reading go last.` Whether
     an account has a 5-hour reading follows the reading stored under its current label, as the
     cache reads it (6.2, 6.3). While that reading holds a 5-hour window, a reply without one is
     refused (6.2), so once the reading is stale or its window has reset, the account is skipped as
@@ -1670,11 +1683,13 @@ the last point at which a launch may start. A validator refuses any point above 
     window, whatever the cause (for example the service never reported one, an email change or a
     token save deleted the reading, a `login` account that had none was renamed, or the stored
     file does not decode as a reading or holds a 5-hour use outside 0 to 100, 6.3), the next reply
-    without the window is stored, and the account is judged as one with no 5-hour reading. A
+    without the window is stored, and the account is judged as one with no 5-hour reading, or on
+    its weekly use while its `noLimit` lists `five_hour` (below). A
     stored file that cannot be read at all fails every refresh instead, so the account is skipped
     as `no weekly reading` until it can be read (6.3). So when the service never reports a 5-hour
     window for an account, no reply adds one, and the account is judged as one with no 5-hour
-    reading unless the reading stored under its label holds one, which only a hand edit under
+    reading, or on its weekly use while its `noLimit` lists `five_hour`, unless the reading stored
+    under its label holds one, which only a hand edit under
     `~/.agent-balancer/` (of `config.json` or a token file, section 14, T16) or an earlier version
     of the tool can have left there (6.3). In that case the
     account is judged by that reading, its 5-hour window included, while the reading is fresh
@@ -1685,6 +1700,15 @@ the last point at which a launch may start. A validator refuses any point above 
     cannot show that a run leaves the user room on the main account, and a lockout until the reset
     cannot be undone, so there the unknown is the worst case. On a pool account an unread limit
     costs worker runs, so it stays usable but never ahead of an account known to have room.
+
+    An account whose `noLimit` lists `five_hour` (7.1) and whose stored reading holds no 5-hour
+    window is judged on its weekly use: a protected one by rules 2, 4 and 7 with no 5-hour check,
+    a pool one by rules 3, 4 and 7. It ranks with the accounts that have a window, and none of its
+    reasons says `5-hour use unknown.` While its stored reading holds a 5-hour window, that window
+    counts as for any account, a reply without it is still refused, and a reply that names
+    `five_hour` with no value still fails the probe (6.2). Only `config set` sets `noLimit`, in the
+    user's own terminal (5.1). On a protected account the setting gives up rule 9's guard, so
+    workers can use up a 5-hour limit the service does not report.
 
 The line applies only to `pick`. The user's own chats on the main account never call `pick` and
 are never gated.
@@ -1890,6 +1914,8 @@ Field rules:
   `launchAllowed` is true.
 - `fiveHour` is null when the stored reading holds no 5-hour window, whether or not the plan has
   one (7.2).
+- `noLimit` is on a row only while its account's entry in `config.json` carries it (7.1), as the
+  same list; other rows have no such key, and the menu app does not read it.
 - `stateSince` is when the tool first saw the current `state` with its error code. It is null for
   an `ok` account until a rebuild has read a reading of it or dated a probe's rejection of it
   (section 4), so an account whose rejection was recorded before its first reading, such as a
@@ -2234,6 +2260,8 @@ empty lists, and the events record keeps only each label's newest line.
     `link`, `unlink`, `config set-main`, `config clear-main`, a change of email or label, and
     removing a main account are not in the window: it shows the command with a Copy button, so
     everything that shares hooks or moves protection keeps its typed consent in a terminal (5.1).
+    `config set <label> no-limit`, which can lift the main account's 5-hour guard (7.2 rule 10), is
+    not in the window either, and the window shows no command for it.
     The app has no scripting surface, and it turns management off, with a one-line reason, when
     its own environment carries the chat-shell variable (5.1).
   - **Checked again when it runs:** the role can change while a sheet is open (`config set-main`
@@ -2457,16 +2485,18 @@ empty lists, and the events record keeps only each label's newest line.
   afterwards runs `auth status` and says whether the folder holds the
   expected email. A plan save that still fails after the sign-in says the sign-in is kept and
   that `refresh --label <label>` records the plan.
-  `config set <label> email|ends|ending-soon|label <value>` changes one field with a dated backup.
-  On a `login` or `folder` account, an email that differs from the stored one, compared without
-  letter case as the sign-in check compares them, also
-  forgets the recorded plan (`expectedPlanTier`, 7.1) in the same write that saves the new email,
-  and deletes the label's stored reading just before that write (6.3), under the pick lock and the
-  label's probe lock. A change refused before that delete, such as one whose value is not an email
-  address or one that cannot have the probe lock, and the same email again keep both. A change
-  that the registry save refuses, such as while another folder account's folder is wider than
-  0700, keeps the email and the plan but has deleted the reading, and it runs no status rebuild,
-  so the next probe reads the account anew and the next rebuild can record `limit_cleared` (6.3).
+  `config set <label> email|ends|ending-soon|label|no-limit <value>` changes one field with a
+  dated backup. On a `login` or `folder` account, an email that differs from the stored one,
+  compared without letter case as the sign-in check compares them, also forgets the recorded plan
+  (`expectedPlanTier`, 7.1) and clears `noLimit` (7.1) in the same write that saves the new email,
+  printing `Also cleared no-limit: it was set for the old sign-in.` when it was set, and deletes
+  the label's stored reading just before that write (6.3), under the pick lock and the label's
+  probe lock. A change refused before that delete, such as one whose value is not an email address
+  or one that cannot have the probe lock, and the same email again keep the plan, `noLimit` and
+  the reading. A change that the registry save refuses, such as while another folder account's
+  folder is wider than 0700, keeps the email, the plan and `noLimit` but has deleted the reading,
+  and it runs no status rebuild, so the next probe reads the account anew and the next rebuild
+  can record `limit_cleared` (6.3).
   Once the new email is saved, the
   old reading and plan are gone whatever the sign-in check that follows reports, and when that
   check places the new sign-in it records the new plan. A rename of a `login` account moves its

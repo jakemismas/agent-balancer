@@ -129,6 +129,11 @@ error names an `agent-balancer` command, it is one of these, to run once the acc
 again: `refresh`, or `login <label>` for a `folder` account, which signs the folder in itself.
 `doctor` shows each sign-in but records no check.
 
+A row also carries `noLimit`, a list of usage window names (`["five_hour"]` in this version),
+while a person has set with `config set <label> no-limit five_hour` that the account's plan has no
+limit on them; rows without the setting have no such key. While such an account's reading holds no
+5-hour window, `pick` and `next` judge it on its weekly use.
+
 ## What changed
 
 ```

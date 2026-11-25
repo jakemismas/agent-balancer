@@ -73,12 +73,14 @@ public struct Account: Codable, Equatable, Sendable {
     /// When the account's current token was saved, as an ISO 8601 time. Token accounts only. The
     /// estimate of the token's end counts from it.
     public var tokenCreatedAt: String?
+    /// Usage windows, by their reading names, that the user says this plan has no limit on.
+    public var noLimit: [String]?
 
     public init(
         label: String, kind: String, role: String, email: String? = nil,
         expectedPlanTier: String? = nil, accountKey: String = Account.makeKey(),
         reserve: Reserve? = nil, endsAt: String? = nil, endingSoon: Bool? = nil,
-        fable: AccountFable? = nil, tokenCreatedAt: String? = nil
+        fable: AccountFable? = nil, tokenCreatedAt: String? = nil, noLimit: [String]? = nil
     ) {
         self.label = label
         self.kind = kind
@@ -91,6 +93,7 @@ public struct Account: Codable, Equatable, Sendable {
         self.endingSoon = endingSoon
         self.fable = fable
         self.tokenCreatedAt = tokenCreatedAt
+        self.noLimit = noLimit
     }
 
     public static func makeKey() -> String {

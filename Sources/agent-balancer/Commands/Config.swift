@@ -29,6 +29,9 @@ struct ConfigCommand: ParsableCommand {
                     print("  ends: \(Display.safe(String(describing: ends)))")
                 }
                 if a.endingSoon == true { print("  ending-soon: true") }
+                if let names = a.noLimit {
+                    print("  no-limit: \(Display.safe(names.joined(separator: ", ")))")
+                }
                 if let reserve = a.reserve { print("  reserve: \(reserve.summary)") }
             }
         }
@@ -95,10 +98,11 @@ struct ConfigCommand: ParsableCommand {
             commandName: "set",
             abstract: "Change one field.",
             discussion: """
-                config set <label> email|ends|ending-soon|label <value>
+                config set <label> email|ends|ending-soon|label|no-limit <value>
                 config set refresh.backgroundMinutes <n>
                 An account keeps one end marker: `ends <date>` clears ending-soon, `ending-soon
-                true` clears the date, and `ends none` clears both.
+                true` clears the date, and `ends none` clears both. `no-limit five_hour` says the
+                account's plan has no 5-hour limit; `no-limit none` takes it back.
                 """)
 
         @Argument(parsing: .remaining) var words: [String] = []
@@ -178,7 +182,7 @@ struct ConfigCommand: ParsableCommand {
             }
             guard words.count == 3 else {
                 throw ToolError(
-                    "Usage: config set <label> email|ends|ending-soon|label <value>, or config set refresh.backgroundMinutes <n>."
+                    "Usage: config set <label> email|ends|ending-soon|label|no-limit <value>, or config set refresh.backgroundMinutes <n>."
                 )
             }
             let label = words[0]
@@ -189,6 +193,7 @@ struct ConfigCommand: ParsableCommand {
             }
             var account = config.accounts[index]
             var cleared: String?
+            var forgotten: String?
             switch field {
             case "email":
                 guard value.contains("@"), !value.contains(" ") else {
@@ -197,7 +202,11 @@ struct ConfigCommand: ParsableCommand {
                 let old = account
                 account.email = value
                 // A plan recorded for the old sign-in says nothing about the new one.
-                if changesSignIn(from: old, to: account) { account.expectedPlanTier = nil }
+                if changesSignIn(from: old, to: account) {
+                    account.expectedPlanTier = nil
+                    if account.noLimit != nil { forgotten = "no-limit" }
+                    account.noLimit = nil
+                }
             case "ends":
                 if value != "none" {
                     guard ConfigValidator.isTodayOrLater(value) else {
@@ -241,15 +250,27 @@ struct ConfigCommand: ParsableCommand {
                     throw ToolError("Label '\(Display.safe(value))' is already used.")
                 }
                 account.label = value
+            case "no-limit":
+                if value == "none" {
+                    account.noLimit = nil
+                } else if WindowName.mayHaveNoLimit.contains(value) {
+                    account.noLimit = [value]
+                } else {
+                    let names = WindowName.mayHaveNoLimit.sorted().joined(separator: ", ")
+                    throw ToolError("no-limit must be \(names) or none.")
+                }
             default:
                 throw ToolError(
-                    "Unknown field '\(Display.safe(field))'. Use email, ends, ending-soon or label."
+                    "Unknown field '\(Display.safe(field))'. Use email, ends, ending-soon, label or no-limit."
                 )
             }
             config.accounts[index] = account
             var lines = ["Updated \(field) for '\(Display.safe(label))'."]
             if let cleared {
                 lines.append("Also cleared \(cleared): an account keeps one end marker.")
+            }
+            if let forgotten {
+                lines.append("Also cleared \(forgotten): it was set for the old sign-in.")
             }
             return lines
         }

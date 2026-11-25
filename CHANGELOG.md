@@ -51,6 +51,16 @@
   action and a chosen option in dark mode, so each stands out at 3:1 or more on the dark window and
   menu. A row greyed for a stale reading keeps its main badge at full strength. The README pictures
   and the design reference show the new colors.
+- `config set <label> no-limit five_hour` says an account's plan has no 5-hour limit, and
+  `no-limit none` takes it back. While the account's stored reading has no 5-hour window, `pick`
+  and the status's `next` judge it on its weekly use: it ranks with the accounts that have a
+  5-hour window, a main account can be picked while its reserve line allows, and none of its
+  reasons says `5-hour use unknown.` A 5-hour window in its reading still counts as before.
+  While it is set, `status` prints a `no-limit: five_hour` line under the account's row,
+  `status --json` adds `noLimit` to the row and `config show` lists it. A new email on a `login`
+  or `folder` account clears it in the same save and says so, and no command sets it from a
+  reading. Such an account used to be judged as one with no 5-hour reading: last among pool
+  accounts, and never picked as the main account.
 
 ## 1.1.0
 

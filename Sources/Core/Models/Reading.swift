@@ -14,6 +14,8 @@ public enum WindowName {
     public static let fable = "seven_day_overage_included"
     /// The windows the picker reads from `Reading.windows`.
     public static let picker: Set<String> = [fiveHour, sevenDay]
+    /// The windows a plan may lack, which an account's `noLimit` may name.
+    public static let mayHaveNoLimit: Set<String> = [fiveHour]
 }
 
 /// One usage window: percent used (0 to 100, one decimal), when it resets and when the stored

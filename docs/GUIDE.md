@@ -83,15 +83,25 @@ Do these four steps again after each upgrade until the app is notarized. Upgrade
    token rejected and has seen its latest reading (only a probe that works stores a newer one);
    its email is a note that is never checked.
 2. It keeps accounts with enough room in the weekly window (and the five-hour window when there is
-   one), and keeps the main account only when it has a five-hour reading. For a Fable launch, it
-   also needs room in the Fable allowance.
+   one), and keeps the main account only when it has a five-hour reading or you have set that its
+   plan has no five-hour limit. For a Fable launch, it also needs room in the Fable allowance.
 3. The main account has a reserve: it is eligible only while its weekly use stays under a line
    that rises as its weekly reset gets closer, so less of its week is held back for you.
 4. Among the rest, the account whose use resets soonest goes first, because its unused room is
    about to be lost, but an account with no five-hour reading goes after every account that has
-   one. An account with an end date ranks by that date when it is sooner, and one marked as
-   ending soon ranks as if it ended `picker.endingSoonAssumeDays` days from now (2 by default).
+   one, unless you have set that its plan has no five-hour limit. An account with an end date
+   ranks by that date when it is sooner, and one marked as ending soon ranks as if it ended
+   `picker.endingSoonAssumeDays` days from now (2 by default).
 5. If nothing fits, it says so and picks nothing.
+
+Some plans have a weekly limit and no five-hour limit, and the tool cannot tell such a plan from a
+reading that lacks the five-hour window. If you know an account's plan has no five-hour limit, run
+`agent-balancer config set <label> no-limit five_hour` in your own terminal. While that account has
+no five-hour reading, it is judged on its weekly use, the main account's reserve included, and
+ranks with the accounts that have one; a five-hour reading still counts when one comes.
+`agent-balancer config set <label> no-limit none` takes it back, and a new email on a login or
+folder account clears it. Set it only for a plan you know has no five-hour limit: on the main
+account, a limit the tool cannot read can lock you out until it resets.
 
 ## How it works
 

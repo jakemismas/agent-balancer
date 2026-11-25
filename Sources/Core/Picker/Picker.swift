@@ -51,7 +51,7 @@ public enum Picker {
         var room: Double
         var reason: String
         var fableNote: String?
-        var hasFiveHour: Bool
+        var fiveHourKnown: Bool
     }
 
     private static let fiveHourUnknown = "5-hour use unknown."
@@ -90,7 +90,7 @@ public enum Picker {
         }
         // 5-hour use known first, then soonest expiry (to the minute), most room, config order.
         let ranked = eligible.sorted { a, b in
-            if a.hasFiveHour != b.hasFiveHour { return a.hasFiveHour }
+            if a.fiveHourKnown != b.fiveHourKnown { return a.fiveHourKnown }
             let ma = (a.expiry.timeIntervalSince1970 / 60).rounded(.down)
             let mb = (b.expiry.timeIntervalSince1970 / 60).rounded(.down)
             if ma != mb { return ma < mb }
@@ -112,9 +112,9 @@ public enum Picker {
             ? "Soonest weekly reset: resets \(shortTime(best.weeklyReset))."
             : "Soonest expiry: ends \(shortTime(best.expiry))."
         var reason = best.fableNote.map { head + " " + $0 } ?? head
-        if !best.hasFiveHour {
+        if !best.fiveHourKnown {
             reason += " " + fiveHourUnknown
-        } else if ranked.contains(where: { !$0.hasFiveHour }) {
+        } else if ranked.contains(where: { !$0.fiveHourKnown }) {
             reason += " Accounts with no 5-hour reading go last."
         }
         return PickDecision(chosen: best.index, reason: reason, candidates: candidates)
@@ -151,6 +151,8 @@ public enum Picker {
             return .no("Limited until \(shortTime(weekly.resetsAt)).")
         }
         let five = reading.fiveHour
+        // A plan set as having no 5-hour limit has no window to read; one in the reading counts.
+        let fiveHourKnown = five != nil || account.noLimit?.contains(WindowName.fiveHour) == true
         if let five, five.usedPercent >= limitedAt {
             return .no("Limited until \(shortTime(five.resetsAt)).")
         }
@@ -174,10 +176,10 @@ public enum Picker {
                         used, line, reserve.marginPercent))
             }
             // Unknown 5-hour use could lock the user out until the reset, which nothing undoes.
-            guard let fiveUsed else {
+            guard fiveHourKnown else {
                 return .no("No 5-hour reading, which the main account needs.")
             }
-            if fiveUsed + run >= limitedAt {
+            if let fiveUsed, fiveUsed + run >= limitedAt {
                 return .no(String(format: "5-hour use %.1f%% leaves no room for a run.", fiveUsed))
             }
             room = line - margin - used
@@ -220,13 +222,13 @@ public enum Picker {
             fromReset = false
         }
         room = max(0, room)
-        let note = five == nil ? " " + fiveHourUnknown : ""
+        let note = fiveHourKnown ? "" : " " + fiveHourUnknown
         return .yes(
             Eligible(
                 index: index, expiry: expiry, expiryFromReset: fromReset,
                 weeklyReset: weekly.resetsAt, room: room,
                 reason: "Resets \(shortTime(weekly.resetsAt))." + note, fableNote: fableNote,
-                hasFiveHour: five != nil))
+                fiveHourKnown: fiveHourKnown))
     }
 
     private enum FableVerdict {

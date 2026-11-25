@@ -72,7 +72,7 @@ public struct ConfigStore: Sendable {
     ]
     private static let accountKeys: Set<String> = [
         "label", "kind", "role", "email", "expectedPlanTier", "accountKey", "reserve", "endsAt",
-        "endingSoon", "fable", "tokenCreatedAt",
+        "endingSoon", "fable", "tokenCreatedAt", "noLimit",
     ]
     private static let probeKeys: Set<String> = ["safeMode", "timeoutSeconds", "passProxyEnv"]
     private static let refreshKeys: Set<String> = ["backgroundMinutes"]

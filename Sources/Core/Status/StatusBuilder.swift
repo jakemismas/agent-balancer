@@ -335,7 +335,8 @@ public enum StatusBuilder {
             readingsAge: reading.map { max(0, Int(now.timeIntervalSince($0.readAt))) },
             inUse: inUse, endsAt: account.endsAt, loginExpiresAt: e.loginExpiresAt,
             loginExpiresSource: e.loginExpiresSource, reserve: reserve,
-            signInCheck: account.kind == Kind.folder ? entry.signInCheck : nil)
+            signInCheck: account.kind == Kind.folder ? entry.signInCheck : nil,
+            noLimit: account.noLimit)
     }
 
     // MARK: Rebuild

@@ -139,6 +139,14 @@ public enum ConfigValidator {
                     throw ToolError("Account '\(label)': tokenCreatedAt is not valid.")
                 }
             }
+            if let names = account.noLimit,
+                names.isEmpty || Set(names).count != names.count
+                    || !names.allSatisfy({ WindowName.mayHaveNoLimit.contains($0) })
+            {
+                let accepted = WindowName.mayHaveNoLimit.sorted().map { "\"\($0)\"" }
+                throw ToolError(
+                    "Account '\(label)': noLimit must be [\(accepted.joined(separator: ", "))].")
+            }
             if let reserve = account.reserve {
                 for point in reserve.points
                 where point.daysLeft < 0 || point.maxUsedPercent < 0 || point.maxUsedPercent > 100 {

@@ -34,9 +34,14 @@ public enum TokenPaths {
         /// `lstat` cannot check the name in a token folder the user can search, as when the
         /// file's own list denies the user `readattr`, so that list cannot be read either.
         public var unchecked = false
+        /// The user cannot search the token folder, as when its list denies the user `search`, so
+        /// `lstat` can check no name in it and the token file may be there.
+        public var folderUnsearchable = false
         public var isPrivate: Bool {
             isRegularFile && ownedByUser && mode == 0o600 && !sharedByAccessList
         }
+        /// Whether a token file may be there: one `lstat` shows, or one it cannot check.
+        public var mayExist: Bool { exists || unchecked || folderUnsearchable }
     }
 
     public static func facts(context: ToolContext, label: String) throws -> Facts {
@@ -49,8 +54,14 @@ public enum TokenPaths {
         defer { close(dir) }
         var st = stat()
         guard fstatat(dir, name, &st, AT_SYMLINK_NOFOLLOW) == 0 else {
+            let failure = errno
             var facts = none
-            facts.unchecked = errno != ENOENT && faccessat(dir, ".", X_OK, AT_EACCESS) == 0
+            // A folder the user cannot search keeps every name in it from `lstat`.
+            if faccessat(dir, ".", X_OK, AT_EACCESS) != 0 {
+                facts.folderUnsearchable = true
+            } else {
+                facts.unchecked = failure != ENOENT
+            }
             return facts
         }
         let isRegular = (st.st_mode & S_IFMT) == S_IFREG

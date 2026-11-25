@@ -44,11 +44,13 @@ public enum TokenStore {
     }
 
     /// What a status row, `pick` and `run` say when a token of `label` is kept from use by more
-    /// than a missing file: the refusal of a folder above it, which names its fix, or a token
-    /// file whose access list may let others in. Nil otherwise. No file is opened.
+    /// than a missing file: the refusal of a folder above it, which names its fix, a token folder
+    /// the user cannot search, so the token file cannot be checked, or a token file whose access
+    /// list may let others in. Nil otherwise. No file is opened.
     public static func blockedText(context: ToolContext, label: String) -> String? {
         do {
             let facts = try TokenPaths.facts(context: context, label: label)
+            if facts.folderUnsearchable { return folderUnsearchableText(label: label) }
             return facts.sharedByAccessList || facts.unchecked
                 ? Messages.tokenFileShared(label) : nil
         } catch let error as ToolError {
@@ -56,6 +58,18 @@ public enum TokenStore {
         } catch {
             return nil
         }
+    }
+
+    /// What a status row, `pick` and `run` say when the user cannot search the token folder, so
+    /// the token file of `label` cannot be checked. The folder passed the folder checks, so it
+    /// is a real folder of the user's: `chflags` first clears a lock or an append-only flag,
+    /// which keeps `chmod` out, then `chmod -N` clears a list that denies `search`, and
+    /// `chmod 700` a mode without it, as the folder refusal for one that cannot be searched says.
+    /// It stays within the 300 characters the status table and `pick` print.
+    static func folderUnsearchableText(label: String) -> String {
+        let place = typedFolder
+        return
+            "The token file of '\(Display.safe(label, limit: 32))' cannot be checked: the token folder `\(place)` cannot be searched. Run `chflags nouchg,nouappnd \(place)` if it is locked, `chmod -N \(place)`, then `chmod 700 \(place)` in Terminal."
     }
 
     /// A shape check only: printable, no spaces, a sane length.

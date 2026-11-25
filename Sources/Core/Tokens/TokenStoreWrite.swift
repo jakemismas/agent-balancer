@@ -22,7 +22,8 @@ extension TokenStore {
         let writer = NoFollowWriter(root: context.dataRoot)
         try writer.prepare(folders: TokenPaths.folders)
         try writer.markExcludedFromBackup(folders: TokenPaths.folders)
-        try writer.put(data, folders: TokenPaths.folders, name: name)
+        try writer.put(
+            data, folders: TokenPaths.folders, name: name, holding: "the token of '\(label)'")
     }
 
     /// Deletes the token file of `label` when it is a regular file owned by the user. Returns

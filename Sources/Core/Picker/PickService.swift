@@ -131,9 +131,12 @@ public struct PickService: Sendable {
         let accounts = current.accounts
         let leaseStore = LeaseStore(context: context)
         var leases = try leaseStore.current(now: now, leaseMinutes: decided.picker.leaseMinutes)
+        // Judged by what the tool recorded before this pick's probes, so a clock that moved
+        // forward ends no lease and ages no file by itself.
         Upkeep.run(
             context: context, snapshot: SessionsReader.read(context: context), openLeases: leases,
-            leaseMinutes: decided.picker.leaseMinutes, keepDays: decided.launch.keepDays, now: now)
+            leaseMinutes: decided.picker.leaseMinutes, keepDays: decided.launch.keepDays, now: now,
+            recorded: refresher.recorded)
         // A rename or add since the registry was read can leave another account's reading here.
         for label in current.changed where skips[label] == nil {
             skips[label] = "the account changed while the pick waited"

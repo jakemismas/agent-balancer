@@ -45,6 +45,15 @@ private func entries(_ url: URL) -> [String] {
     }
 }
 
+/// Sets or clears the append-only flag on `url`, a link not followed, keeping its other flags.
+/// Returns whether that worked.
+private func appendOnly(_ url: URL, _ on: Bool) -> Bool {
+    var st = stat()
+    guard lstat(url.path, &st) == 0 else { return false }
+    let flag = UInt32(UF_APPEND)
+    return lchflags(url.path, on ? st.st_flags | flag : st.st_flags & ~flag) == 0
+}
+
 /// The names of the writer's temporary shape in `url`.
 private func temporaries(_ url: URL) -> [String] {
     ((try? FileManager.default.contentsOfDirectory(atPath: url.path)) ?? []).filter(
@@ -164,9 +173,11 @@ private func temporaries(_ url: URL) -> [String] {
         let file = tokens.appendingPathComponent(left)
         #expect(entries(file).isEmpty)
         #expect(try Data(contentsOf: file).isEmpty)
-        // It holds nothing, so doctor does not count it as a file that may hold a token.
+        // It holds nothing, so doctor neither counts it nor names it as a file that may hold a
+        // token, though a delete would fail on it.
         #expect(TokenAccounts.writerLeftovers(context: t.context) == 1)
         #expect(TokenAccounts.writerLeftoversWithData(context: t.context) == 0)
+        #expect(TokenAccounts.stuckTemporaries(context: t.context).isEmpty)
         // Once the folder's entries go, the check passes and the token save's cleanup takes it.
         #expect(runChmod(["-N", tokens.path]) == 0)
         try writer.requireWritable(folders: TokenPaths.folders)
@@ -175,6 +186,37 @@ private func temporaries(_ url: URL) -> [String] {
         // A leftover that holds bytes, as a write cut off part way leaves, may hold a token.
         try writer.put(Data("x".utf8), folders: TokenPaths.folders, name: ".tmp-fedcba9876543210")
         #expect(TokenAccounts.writerLeftoversWithData(context: t.context) == 1)
+    }
+
+    @Test func aWriteStoppedBeforeItsRenameInAnAppendOnlyFolderNamesItsTemporaryFile() throws {
+        let t = try TestHome()
+        defer { clear(t) }
+        let writer = NoFollowWriter(root: t.context.dataRoot)
+        try writer.prepare(folders: TokenPaths.folders)
+        let tokens = t.context.dataRoot.appendingPathComponent(TokenPaths.folderName)
+        let place = "~/.agent-balancer/" + TokenPaths.folderName
+        // A name no other test writes, so the seam stops this write only.
+        let name = "stopped-before-rename.json"
+        NoFollowWriter.beforeRename.set(name) { throw ToolError("Stopped before the rename.") }
+        defer { NoFollowWriter.beforeRename.set(name, nil) }
+        #expect(appendOnly(tokens, true))
+        defer { _ = appendOnly(tokens, false) }
+        let holding = "the token of 'pool-a'"
+        var said = ""
+        do {
+            try writer.put(
+                Data("x".utf8), folders: TokenPaths.folders, name: name, holding: holding)
+        } catch let error as ToolError {
+            said = error.message
+        }
+        let left = try #require(temporaries(tokens).first)
+        #expect(temporaries(tokens).count == 1)
+        #expect(
+            said
+                == "Stopped before the rename. "
+                + Messages.temporaryLeft(place: place, name: left, holding: holding))
+        #expect(try Data(contentsOf: tokens.appendingPathComponent(left)) == Data("x".utf8))
+        #expect(!FileManager.default.fileExists(atPath: tokens.appendingPathComponent(name).path))
     }
 
     @Test func aProbeFolderItCannotRemoveLosesItsOwnListAndOnlyAFolderEntryKeepsIt() throws {

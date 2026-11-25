@@ -23,28 +23,44 @@ public struct NoFollowWriter: Sendable {
 
     /// Writes `data` whole to `<root>/<folders...>/<name>` at mode 0600 through a random temporary
     /// name and a rename. Folders are created at 0700. A refusal leaves everything as it was.
-    public func put(_ data: Data, folders: [String], name: String) throws {
+    /// `holding` says what the data holds that must not stay behind, such as a token, for the
+    /// text of a write that stops and cannot delete its temporary file.
+    public func put(_ data: Data, folders: [String], name: String, holding: String? = nil) throws {
         try Paths.checkName(name)
         let dir = try NoFollowWriter.openFolder(root: root, folders: folders, create: true)
         defer { close(dir) }
         Self.trace.note(root, .changed(Self.joined(folders)))
-        try Self.writeFile(data, in: dir, name: name, traced: (root, folders))
+        try Self.writeFile(
+            data, in: dir, name: name, traced: (root, folders), place: Self.place(folders),
+            holding: holding)
     }
 
     /// The write `put` does, relative to an open folder handle. `traced` names the data folder
-    /// and the folder, for the test seam.
+    /// and the folder, for the test seam, and `place` the folder as a person types it. A write
+    /// that stops deletes its temporary file; when it cannot, its error names that file, as
+    /// `Messages.temporaryLeft` says, since the file may hold what was written.
     static func writeFile(
-        _ data: Data, in dir: Int32, name: String, traced: (URL, [String])? = nil
+        _ data: Data, in dir: Int32, name: String, traced: (URL, [String])? = nil,
+        place: String? = nil, holding: String? = nil
     ) throws {
         guard isReplaceable(in: dir, name: name) else {
             throw ToolError("Refused to write \(name): it is not a regular file made by you.")
         }
         var st = stat()
         let existed = fstatat(dir, name, &st, AT_SYMLINK_NOFOLLOW) == 0
-        guard let made = makeTemporary(in: dir) else {
-            throw ToolError("Could not write \(name).")
+        func stopped(_ error: Error, leaving temp: String) -> Error {
+            ToolError.adding(
+                Messages.temporaryLeft(place: place, name: temp, holding: holding), to: error)
         }
-        let (fd, temp) = made
+        let (fd, temp): (Int32, String)
+        switch makeTemporary(in: dir) {
+        case .made(let handle, let made): (fd, temp) = (handle, made)
+        case .notMade: throw ToolError("Could not write \(name).")
+        case .left(let made):
+            throw ToolError.adding(
+                Messages.emptyTemporaryLeft(place: place, name: made, holding: holding),
+                to: ToolError("Could not write \(name)."))
+        }
         if let (root, folders) = traced {
             trace.note(root, .file(joined(folders + [temp]), .create))
         }
@@ -62,23 +78,25 @@ public struct NoFollowWriter: Sendable {
         }
         if ok { ok = fsync(fd) == 0 && fchmod(fd, 0o600) == 0 }
         close(fd)
-        if !ok {
-            unlinkat(dir, temp, 0)
-            throw ToolError("Could not write \(name).")
+        // Each stop after the file was made takes this one path, so its file is named alike.
+        func stop(_ error: Error) -> Error {
+            discardTemporary(temp, in: dir) ? error : stopped(error, leaving: temp)
         }
+        if !ok { throw stop(ToolError("Could not write \(name).")) }
         do {
             try Self.beforeRename.run(name)
         } catch {
-            unlinkat(dir, temp, 0)
-            throw error
+            throw stop(error)
         }
         if let (root, folders) = traced {
             trace.note(root, .file(joined(folders + [name]), existed ? .replace : .create))
         }
-        if renameat(dir, temp, dir, name) != 0 {
-            unlinkat(dir, temp, 0)
-            throw ToolError("Could not write \(name).")
-        }
+        if renameat(dir, temp, dir, name) != 0 { throw stop(ToolError("Could not write \(name).")) }
+    }
+
+    /// Deletes the temporary file `temp` of a write that stopped. Returns whether it is gone.
+    private static func discardTemporary(_ temp: String, in dir: Int32) -> Bool {
+        unlinkat(dir, temp, 0) == 0 || errno == ENOENT
     }
 
     /// Whether a write may put a file at `name` in `dir`: nothing is there, or a regular file of
@@ -89,20 +107,27 @@ public struct NoFollowWriter: Sendable {
         return (st.st_mode & S_IFMT) == S_IFREG && st.st_uid == getuid()
     }
 
+    /// What `makeTemporary` made: the new file's open handle and name, nothing, or the name of
+    /// one it could neither clear nor delete, which stays.
+    enum Temporary {
+        case made(Int32, String)
+        case notMade
+        case left(String)
+    }
+
     /// Makes a new file of the writer's temporary shape in `dir` at 0600, with the inheritable
-    /// entries of its folder that let anyone but the user in cleared, and returns its open handle
-    /// and name; nil when it cannot be made or cleared, and then nothing is left.
-    static func makeTemporary(in dir: Int32) -> (Int32, String)? {
+    /// entries of its folder that let anyone but the user in cleared. One that cannot be cleared
+    /// is deleted, and is `left` when the delete fails too.
+    static func makeTemporary(in dir: Int32) -> Temporary {
         let temp = temporaryPrefix + Paths.randomHex(8)
         let fd = openat(dir, temp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
-        guard fd >= 0 else { return nil }
+        guard fd >= 0 else { return .notMade }
         // A new file takes its folder's inheritable entries, so they go before the first byte.
         guard shutOthersOut(fd) else {
             close(fd)
-            unlinkat(dir, temp, 0)
-            return nil
+            return discardTemporary(temp, in: dir) ? .notMade : .left(temp)
         }
-        return (fd, temp)
+        return .made(fd, temp)
     }
 
     /// Throws, before a step that writes in `<root>/<folders...>` runs, the refusal that step
@@ -122,9 +147,16 @@ public struct NoFollowWriter: Sendable {
         var tries = 0
         while true {
             tries += 1
-            guard let made = Self.makeTemporary(in: dir) else {
+            let made: (Int32, String)
+            switch Self.makeTemporary(in: dir) {
+            case .made(let fd, let name): made = (fd, name)
+            case .notMade:
                 Self.trace.note(root, .refused(path))
                 throw ToolError(Self.notWritableText(dir, place))
+            case .left(let name):
+                Self.trace.note(root, .refused(path))
+                let left = Messages.checkLeft(place + "/" + name, folder: false)
+                throw ToolError(Self.notWritableText(dir, place) + " " + left)
             }
             _ = try? Self.afterCheckFileMade.run(root.path + "/" + path)
             let listed = AccessList.verdict(made.0)
@@ -678,15 +710,56 @@ extension NoFollowWriter {
     }
 
     /// Makes a fresh folder `<prefix><16 hex>` at 0700 under `<root>/<parent...>` and returns its
-    /// name. Before it makes one, a folder of that shape older than `staleAfter` seconds is
-    /// removed. Anything else in the parent that is not such a folder refuses the call.
-    public func makeScratchFolder(parent: [String], prefix: String, staleAfter: TimeInterval)
-        throws -> String
-    {
+    /// name. Before it makes one, a folder of that shape older than `staleAfter` seconds at
+    /// `judgedAt` is removed, unless its lock cannot be taken: a probe holds the lock of its own
+    /// folder while it runs (`makeLockedScratchFolder`). Anything else in the parent that is not
+    /// such a folder refuses the call.
+    public func makeScratchFolder(
+        parent: [String], prefix: String, staleAfter: TimeInterval, judgedAt: Date = Date()
+    ) throws -> String {
         let dir = try NoFollowWriter.openFolder(root: root, folders: parent, create: true)
         defer { close(dir) }
+        return try makeScratchFolder(
+            in: dir, parent: parent, prefix: prefix, staleAfter: staleAfter, judgedAt: judgedAt)
+    }
+
+    /// Makes a probe folder as `makeScratchFolder` does and takes the exclusive lock its probe
+    /// holds for its whole run, on the folder's own handle, so no cleanup removes the folder while
+    /// the probe runs. The probe removes the folder, then releases the lock. A folder that cannot
+    /// be locked is removed again and refused.
+    public func makeLockedScratchFolder(
+        parent: [String], prefix: String, staleAfter: TimeInterval, judgedAt: Date = Date()
+    ) throws -> (name: String, lock: FileLock) {
+        let dir = try NoFollowWriter.openFolder(root: root, folders: parent, create: true)
+        defer { close(dir) }
+        let name = try makeScratchFolder(
+            in: dir, parent: parent, prefix: prefix, staleAfter: staleAfter, judgedAt: judgedAt)
+        guard let held = NoFollowWriter.lockFolder(in: dir, name: name) else {
+            NoFollowWriter.removeTree(in: dir, name: name, depth: 0)
+            throw ToolError(
+                Messages.probeFolderNotLocked(NoFollowWriter.place(parent)), code: .checkFailed)
+        }
+        return (name, FileLock(descriptor: held))
+    }
+
+    /// Opens the folder `name` in `dir` without following a link and takes its exclusive lock
+    /// without waiting. Returns the handle that holds the lock, or nil when either fails. The
+    /// handle is closed on exec, so a child the lock holder starts never holds it.
+    static func lockFolder(in dir: Int32, name: String) -> Int32? {
+        let fd = openat(dir, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard fd >= 0 else { return nil }
+        guard flock(fd, LOCK_EX | LOCK_NB) == 0 else {
+            close(fd)
+            return nil
+        }
+        return fd
+    }
+
+    private func makeScratchFolder(
+        in dir: Int32, parent: [String], prefix: String, staleAfter: TimeInterval, judgedAt: Date
+    ) throws -> String {
         NoFollowWriter.trace.note(root, .changed(NoFollowWriter.joined(parent)))
-        let now = Date().timeIntervalSince1970
+        let now = judgedAt.timeIntervalSince1970
         for entry in try NoFollowWriter.entries(of: dir) {
             var st = stat()
             if fstatat(dir, entry, &st, AT_SYMLINK_NOFOLLOW) != 0 {
@@ -703,9 +776,12 @@ extension NoFollowWriter {
                     Messages.holdsForeignEntry(NoFollowWriter.place(parent)), code: .checkFailed)
             }
             let modified = Double(st.st_mtimespec.tv_sec)
-            if now - modified > staleAfter {
-                NoFollowWriter.removeTree(in: dir, name: entry, depth: 0)
-            }
+            // A running probe holds its folder's lock, so a folder this cannot lock stays.
+            guard now - modified > staleAfter,
+                let held = NoFollowWriter.lockFolder(in: dir, name: entry)
+            else { continue }
+            NoFollowWriter.removeTree(in: dir, name: entry, depth: 0)
+            close(held)
         }
         let name = prefix + Paths.randomHex(8)
         guard NoFollowWriter.makeFolder(in: dir, name) else {
@@ -719,10 +795,11 @@ extension NoFollowWriter {
     /// and a folder of its shape that cannot be made and removed there. It makes one and removes
     /// it, as each probe does with its own. One it cannot remove loses its own access list and is
     /// removed again before the refusal, which names one that stays.
-    public func requireScratchable(parent: [String], prefix: String, staleAfter: TimeInterval)
-        throws
-    {
-        let name = try makeScratchFolder(parent: parent, prefix: prefix, staleAfter: staleAfter)
+    public func requireScratchable(
+        parent: [String], prefix: String, staleAfter: TimeInterval, judgedAt: Date = Date()
+    ) throws {
+        let name = try makeScratchFolder(
+            parent: parent, prefix: prefix, staleAfter: staleAfter, judgedAt: judgedAt)
         // The probe folder takes the inheritable entries of its parent, as each probe's does.
         let usable = isUsableScratch(parent: parent, name: name)
         removeScratchFolder(parent: parent, name: name, prefix: prefix)
@@ -1016,6 +1093,25 @@ extension NoFollowWriter {
             } catch {
                 return true
             }
+        }
+    }
+
+    /// The temporary files `put` left directly in `<root>/<folders...>` that hold at least one
+    /// byte and that a delete would fail on: a lock or an append-only flag on the file or the
+    /// folder, an access list entry that denies deleting it, or a folder mode that keeps a delete
+    /// out. Names that `lstat` cannot check are not among them. Nothing is opened or deleted.
+    func undeletableTemporaries(folders: [String]) -> [String] {
+        guard let dir = try? NoFollowWriter.openFolder(root: root, folders: folders, create: false),
+            dir >= 0
+        else { return [] }
+        defer { close(dir) }
+        let names = ((try? Self.entries(of: dir)) ?? []).sorted()
+        return names.filter { name in
+            var st = stat()
+            guard Self.isTemporaryName(name), fstatat(dir, name, &st, AT_SYMLINK_NOFOLLOW) == 0,
+                (st.st_mode & S_IFMT) == S_IFREG, st.st_uid == getuid(), st.st_size > 0
+            else { return false }
+            return Self.replaceProblem(in: dir, name: name) != nil
         }
     }
 

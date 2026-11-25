@@ -211,6 +211,9 @@ public struct Refresher: Sendable {
     public var lockWaitSeconds: TimeInterval
     /// The time source. Tests replace it.
     public var clock: @Sendable () -> Date = { Date() }
+    /// The newest time the tool recorded before this refresher's probes began
+    /// (`Upkeep.newestRecorded`), which the probe folder cleanup judges ages by.
+    public var recorded: Date?
     private let runner: ClaudeRunner
     private let writer: NoFollowWriter
 
@@ -231,6 +234,8 @@ public struct Refresher: Sendable {
         self.runner = ClaudeRunner(context: context)
         self.writer = NoFollowWriter(root: context.dataRoot)
         self.lockWaitSeconds = Double(config.probe.timeoutSeconds) + 5
+        self.recorded = Upkeep.newestRecorded(
+            context: context, labels: config.accounts.map(\.label))
     }
 
     /// Refreshes the given accounts at the same time, at most `maxProbesAtOnce` of them at once;
@@ -512,7 +517,9 @@ public struct Refresher: Sendable {
         } else if account.kind == Kind.folder {
             targets.append(.folder(FolderPaths.folders(label: account.label), [.open]))
         }
-        return NoFollowWriter.Plan(step: "check", targets: targets)
+        var plan = NoFollowWriter.Plan(step: "check", targets: targets)
+        plan.judgedAt = Upkeep.judgedAt(now: Date(), recorded: recorded)
+        return plan
     }
 
     /// Seconds after which a probe folder left behind is another probe's no longer.
@@ -603,10 +610,12 @@ public struct Refresher: Sendable {
     {
         let timeout = fable ? config.fable.probeTimeoutSeconds : config.probe.timeoutSeconds
         let folder: String
+        let lock: FileLock
         do {
-            folder = try writer.makeScratchFolder(
+            // Another probe's folder is aged against the tool's own records, not the clock alone.
+            (folder, lock) = try writer.makeLockedScratchFolder(
                 parent: Layout.probeFolders, prefix: Layout.probeFolderPrefix,
-                staleAfter: staleAfter)
+                staleAfter: staleAfter, judgedAt: Upkeep.judgedAt(now: Date(), recorded: recorded))
         } catch let error as ToolError {
             return .failed(Issue(.checkFailed, .error, "Check failed: \(error.message)"))
         } catch {
@@ -615,6 +624,7 @@ public struct Refresher: Sendable {
         defer {
             writer.removeScratchFolder(
                 parent: Layout.probeFolders, name: folder, prefix: Layout.probeFolderPrefix)
+            lock.release()
         }
         let cwd = context.dataRoot.appendingPathComponent("probe", isDirectory: true)
             .appendingPathComponent(folder, isDirectory: true)

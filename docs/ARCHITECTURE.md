@@ -620,7 +620,10 @@ and nothing is written: an account keeps one end marker (7.1).
    both for a list that lets others in, and for a file `lstat` cannot check only the commands
    that clear its list, since `login` refuses to replace such a file. A token folder the folder
    checks refuse gives its refusal, which names the folder and
-   its fix, as the `token_missing` text in the status row, in `pick` and in `run`.
+   its fix, as the `token_missing` text in the status row, in `pick` and in `run`. A token folder
+   you cannot search, where `lstat` can check no name, gives a text that says the token file
+   cannot be checked and names the folder and its fix (`chflags nouchg,nouappnd` if it is locked,
+   `chmod -N`, then `chmod 700`) there instead of "No token saved".
    `tokenCreatedAt` is an optional ISO 8601 time on the account's
    config entry (7.1), set by every `login`; the config schema stays at version 1.
 4. Duplicate check: if, after that probe, the new account's weekly reset time equals another
@@ -648,7 +651,10 @@ shows `login_rejected` when a probe gets an auth error.
 
 Replacing: `login <label>` on an account that already has a token. The new token replaces the file
 in one rename, every live launch file of that label that carries a token is rewritten with it, and
-a `token_replaced` event is written. A tombstone (below) is never revived, and a launch file that
+a `token_replaced` event is written. A token file that `lstat` cannot check at the save, such as
+one that took an access list entry that denies you `readattr` while the person signed in, may hold
+the old token, so the save replaces it and reports a replace, with the same lines and event. A
+tombstone (below) is never revived, and a launch file that
 carries no token, such as one that a pick of a renamed `login` account left under its old label
 (Renaming, below), never gains one. A launch file that does not parse is never left on the old
 token unsaid: one a session record names becomes a tombstone, and any other is deleted. The
@@ -755,12 +761,31 @@ hold a whole token. Every writer of `tokens/` and `launch/` holds the pick lock,
 such a file belongs to no write in progress. `remove`, a token replace and the launch file upkeep
 (on `pick` and `refresh`) delete the ones in `tokens/` and in the launch folders: only names of that
 shape that are regular files owned by the user, directly in the folder, through the no-follow
-writer. `doctor` counts the ones that are left. A token save names each one it could not delete
-in `tokens/` or the label's launch folder, and each name of that shape there that `lstat` cannot
-check, by its path, and `login` exits 1 (Replacing, above). A `login` checks, under the pick lock
-and right before it writes the token file, that the registry still holds the label as a token
-account, and writes nothing when it does not, so a `login` that a `remove` overtook leaves no
-token behind.
+writer. A write that stops, at its write, its rename or the clear of its new file's access list,
+deletes its temporary file; when that delete fails too, as an append-only flag or an access list
+entry that denies you `delete_child` on the folder, or one the folder passes on to the file that
+denies you `delete`, makes it, its error names the file by its path, says that it may hold the
+token for a token file or a token account's launch file, names the commands that let the tool
+delete it (`chflags -h nouchg,nouappnd` first on the folder and on the file if either is locked,
+then `chmod -h -N` and `chmod -h 700` on the folder, and on the file `chmod -h -N`, or `chmod -N`
+where that says Permission denied) and, for such a file, `refresh`, whose upkeep deletes it once
+they have run. The clear comes before the first byte, so the error of a write that stops there says
+instead that the file is empty, with the same commands. `pick`, `run` and `login` print that error
+whole and exit 1. `refresh` names each one in `tokens/` or a label's launch folder that its upkeep
+could not delete and that holds a byte, and each name of that shape there that `lstat` cannot
+check, by its path, with the same commands, and still exits 0. When its upkeep does not run, as
+when another command holds the pick lock past a 5 second wait, the lock file does not open or the
+lease file cannot be read, `refresh` deletes nothing, says so with the cause and its fix, and names
+each one that holds a byte as `doctor` reads them, with the commands for one a delete would fail
+on. `doctor` names each one that holds a byte and that a delete would fail on, by its path, with
+the same commands, and exits 1; it counts the others that hold a byte, which the next upkeep
+deletes. A name of that shape that `lstat` cannot check is neither counted nor deleted: `doctor`
+names it in the access list line of an entry it cannot check, and exits 1. A token save names
+each one it could not delete in `tokens/` or the label's launch folder, and each name of that shape
+there that `lstat` cannot check, by its path, and `login` exits 1 (Replacing, above). A `login`
+checks, under the pick lock and right before it writes the token file, that the registry still
+holds the label as a token account, and writes nothing when it does not, so a `login` that a
+`remove` overtook leaves no token behind.
 
 Renaming: `config set <label> label <new>` refuses on a token account, exits 1 and writes nothing,
 because its token file and launch files carry the label; remove the account and add it again under
@@ -791,14 +816,16 @@ lease and none of those lines.
 
 Where a token may be: the token file, the launch files of that label, and nowhere else, except a
 writer's temporary file that a write killed before its rename leaves in `tokens/` or
-`launch/<label>/`; the next `remove`, token replace or upkeep pass deletes it under the pick lock
-(Leftover temporary files, above). Not in
+`launch/<label>/`, or one that a write that stopped could not delete, which its error names; the
+next `remove`, token replace or upkeep pass deletes it under the pick lock once it can (Leftover
+temporary files, above). Not in
 stdout or stderr, not in `status`, `events`, `history`, `picks.log` or the log, not in an argument
 or an environment the tool builds, not in the app. The safety script enforces the source rule: the
 Claude Code token variable name and any path under `tokens/` or `launch/` appear only in the
 `Tokens` and `Launch` modules. Other modules (`Remove`, `Uninstall`, `Doctor`) reach those folders
-only through calls those two modules offer (delete, count, has-lease, and the access list lines
-`doctor` prints, which those two modules write) and build no path into them.
+only through calls those two modules offer (delete, count, has-lease, and the access list and
+temporary file lines `doctor` and `refresh` print, which those two modules write) and build no path
+into them.
 Both folders are marked as excluded from backups: the Paths writer sets the
 `com.apple.metadata:com_apple_backup_excludeItem` attribute on the folder handle before the first
 file lands in it. An access list counts as much as a mode here: a token file or a launch file
@@ -892,6 +919,21 @@ rules of section 7.
     launch leaves a file no record names, so it goes.
   - A record cannot be opened or read, is not a regular file, or is over 1 MiB: only files older
     than `launch.keepDays` (default 35) are deleted, and `inUse` is `unknown`.
+
+  Clock: both cases judge a file's age, and which leases are open, at the earlier of the clock and
+  the newest time the tool recorded before the command began: the latest lease in
+  `state/leases.json`, open or not, and the latest stored reading's `readAt`. A time in a file's
+  metadata, which the user can set, never counts. So the first pass after a clock moved forward
+  ends no lease and ages no file by the move: a launch file whose lease or file time is recent by
+  that time stays, past `picker.leaseMinutes` and past `launch.keepDays` alike. Once the tool
+  records a time after the move, ages count from that time, and a later pass deletes such a file
+  once it is old by it. A clock that moved back is used as it is: a file dated ahead of it stays
+  until the clock passes that time, and a lease dated ahead of it stays open while it is within
+  `picker.leaseMinutes` (7.2). The tool cannot tell a forward move from time that passed since it
+  last recorded one, so every pass, with a steady clock too, judges at the newest time recorded
+  before it began, never later than the clock: a launch file whose lease ended after that time
+  stays until the tool records a newer time and a later pass judges by it. With nothing recorded
+  yet, the clock alone judges.
 
   A removal touches only a regular file owned by the user, named `l-<8 hex>.json`, directly under
   `launch/<label>/`, through the no-follow writer; a link planted there is neither followed nor
@@ -1221,13 +1263,29 @@ cwd: a fresh mkdtemp folder under ~/.agent-balancer/probe/, mode 0700, removed a
      (so no project CLAUDE.md, .mcp.json or hooks load; several probes may run at once, so the
      probe refuses to run only if probe/ holds something that is not a probe folder, `p-` and 16
      of the ASCII characters 0-9a-f, and it first removes a probe folder older than the probe
-     timeout)
+     timeout whose lock no running probe holds)
 env: CLAUDE_CONFIG_DIR=<account folder>  (left unset for the default folder)
 claude -p "Reply with the single word OK." --model haiku --tools "" --disallowedTools "mcp__*"
        --strict-mcp-config --max-turns 1 --no-session-persistence --max-budget-usd 0.05
        --output-format stream-json --verbose [--safe-mode]
 ```
 
+- Each probe holds an exclusive `flock` on its folder's own handle, opened without following a
+  link, from right after it makes the folder until it has removed it. The handle is closed on
+  exec, so `claude` and what it starts never hold the lock: the probe waits for `claude` to end, or
+  ends it at the timeout, so its own lock covers the whole run, and a lock a child kept could
+  outlive the probe with no bound. A probe that cannot take its lock removes the folder and fails
+  with `check_failed`.
+- The probe folder cleanup, before each probe makes its folder and in the check before a `login`
+  sign-in, takes a folder's lock without waiting before it removes the folder, and keeps any folder
+  whose lock it cannot take, whatever the clock did: no command removes the folder of a running
+  probe. A folder whose probe ended without removing it, as when the tool was stopped, holds no
+  lock, and neither does one an older version made, so such a folder ages out. Its age is judged
+  at the earlier of the clock and the newest time the tool recorded before the command began, by
+  the clock rule of launch file upkeep (4A.6): a clock that moved forward does not by itself make
+  it look older than the probe timeout, and once the tool records a time past the move, a later
+  command judges by that time. A clock that moved back is used as it is: a folder dated ahead of
+  it stays until the clock passes that time. With nothing recorded yet, the clock alone judges.
 - A Fable probe (4A.6) is this form with `--model` set to a Fable model, using
   `fable.probeBudgetUsd` and `fable.probeTimeoutSeconds` in place of the 0.05 cap and the 60
   second timeout. It runs after the plain step. The status records its auth error as the
@@ -1948,7 +2006,7 @@ short scrubbed text the menu shows as is.
 | `limited` | probe status not `allowed`, or weekly or 5-hour use at or above `limitedAtPercent`; a full Fable sub-cap alone is the warning below | limited | "Limited until Wed 4:00 PM." |
 | `fable_limited` (warning) | Fable use is readable and at or above `limitedAtPercent` of the Fable cap; only Fable picks skip the account | ok | "Fable limited until Thu 9:00 AM." |
 | `login_expiring` (warning) | `loginExpiresAt` within 7 days; for a token account within 14 days of its estimated end (4A.4) | ok | "Login expires Dec 7." |
-| `token_missing` | a token account whose token file is absent, is not a regular 0600 file owned by the user, or does not parse; also one whose token file has an access list that lets another user or group in, cannot be read or cannot be checked, or sits in a token folder the folder checks refuse, which the text then names with its fix (4A.4) | error | "No token saved. Run `agent-balancer login pool-a` in Terminal." |
+| `token_missing` | a token account whose token file is absent, is not a regular 0600 file owned by the user, or does not parse; also one whose token file has an access list that lets another user or group in, cannot be read or cannot be checked, or sits in a token folder the folder checks refuse or that you cannot search, which the text then names with its fix (4A.4) | error | "No token saved. Run `agent-balancer login pool-a` in Terminal." |
 | `not_linked` | a folder account that was never linked (4A.5) | error | "Settings not shared. Run `agent-balancer link spare` in Terminal." |
 | `possible_duplicate` (warning) | a token account whose weekly reset time equals another account's, both still ahead, and whose 5-hour reset time does too when both have one still ahead; with none ahead on a side, the weekly time alone decides (4A.4) | ok | "Same reset times as pool-a. If this is the same account, remove one." |
 | `key_in_settings` (warning, no event) | the default folder's `settings.json` carries `apiKeyHelper`, or a credential name of 4A.3 rule 2 or `CLAUDE_CONFIG_DIR` in its `env`, read by name only (4A.3) | ok | "Settings carry an API key or key helper. Every account is skipped." |
@@ -3046,7 +3104,9 @@ A token file is written whole to a random temporary name in `tokens/` and rename
 place, so a reader never sees half a token, and after a crash the token file is the old one or the
 new one. A crash between the write and the rename can also leave the temporary file, which may hold
 a whole token; the next `remove`, token replace or upkeep pass deletes it under the pick lock, and
-`doctor` counts it until then (4A.4). Only the `Tokens` and `Launch` modules open these two folders
+`doctor` counts it until then. A write that stops and cannot delete its temporary file names it in
+its error, and `doctor` names such a file that a delete would fail on and exits 1 (Leftover
+temporary files, 4A.4). Only the `Tokens` and `Launch` modules open these two folders
 (4A.4). `status.json`, the history, the events, the pick log and the log never hold a
 token or the path of a token or launch file; the pick log records the lease id.
 
@@ -3162,7 +3222,7 @@ file deletion outside the no-follow writer.
 | T20 | A stored token is read by another process that runs as the user, by a backup or by a sync tool, and stays usable for up to a year | 0600 files in 0700 folders; `tokens/` and `launch/` are marked as excluded from backups; `doctor` warns when the data folder sits inside a synced folder. Against code that runs as the user this is advisory, and it is the same exposure as Claude Code's own fallback credential file |
 | T21 | A token reaches output: `pick`'s JSON, an error text, a log line, the history, the app, a crash report | Only the `Tokens` and `Launch` modules read a token, and they return paths, never values. `pick` prints the launch file's path only. The scrubber runs on every captured buffer; `TokenCapture` reads the `claude setup-token` child's raw output first |
 | T22 | A caller's settings JSON carries a key that switches hooks off, changes permissions or chooses another account, into a launch file not visible in the typed line | `pick` accepts only allowlisted top-level keys (`env` by default) and only `env` names listed in `launch.envNames` (empty by default), never the protected names such as `CLAUDE_CONFIG_DIR`, the login locations, any `CLAUDE_CODE_*` name, `PATH`, `NODE_OPTIONS`, loader, proxy and certificate variables, and refuses without writing anything (4A.2). The config lists may hold only those keys and names, checked when the config loads and at pick time |
-| T23 | Launch files pile up, each with a token, or one outlives its account | The upkeep rule in 4A.6; `remove` deletes every file of the label, or stops, keeping the account, while a file it cannot check or delete may hold a token (4A.4); a token replace rewrites them, or names each one it could not check, rewrite or delete and `login` exits 1; `uninstall` removes both folders, or says what it left that may hold a token and exits 1; `pick` and `run` name a launch file they wrote and could not check or delete; `doctor` prints the count, each launch file it cannot check included where it can list the folder or a session names the file, names each launch folder it cannot check, and prints the oldest age, never a file's content |
+| T23 | Launch files pile up, each with a token, or one outlives its account | The upkeep rule in 4A.6; `remove` deletes every file of the label, or stops, keeping the account, while a file it cannot check or delete may hold a token (4A.4); a token replace rewrites them, or names each one it could not check, rewrite or delete and `login` exits 1; `uninstall` removes both folders, or says what it left that may hold a token and exits 1; `pick` and `run` name a launch file they wrote and could not check or delete; a write that stops names its temporary file when it cannot delete it, `refresh` names each one its upkeep could not delete, and `doctor` names each one a delete would fail on and exits 1; `doctor` prints the count, each launch file it cannot check included where it can list the folder or a session names the file, names each launch folder it cannot check, and prints the oldest age, never a file's content |
 | T24 | Something in the caller's environment beats the recipe: a worker bills another account, or lands in a folder with no hooks | The ambient rule (4A.3): folder-only picks under an inherited `CLAUDE_CONFIG_DIR`, `backgroundOnly` under an inherited credential name, a refused typed line under a stored-login name or a hooks-off name, `unsetEnv` for launchers, and a person launch without the protected group. The post-launch check in section 16 item 4 catches a launch that landed in the wrong folder. The profile base folders `HOME` and `XDG_CONFIG_HOME` stay (6.2) |
 | T25 | A folder account with a missing link runs sessions with no hooks | `pick` runs `verify` on a folder account before every recipe and refuses on any broken or missing link, and a never-linked folder is always refused; `run` refuses the same way |
 | T26 | Any chat that can run `pick` learns the path of a file that holds a token, and can read it; a token session can print its own token | Not prevented by the tool, and said so. Same-user limit as T16 and T20: the user's own policy is the boundary. The Limits section of `docs/GUIDE.md` gives a deny-rule snippet for `~/.agent-balancer/tokens/` and `~/.agent-balancer/launch/` |

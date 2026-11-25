@@ -428,7 +428,8 @@ public enum Messages {
 
     /// What a check before a write adds when the file or folder it made to test a folder stays
     /// there after the refusal, as an entry on the folder that denies deleting what is in it
-    /// keeps it. It is empty and its own access list is cleared.
+    /// keeps it. It is empty, and its own access list is cleared unless that clear is what
+    /// failed.
     public static func checkLeft(_ place: String, folder: Bool) -> String {
         "The check left the empty \(folder ? "folder" : "file") `\(place)` there; move it out of the way once that is done."
     }
@@ -467,16 +468,95 @@ public enum Messages {
             : items.joined()
     }
 
-    /// What a token save says about the writer's temporary files it could not delete in the
-    /// folder `place`, as a person types it, each by its path, since each may hold a token. The
-    /// commands clear a lock, an access list or a folder mode that keeps the delete out; `-h`
-    /// keeps each on the entry itself, and `chmod -N` clears one whose list also denies `read`.
+    /// What a token save and `refresh` say about the writer's temporary files they could not
+    /// delete in the folder `place`, as a person types it, each by its path, since each may hold
+    /// a token.
     static func temporariesNotDeleted(place: String, names: [String]) -> String {
         let one = names.count == 1
         let paths = names.map { "`" + place + "/" + $0 + "`" }
+        return
+            "\(names.count) temporary \(one ? "file" : "files") the writer left in `\(place)` could not be deleted and may hold a token: \(listed(paths)). "
+            + temporaryFix(place: place, one: one)
+    }
+
+    /// What `doctor` says about the writer's temporary files in the folder `place` that may hold
+    /// a token and that the upkeep `refresh` runs cannot delete, each by its path.
+    static func temporariesStuck(place: String, names: [String]) -> String {
+        let one = names.count == 1
+        let paths = names.map { "`" + place + "/" + $0 + "`" }
+        return
+            "\(names.count) temporary \(one ? "file" : "files") the writer left in `\(place)` may hold a token, and `agent-balancer refresh` cannot delete \(one ? "it" : "them"): \(listed(paths)). "
+            + temporaryFix(place: place, one: one)
+            + " Then run `agent-balancer refresh`, which deletes \(one ? "it" : "them")."
+    }
+
+    /// What the writer adds to the error of a write that stopped and could not delete its
+    /// temporary file `name` in the folder `place`, as a person types it. The file may hold
+    /// `holding`, or what was written when that is nil, so the text names it by its path with
+    /// the commands that let the tool delete it. A file that holds a token is in a folder whose
+    /// writer leftovers the upkeep of `refresh` deletes. With no `place`, it names the file alone.
+    static func temporaryLeft(place: String?, name: String, holding: String?) -> String {
+        guard let place else { return "Its temporary file `\(name)` could not be deleted." }
+        return
+            "Its temporary file `\(place)/\(name)` could not be deleted and may hold \(holding ?? "what was written"). "
+            + temporaryFix(place: place, one: true) + temporaryThen(holding)
+    }
+
+    /// What the writer adds to the error of a write that stopped right after it made its
+    /// temporary file `name` in the folder `place`, before the first byte, and could not delete
+    /// it: the file is empty, so the text says so, with the commands and the last step of
+    /// `temporaryLeft`. With no `place`, it names the file alone.
+    static func emptyTemporaryLeft(place: String?, name: String, holding: String?) -> String {
+        guard let place else { return "Its empty temporary file `\(name)` could not be deleted." }
+        return
+            "Its empty temporary file `\(place)/\(name)` could not be deleted. "
+            + temporaryFix(place: place, one: true) + temporaryThen(holding)
+    }
+
+    /// The step after the commands of `temporaryLeft`: a file of a write that holds a token is in
+    /// a folder whose writer leftovers the upkeep of `refresh` deletes.
+    private static func temporaryThen(_ holding: String?) -> String {
+        holding == nil
+            ? " Then move it out of the way."
+            : " Then run `agent-balancer refresh`, which deletes it."
+    }
+
+    /// What `refresh` says, when its upkeep did not run, about the writer's temporary files in
+    /// the folder `place` that may hold a token and that a delete would not fail on, each by its
+    /// path.
+    static func temporariesKept(place: String, names: [String]) -> String {
+        let one = names.count == 1
+        let paths = names.map { "`" + place + "/" + $0 + "`" }
+        return
+            "\(names.count) temporary \(one ? "file" : "files") the writer left in `\(place)` may hold a token: \(listed(paths)). `agent-balancer refresh` deletes \(one ? "it" : "them") once its upkeep runs."
+    }
+
+    /// What `refresh` says when its launch file upkeep did not run, so it deleted nothing, with
+    /// `why`: the cause and its fix.
+    static func upkeepNotRun(_ why: String) -> String {
+        "The launch file upkeep did not run, so this refresh deleted no launch file or temporary file: \(why)"
+    }
+
+    /// Why the upkeep did not run when another command held the pick lock past the wait.
+    static let upkeepLockBusy =
+        "another command held the pick lock. Run `agent-balancer refresh` again once it ends."
+
+    /// What a probe says when it cannot lock the folder it made in `place`. Each probe locks its
+    /// own so that no cleanup removes it while the probe runs; an inherited entry that keeps the
+    /// new folder from being opened stops the lock.
+    static func probeFolderNotLocked(_ place: String) -> String {
+        "Refused `\(place)`: a probe folder made in it cannot be locked, so another command could remove it while its probe runs. Run `chmod -N \(place)` in Terminal."
+    }
+
+    /// The commands that let the tool delete the writer's temporary files in the folder `place`:
+    /// a lock or an append-only flag on the folder or a file goes first; then `chmod -h -N`
+    /// clears the folder's entries, `chmod -h 700` a mode that keeps a delete out, and on each
+    /// file `chmod -h -N` its list, or `chmod -N` one that also denies `read`. `-h` keeps each
+    /// command on the entry itself.
+    static func temporaryFix(place: String, one: Bool) -> String {
         let each = one ? "that file" : "each of these files"
         return
-            "\(names.count) temporary \(one ? "file" : "files") the writer left in `\(place)` could not be deleted and may hold a token: \(listed(paths)). Run `chflags -h nouchg,nouappnd` first on `\(place)` and on \(one ? "that file if either is locked" : "each of these files that is locked"). Then run `chmod -h -N \(place)` and `chmod -h 700 \(place)`, and on \(each) `chmod -h -N`, or `chmod -N` \(one ? "if" : "where") that says Permission denied."
+            "Run `chflags -h nouchg,nouappnd` first on `\(place)` and on \(one ? "that file if either is locked" : "each of these files that is locked"). Then run `chmod -h -N \(place)` and `chmod -h 700 \(place)`, and on \(each) `chmod -h -N`, or `chmod -N` \(one ? "if" : "where") that says Permission denied."
     }
 
     static func launchLeftoversNotDeleted(_ label: String, _ reason: String) -> String {

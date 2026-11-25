@@ -7,7 +7,8 @@ import Foundation
 public enum TokenAccounts {
     /// What an install did.
     public struct Installed: Equatable, Sendable {
-        /// True when a token file was already there, so this was a replace.
+        /// True when a token file was already there, or a name `lstat` could not check, so this
+        /// was a replace.
         public let replaced: Bool
         /// The launch files of the label that now carry the new token.
         public let launchFilesRewritten: Int
@@ -148,7 +149,8 @@ public enum TokenAccounts {
         try TokenStore.deleteWriterLeftovers(context: context)
         // One the delete could not take may hold a token, so the save names it.
         let tokenTemporaries = TokenStore.temporariesLeft(context: context)
-        let existed = (try TokenPaths.facts(context: context, label: label)).exists
+        // A file `lstat` cannot check may hold the old token, which the save replaces.
+        let existed = (try TokenPaths.facts(context: context, label: label)).mayExist
         let config = requireAccount || existed ? try ConfigStore(context: context).load() : nil
         if requireAccount {
             guard config?.account(label)?.kind == Kind.token else {
@@ -469,20 +471,91 @@ public enum TokenAccounts {
     }
 
     /// How many of the temporary files `writerLeftovers` counts hold at least one byte, so may
-    /// hold a token, for `doctor`'s warning. An empty one, such as one the check before a `login`
-    /// sign-in could not delete, holds none; one `lstat` cannot size counts. Nothing is opened.
+    /// hold a token, and can be deleted, for `doctor`'s warning that `refresh` deletes them. An
+    /// empty one, such as one the check before a `login` sign-in could not delete, holds none; one
+    /// `lstat` cannot size counts. One a delete would fail on is named by `stuckTemporaries`
+    /// instead. Nothing is opened.
     public static func writerLeftoversWithData(context: ToolContext) -> Int {
         let writer = NoFollowWriter(root: context.dataRoot)
         let labels = ((try? writer.listNames(folders: [LaunchFiles.folder])) ?? []).filter(
             ConfigValidator.isValidLabel)
         let folders = [TokenPaths.folders] + labels.map { LaunchFiles.folders(label: $0) }
-        return folders.reduce(0) { sum, folder in
-            let names = (try? writer.leftoverTemporaries(folders: folder)) ?? []
-            return sum
-                + names.filter { name in
-                    ((try? writer.info(folders: folder, name: name))?.size ?? 1) > 0
-                }.count
+        return folders.reduce(0) { sum, folder in sum + deletableWithData(writer, folder).count }
+    }
+
+    /// The writer's temporary files directly in `folder` that `writerLeftoversWithData` counts,
+    /// by name: those with a byte in them, or that `lstat` cannot size, that a delete would not
+    /// fail on.
+    private static func deletableWithData(_ writer: NoFollowWriter, _ folder: [String]) -> [String]
+    {
+        let names = (try? writer.leftoverTemporaries(folders: folder)) ?? []
+        let stuck = Set(writer.undeletableTemporaries(folders: folder))
+        return names.filter { name in
+            !stuck.contains(name)
+                && ((try? writer.info(folders: folder, name: name))?.size ?? 1) > 0
         }
+    }
+
+    /// What `refresh` says when its upkeep did not run, read as `doctor` reads them and with
+    /// nothing deleted: the texts of `stuckTemporaries`, then one text for `tokens/` and for each
+    /// label's launch folder that holds another of the writer's temporary files that may hold a
+    /// token, which names each by its path. Names and `lstat` only.
+    static func temporariesKept(context: ToolContext) -> [String] {
+        let writer = NoFollowWriter(root: context.dataRoot)
+        var texts = stuckTemporaries(context: context)
+        let tokens = deletableWithData(writer, TokenPaths.folders)
+        if !tokens.isEmpty {
+            texts.append(Messages.temporariesKept(place: TokenStore.typedFolder, names: tokens))
+        }
+        for label in LaunchFiles.labels(context: context) {
+            let names = deletableWithData(writer, LaunchFiles.folders(label: label))
+            if names.isEmpty { continue }
+            let place = LaunchFiles.typedFolder(label: label)
+            texts.append(Messages.temporariesKept(place: place, names: names))
+        }
+        return texts
+    }
+
+    /// What `doctor` says about the writer's temporary files in `tokens/` and the launch folders
+    /// that may hold a token and that the upkeep `refresh` runs cannot delete, such as in a folder
+    /// with an append-only flag: one text for each folder that holds one, which names each by its
+    /// path and the commands that let the upkeep delete it. Names and `lstat` only.
+    public static func stuckTemporaries(context: ToolContext) -> [String] {
+        let writer = NoFollowWriter(root: context.dataRoot)
+        let tokens = writer.undeletableTemporaries(folders: TokenPaths.folders)
+        var texts =
+            tokens.isEmpty
+            ? [] : [Messages.temporariesStuck(place: TokenStore.typedFolder, names: tokens)]
+        for label in LaunchFiles.labels(context: context) {
+            let names = writer.undeletableTemporaries(folders: LaunchFiles.folders(label: label))
+            if names.isEmpty { continue }
+            texts.append(
+                Messages.temporariesStuck(
+                    place: LaunchFiles.typedFolder(label: label), names: names))
+        }
+        return texts
+    }
+
+    /// What `refresh` says once its upkeep ran, under the pick lock: one text for `tokens/` and
+    /// for each label's launch folder that still holds a writer's temporary file that may hold a
+    /// token, a name of that shape `lstat` cannot check included, which names each by its path
+    /// with the commands that let the upkeep delete it. An empty one holds no token. Names and
+    /// `lstat` only.
+    static func temporariesLeft(context: ToolContext) -> [String] {
+        let writer = NoFollowWriter(root: context.dataRoot)
+        func holding(_ folders: [String], _ names: [String]) -> [String] {
+            names.filter { ((try? writer.info(folders: folders, name: $0))?.size ?? 1) > 0 }
+        }
+        let tokens = holding(TokenPaths.folders, TokenStore.temporariesLeft(context: context))
+        var texts = tokens.isEmpty ? [] : [TokenStore.temporariesNotDeletedText(names: tokens)]
+        for label in LaunchFiles.labels(context: context) {
+            let names = holding(
+                LaunchFiles.folders(label: label),
+                LaunchFiles.temporariesLeft(context: context, label: label))
+            if names.isEmpty { continue }
+            texts.append(LaunchFiles.temporariesNotDeletedText(label: label, names: names))
+        }
+        return texts
     }
 
     /// The temporary files `uninstall` counts as may hold a token: those `writerLeftovers` counts,

@@ -66,6 +66,16 @@ public struct LeaseStore: Sendable {
         return Self.openOnes(file.leases, now: now, leaseMinutes: leaseMinutes)
     }
 
+    /// The time of the newest lease the file holds, open or not, or nil when it holds none or
+    /// cannot be read or decoded.
+    public func newestTime() -> Date? {
+        guard let data = try? reader.read(folders: Layout.stateFolders, name: Layout.leasesName),
+            let file = try? Reading.decoder().decode(LeaseFile.self, from: data),
+            file.schemaVersion == 1
+        else { return nil }
+        return file.leases.map(\.at).max()
+    }
+
     private static func openOnes(_ leases: [Lease], now: Date, leaseMinutes: Int) -> [Lease] {
         let span = Double(leaseMinutes) * 60
         return leases.filter {

@@ -19,6 +19,10 @@ struct RefreshCommand: ParsableCommand {
     func run() throws {
         let context = ToolContext.current()
         let config = try ConfigStore(context: context).loadRequired()
+        // Read before this run's probes record anything, so a clock that moved forward ages
+        // nothing by itself.
+        let recorded = Upkeep.newestRecorded(
+            context: context, labels: config.accounts.map(\.label))
         var accounts = config.accounts
         if let label {
             guard let one = config.account(label) else {
@@ -28,7 +32,7 @@ struct RefreshCommand: ParsableCommand {
         }
         guard !accounts.isEmpty else {
             // `doctor` sends people here to delete a write's leftovers, with or without accounts.
-            Upkeep.runLocked(context: context, config: config)
+            Self.upkeep(context, config, recorded)
             print("No accounts to refresh.")
             return
         }
@@ -43,10 +47,11 @@ struct RefreshCommand: ParsableCommand {
             }
         }
         let recorder = ProbeRecorder(context: context)
-        let results = Refresher(context: context, config: config)
-            .refresh(
-                accounts: accounts, force: force, reprobe: rejected,
-                watch: RefreshWatch(onResult: { recorder.record($0) }))
+        var refresher = Refresher(context: context, config: config)
+        refresher.recorded = recorded
+        let results = refresher.refresh(
+            accounts: accounts, force: force, reprobe: rejected,
+            watch: RefreshWatch(onResult: { recorder.record($0) }))
         var failed = false
         for result in results {
             let name = Display.safe(result.label)
@@ -67,7 +72,7 @@ struct RefreshCommand: ParsableCommand {
             }
             if result.failed { failed = true }
         }
-        Upkeep.runLocked(context: context, config: config)
+        Self.upkeep(context, config, recorded)
         var observations = StatusObservations()
         observations.add(recorder.unrecorded(results))
         // What the probes found is recorded however the refresh ends, after any plan is saved.
@@ -93,6 +98,16 @@ struct RefreshCommand: ParsableCommand {
         }
         try Shared.recordExpectedTiers(context: context, tiers: tiers)
         if failed { throw ExitCode.failure }
+    }
+
+    /// Runs the launch file upkeep and says which of the writer's temporary files that may hold a
+    /// token it could not delete, or, when it did not run, why and which ones are still there.
+    static func upkeep(_ context: ToolContext, _ config: Config, _ recorded: Date?) {
+        let pass = Upkeep.runLocked(context: context, config: config, recorded: recorded)
+        for text in (pass.notRun.map { [$0] } ?? []) + pass.temporariesLeft {
+            // The tool's own text, so a list of files in one prints whole.
+            print("Warning: " + Display.safe(text, limit: Int.max))
+        }
     }
 
     static func summary(_ reading: Reading, prefix: String) -> String {

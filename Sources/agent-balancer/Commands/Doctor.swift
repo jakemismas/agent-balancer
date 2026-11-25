@@ -122,6 +122,12 @@ struct DoctorCommand: ParsableCommand {
             )
         }
 
+        let stuck = TokenAccounts.stuckTemporaries(context: context)
+        for text in stuck {
+            // The tool's own text, so a list of files in one prints whole.
+            print("Error: " + Display.safe(text, limit: Int.max))
+        }
+        if !stuck.isEmpty { failed = true }
         let temporaries = TokenAccounts.writerLeftoversWithData(context: context)
         if temporaries > 0 {
             print(

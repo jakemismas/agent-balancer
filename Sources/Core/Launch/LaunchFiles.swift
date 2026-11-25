@@ -69,7 +69,8 @@ public enum LaunchFiles {
         try writer.prepare(folders: [folder])
         try writer.markExcludedFromBackup(folders: [folder])
         try writer.put(
-            data, folders: folders(label: account.label), name: fileName(leaseId: leaseId))
+            data, folders: folders(label: account.label), name: fileName(leaseId: leaseId),
+            holding: account.kind == Kind.token ? "the token of '\(account.label)'" : nil)
         return url
     }
 

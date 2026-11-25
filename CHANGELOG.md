@@ -165,6 +165,30 @@
   judged by that pick. Such a pick used to judge each account by the registry it read before its
   probes. With no registry saved by then, as after an `uninstall` that ran meanwhile, or with one it
   cannot read, `pick` exits 1 and writes no launch file and no lease.
+- The probe folder cleanup no longer removes the folder of a probe that is still running, whatever
+  the clock did: each probe holds a lock on its folder while it runs, and the cleanup keeps any
+  folder whose lock it cannot take. Launch file upkeep, and that cleanup for a folder no probe
+  holds, judge ages at the earlier of the clock and the newest time the tool recorded, its latest
+  lease or stored reading, never a time a file's metadata holds. So the first pass after the clock
+  moved forward keeps the launch file of a pick whose session has not started yet, and once the
+  tool records a later time, ages count from that time; a clock that moved back is used as it is.
+  `docs/ARCHITECTURE.md` says how both treat each.
+- When a write stops and cannot delete its temporary file, as in a folder with an append-only flag,
+  one whose access list denies you `delete_child`, or one that passes on an entry that denies you
+  `delete`, its error names the file by its path, says that it may hold the token, or that it is
+  empty when the write stopped before its first byte, and names the `chflags` and `chmod` commands
+  that let the tool delete it. `pick`, `run` and `login` print that error whole and exit 1, where
+  they said only that they could not write the file and left it in silence. `refresh` names each
+  such file that may hold a token and that its upkeep could not delete, and `doctor` names each one
+  with those commands and exits 1, where it said that `refresh` deletes them and exited 0. When its
+  upkeep does not run, as while another command holds the pick lock or when `state/leases.json`
+  cannot be read, `refresh` says so and why, where it said nothing, and names each such file that
+  is still there.
+- `status`, `pick` and `run` say that the token file cannot be checked, and name the token folder
+  and its fix, when you cannot search that folder, where they said `No token saved`. `login` reports
+  a token file it could not check at the save as replaced: it prints how many launch files it
+  rewrote and that the old token may keep working, and records `token_replaced`, where it reported a
+  first save.
 
 ## 1.1.0
 

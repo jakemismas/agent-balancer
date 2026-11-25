@@ -184,7 +184,16 @@ data folder sits inside a known sync folder, such as iCloud Drive or Dropbox. A 
 access list lets another user or group in is not used, a token folder with such a list is
 refused, and `agent-balancer doctor` names each with the command that clears it. A write cut
 off part way can leave a temporary copy in those folders until the next `agent-balancer remove`,
-replace or launch file cleanup deletes it; `agent-balancer doctor` counts any that are left.
+replace or launch file cleanup deletes it; `agent-balancer doctor` counts any that are left. A
+lock, an append-only flag, an access list or a folder mode on the folder or on the copy can keep
+the write and that cleanup from deleting it. Then `agent-balancer pick`, `agent-balancer run` and
+`agent-balancer login` name the copy by its path with the commands that clear what keeps it,
+`agent-balancer refresh` says that it left one, and `agent-balancer doctor` names it and exits 1.
+Run the commands it names, then `agent-balancer refresh`, which deletes the copy. A write that
+stops before its first byte leaves an empty file, which they name as empty with the same commands;
+it holds no token, so `agent-balancer refresh` and `agent-balancer doctor` say nothing of it. When
+`agent-balancer refresh` cannot run that cleanup, as while another command holds its lock, it says
+why and names each copy that is still there.
 
 - A leaked token can make model requests on that subscription for up to a year. Treat the folder
   like a password store.

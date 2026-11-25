@@ -10,6 +10,9 @@ extension NoFollowWriter {
         /// The step's name, for the test seam.
         public let step: String
         public var targets: [Target]
+        /// The time the check of a `scratch` target judges the age of a probe folder another
+        /// probe left at, or nil for the clock.
+        public var judgedAt: Date?
 
         public init(step: String, targets: [Target]) {
             self.step = step
@@ -122,7 +125,8 @@ extension NoFollowWriter {
             if target.uses.contains(.mark) { try markExcludedFromBackup(folders: target.folders) }
             if target.uses.contains(.scratch) {
                 try requireScratchable(
-                    parent: target.folders, prefix: target.prefix, staleAfter: target.staleAfter)
+                    parent: target.folders, prefix: target.prefix, staleAfter: target.staleAfter,
+                    judgedAt: plan.judgedAt ?? Date())
             }
             guard let name = target.name else { continue }
             if target.uses.contains(.lock) {

@@ -109,6 +109,31 @@ public enum Messages {
         "A shared link is broken. Run `agent-balancer link --repair \(Display.safe(label, limit: 32))` in Terminal. If repair refuses, fix the item it names, in the default folder or in the account folder, then run it again."
     }
 
+    /// What `verify` adds to the broken-link text when a listed link's default folder item now
+    /// resolves elsewhere.
+    public static func olderTargetDetail(_ name: String) -> String {
+        "the link of \(name) points to an older target than the default folder's \(name)"
+    }
+
+    /// The reason `pick` and `run` give for such a link.
+    public static func olderTarget(_ label: String, _ name: String) -> String {
+        "The link of \(name) points to an older target. Run `agent-balancer link --repair \(Display.safe(label, limit: 32))` in Terminal."
+    }
+
+    /// What a check says when a listed link's default folder item exists but no longer resolves:
+    /// `link --repair` refuses such an item until it is fixed.
+    public static func unresolvedItem(_ label: String, _ name: String) -> String {
+        "The default folder's \(name) no longer resolves. Fix it there first, then run `agent-balancer link --repair \(Display.safe(label, limit: 32))` in Terminal."
+    }
+
+    /// What a check says when `lstat` cannot check a listed link's default folder item, as when
+    /// its access list denies `readattr`. It may be a link, so `-h` keeps each command on the
+    /// item itself. `link --repair` is not named: `link` would read the item as gone and drop
+    /// its link.
+    public static func uncheckedItem(_ name: String, _ place: String) -> String {
+        "The default folder's \(name) cannot be checked, so the tool cannot tell where it resolves. Run `chmod -h -N \(place)`, or `chmod -N \(place)` if that says Permission denied, in Terminal. Run `chflags -h nouchg,nouappnd \(place)` first if it is locked."
+    }
+
     public static let oneAccountPerFolder =
         "Never sign a different account into a folder that already has chats. Add a new folder for the new account instead."
 

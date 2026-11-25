@@ -29,7 +29,7 @@ seconds and wait up to 30 seconds for the pick lock.
 | Flag | Use it to |
 |---|---|
 | `--caller launcher` | Say that your program starts `claude` itself, so the answer carries `unsetEnv`. The default, `typed`, is for a caller that types a command line. |
-| `--model <model>` | Name the model the launch is for. A name with `fable` in it also needs room in the Fable allowance. |
+| `--model <model>` | Name the model the launch is for, and start `claude` with the same model. A name with `fable` in it also needs room in the Fable allowance. Without it, or with a name the tool cannot place, such as default or best, the pick leaves out every account set to refuse Fable launches. |
 | `--full-login` | Get only accounts with a full login, for a session that needs claude.ai connectors, Remote Control or claude.ai skills. |
 | `--exclude <label>` | Leave out an account your own check refused, or one whose worker just hit a limit. Repeat it for more labels. |
 | `--settings '<json>'` | Pass your own settings for the session, as one JSON object. Never pass `--settings` to `claude` yourself. |
@@ -115,7 +115,8 @@ do not know: new ones may appear within schema version 1.
 
 Start `claude` with your own environment, minus every name in `unsetEnv`, plus every entry of
 `env`, and with `args` after your own flags, as an argument array. Never paste any of it into a
-shell string, and never branch on the account kind: the recipe is the same for every account.
+shell string, and never branch on the account kind: the recipe is the same for every account. Your
+own flags carry the same `--model` you gave `pick`.
 
 A sketch in Python:
 
@@ -140,11 +141,12 @@ def launch(answer, own_flags, prompt):
     return subprocess.Popen(["claude", *own_flags, *answer["args"], prompt], env=env)
 
 
-answer = pick("opus")
+model = "opus"
+answer = pick(model)
 if answer["label"] is None:
     print("No account has room:", answer["reason"])
 else:
-    launch(answer, ["-p"], "Summarize the open issues")
+    launch(answer, ["-p", "--model", model], "Summarize the open issues")
 ```
 
 Launch within the lease window, `picker.leaseMinutes` (10 minutes by default). A pick you did not

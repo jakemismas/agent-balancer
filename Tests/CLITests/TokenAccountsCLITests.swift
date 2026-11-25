@@ -767,6 +767,46 @@ private final class Started: @unchecked Sendable {
         #expect(warnings.contains { $0["code"] as? String == "possible_duplicate" } == both)
     }
 
+    /// lab-a reads a weekly reset 400000 seconds out and a 5-hour reset 10000 seconds out; lab-b
+    /// reads a 5-hour window with no reset time, so the weekly time alone decides against lab-a's
+    /// stored reading. The warning stays advisory: pick keeps both.
+    @Test(arguments: [(400_000, true), (350_000, false)])
+    func aSideWithNoFiveHourResetMatchesOnTheWeeklyTimeAlone(week: Int, warns: Bool) throws {
+        let cli = try setUp()
+        defer { cli.cleanup() }
+        try addLab(cli, "lab-a")
+        try addLab(cli, "lab-b")
+        // One clock read for both replies, so the two weekly times cannot straddle a minute.
+        let now = Int(Date().timeIntervalSince1970)
+        let stream = try String(
+            contentsOf: cli.fixtures.appendingPathComponent("probe/ok.jsonl"), encoding: .utf8)
+        func reply(week: Int, five: String) -> String {
+            stream.replacingOccurrences(of: "@RESET_5H@", with: five)
+                .replacingOccurrences(of: "@RESET_7D@", with: "\(now + week)")
+        }
+        // Main reads other times, so only lab-a can match lab-b.
+        try cli.fake("probe.jsonl", reply(week: 200_000, five: "\(now + 2_000)"))
+        try cli.fake("probe-for-lab-a.jsonl", reply(week: 400_000, five: "\(now + 10_000)"))
+        try cli.fake("probe-for-lab-b.jsonl", reply(week: week, five: "null"))
+        try cli.fake("setup-token.out", oauth() + "\n")
+        let first = try cli.run(["login", "lab-a"])
+        #expect(first.status == 0)
+        #expect(!text(first.stdout).contains("possible_duplicate"))
+        try cli.fake("setup-token.out", oauth() + "\n")
+        let out = try cli.run(["login", "lab-b"])
+        #expect(out.status == 0)
+        #expect(text(out.stdout).contains("possible_duplicate") == warns, "\(week)")
+        #expect(text(out.stdout).contains("lab-a") == warns, "\(week)")
+        let warnings = try row(cli, "lab-b")["warnings"] as? [[String: Any]] ?? []
+        #expect(warnings.contains { $0["code"] as? String == "possible_duplicate" } == warns)
+        let pick = try cli.run(["pick", "--dry-run", "--json"])
+        let candidates = try #require(try object(pick)["candidates"] as? [[String: Any]])
+        for label in ["lab-a", "lab-b"] {
+            let candidate = try #require(candidates.first { $0["label"] as? String == label })
+            #expect(candidate["eligible"] as? Bool == true, "\(label)")
+        }
+    }
+
     @Test func aTokenFileSwappedForAnotherAccountsTokenWarnsOnTheNextProbe() throws {
         let cli = try setUp()
         defer { cli.cleanup() }

@@ -344,6 +344,146 @@ import Testing
         #expect(out.failures.first?.text.contains("Settings not shared.") == true)
     }
 
+    @Test func aDefaultFolderItemThatNoLongerResolvesToTheTargetFailsWithoutBeingOpened() throws {
+        let (t, context) = try setUp()
+        defer { withExtendedLifetime(t) {} }
+        let fm = FileManager.default
+        let dotfiles = t.home.appendingPathComponent("dotfiles")
+        try fm.createDirectory(at: dotfiles, withIntermediateDirectories: true)
+        let first = dotfiles.appendingPathComponent("CLAUDE.md")
+        let second = dotfiles.appendingPathComponent("OTHER.md")
+        for file in [first, second] {
+            try "notes".write(to: file, atomically: true, encoding: .utf8)
+        }
+        let source = t.home.appendingPathComponent(".claude/CLAUDE.md")
+        try fm.removeItem(at: source)
+        try fm.createSymbolicLink(at: source, withDestinationURL: first)
+        _ = try link(context)
+        #expect(Verifier.linkFacts(context: context, label: "spare").verdict == .ok)
+
+        // A pipe in the item's place: opening it to read would wait for a writer that never comes.
+        try fm.removeItem(at: source)
+        #expect(mkfifo(source.path, 0o600) == 0)
+        let seen = VerdictBox()
+        let done = DispatchSemaphore(value: 0)
+        let check = Thread {
+            seen.value = Verifier.linkFacts(context: context, label: "spare").verdict
+            done.signal()
+        }
+        check.start()
+        #expect(done.wait(timeout: .now() + 120) == .success, "the check opened the pipe")
+        #expect(seen.value == .unresolved("CLAUDE.md"))
+
+        // Pointed at another file.
+        try fm.removeItem(at: source)
+        try fm.createSymbolicLink(at: source, withDestinationURL: second)
+        #expect(
+            Verifier.linkFacts(context: context, label: "spare").verdict
+                == .olderTarget("CLAUDE.md"))
+        // A repair links the new target; an item gone from the default folder fails nothing.
+        _ = try link(context, repair: true)
+        #expect(try destination(context, "CLAUDE.md") == real(second))
+        #expect(Verifier.linkFacts(context: context, label: "spare").verdict == .ok)
+        try fm.removeItem(at: source)
+        #expect(Verifier.linkFacts(context: context, label: "spare").verdict == .ok)
+    }
+
+    /// The default folder's `name` made a link into a dotfiles folder, then linked.
+    func linkThroughDotfiles(_ t: TestHome, _ context: ToolContext, _ name: String) throws -> URL {
+        let fm = FileManager.default
+        let dotfiles = t.home.appendingPathComponent("dotfiles")
+        try fm.createDirectory(at: dotfiles, withIntermediateDirectories: true)
+        let source = t.home.appendingPathComponent(".claude/\(name)")
+        let first = dotfiles.appendingPathComponent(name)
+        try fm.moveItem(at: source, to: first)
+        try fm.createSymbolicLink(at: source, withDestinationURL: first)
+        // A reader saves the settings verdict that `link` takes.
+        _ = try HookRecord(context: context).readSettings()
+        _ = try link(context)
+        #expect(Verifier.linkFacts(context: context, label: "spare").verdict == .ok)
+        return source
+    }
+
+    /// What `verify`, `pick`, `run` and `status` say about the folder account `spare`.
+    func refusals(_ context: ToolContext) throws -> [String?] {
+        let account = try #require(
+            try ConfigStore(context: context).loadRequired().account("spare"))
+        let failure = Verifier.failures(
+            context: context, account: account, runner: ClaudeRunner(context: context),
+            settingsIssue: nil, now: Date(), stopAtFirst: false
+        ).failures.first
+        let candidate = try pick(context, PickRequest(dryRun: true)).candidates
+            .first { $0.label == "spare" }
+        var refused: String?
+        do {
+            _ = try PickService(context: context).prepareRun(
+                label: "spare", arguments: [], printOnly: true)
+        } catch {
+            refused = (error as? ToolError)?.message
+        }
+        let row = try StatusBuilder.rebuild(context: context)?.accounts.first {
+            $0.label == "spare"
+        }
+        return [
+            failure?.text, failure?.code.rawValue, candidate?.reason, refused, row?.error?.text,
+            row?.error?.code,
+        ]
+    }
+
+    @Test func aDefaultFolderItemThatNoLongerResolvesNamesItselfAsTheItemToFixFirst() throws {
+        let (t, context) = try setUp()
+        defer { withExtendedLifetime(t) {} }
+        let source = try linkThroughDotfiles(t, context, "CLAUDE.md")
+        // The link now goes nowhere, as after its dotfiles folder moved; its old target stays.
+        let fm = FileManager.default
+        try fm.removeItem(at: source)
+        try fm.createSymbolicLink(
+            at: source, withDestinationURL: t.home.appendingPathComponent("moved/CLAUDE.md"))
+        let text =
+            "The default folder's CLAUDE.md no longer resolves. Fix it there first, then run `agent-balancer link --repair spare` in Terminal."
+        #expect(
+            try refusals(context) == [
+                text, "settings_changed", text, text, text, "settings_changed",
+            ])
+    }
+
+    @Test func aDefaultFolderItemThatCannotBeCheckedFailsAndNamesTheCommandsThatClearIt() throws {
+        let (t, context) = try setUp()
+        defer { withExtendedLifetime(t) {} }
+        let source = try linkThroughDotfiles(t, context, "settings.json")
+        // Pointed at another file with the same hooks, which `open` still reads through the link.
+        let second = t.home.appendingPathComponent("dotfiles/settings-b.json")
+        try Self.hookSettings.write(to: second, atomically: true, encoding: .utf8)
+        let fm = FileManager.default
+        try fm.removeItem(at: source)
+        try fm.createSymbolicLink(at: source, withDestinationURL: second)
+        #expect(
+            Verifier.linkFacts(context: context, label: "spare").verdict
+                == .olderTarget("settings.json"))
+        // An access list on the link itself that denies reading its attributes: `lstat` fails.
+        #expect(try chmodTool(["-h", "+a", NSUserName() + " deny readattr", source.path]) == 0)
+        defer { _ = try? chmodTool(["-h", "-N", source.path]) }
+        var st = stat()
+        let failed = lstat(source.path, &st) != 0
+        let code = errno
+        #expect(failed && code == EACCES)
+        let place = "~/.claude/settings.json"
+        let text =
+            "The default folder's settings.json cannot be checked, so the tool cannot tell where it resolves. Run `chmod -h -N \(place)`, or `chmod -N \(place)` if that says Permission denied, in Terminal. Run `chflags -h nouchg,nouappnd \(place)` first if it is locked."
+        #expect(try refusals(context) == [text, "check_failed", text, text, text, "check_failed"])
+        #expect(!text.contains("link --repair"))
+    }
+
+    /// Runs `/bin/chmod` with `arguments` and returns its exit status.
+    func chmodTool(_ arguments: [String]) throws -> Int32 {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/bin/chmod")
+        task.arguments = arguments
+        try task.run()
+        task.waitUntilExit()
+        return task.terminationStatus
+    }
+
     @Test func aBrokenOrChangedLinkAndAMissingTargetFail() throws {
         let (t, context) = try setUp()
         defer { withExtendedLifetime(t) {} }
@@ -786,5 +926,24 @@ import Testing
         let leftovers = try TokenAccounts.hasLeftovers(context: context, label: "spare")
         #expect(!leftovers)
         #expect(try ConfigStore(context: context).loadRequired().account("spare") == nil)
+    }
+}
+
+/// What a check on another thread found, once it has.
+private final class VerdictBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: FolderVerdict?
+
+    var value: FolderVerdict? {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return stored
+        }
+        set {
+            lock.lock()
+            stored = newValue
+            lock.unlock()
+        }
     }
 }

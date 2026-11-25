@@ -428,8 +428,10 @@ enum Transitions {
         if account.kind == Kind.folder, let facts = input.folder {
             switch facts.verdict {
             case .notLinked: add(.notLinked, Messages.notLinked(account.label))
-            case .broken: add(.settingsChanged, Messages.linkBroken(account.label))
-            case .refused(let text): add(.checkFailed, text)
+            case .broken, .olderTarget: add(.settingsChanged, Messages.linkBroken(account.label))
+            case .unresolved(let name):
+                add(.settingsChanged, Messages.unresolvedItem(account.label, name))
+            case .refused(let text), .unchecked(let text): add(.checkFailed, text)
             case .ok:
                 // A folder that shares the settings link is hit by a hook change like every other
                 // account; one that shares none has no hooks to lose.

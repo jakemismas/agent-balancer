@@ -8,6 +8,16 @@ public enum FolderVerdict: Equatable, Sendable {
     case notLinked
     /// A listed link or its target is gone or changed.
     case broken(String)
+    /// A listed link still points at its recorded target, but the default folder's item now
+    /// resolves elsewhere. It names the item.
+    case olderTarget(String)
+    /// A listed link still points at its recorded target, but the default folder's item no
+    /// longer resolves: a link to nothing, or an item that is not yours or not a plain file or
+    /// folder. It names the item.
+    case unresolved(String)
+    /// The default folder's item of a listed link cannot be checked; the text names the item and
+    /// the commands that let the tool check it.
+    case unchecked(String)
     /// The folder checks refuse the account's folder; the text names it and its fix.
     case refused(String)
 }
@@ -37,7 +47,8 @@ public enum Verifier {
 
     /// Checks 1 and 2: every shared source that exists is listed, and each listed link is still a symlink to its recorded target, and each target
     /// still exists, is owned by the user, and is a file (the two files) or a folder (the three
-    /// folders). No process runs and no settings file is read.
+    /// folders), and is still where the default folder's item resolves. No process runs and no
+    /// settings file is read.
     public static func linkFacts(context: ToolContext, label: String) -> FolderFacts {
         let hooks = HookRecord(context: context)
         // A folder the checks refuse is named with its fix, never as a broken or missing link.
@@ -72,6 +83,10 @@ public enum Verifier {
                 return FolderFacts(
                     verdict: .broken("the target of \(name) is not yours or has changed type"),
                     sharesSettings: shares)
+            }
+            // A default folder item pointed elsewhere leaves this account on the old target.
+            if let verdict = hooks.defaultItemVerdict(entry, isFolder: item.isFolder) {
+                return FolderFacts(verdict: verdict, sharesSettings: shares)
             }
         }
         if let name = hooks.firstUnlinkedSource(for: label) {
@@ -113,7 +128,16 @@ public enum Verifier {
                     code: .settingsChanged, reason: "link broken",
                     text: Messages.linkBroken(account.label) + " "
                         + Display.safe(detail, limit: 120)))
-        case .refused(let text):
+        case .olderTarget(let name):
+            found.append(
+                Failure(
+                    code: .settingsChanged, reason: Messages.olderTarget(account.label, name),
+                    text: Messages.linkBroken(account.label) + " "
+                        + Messages.olderTargetDetail(name)))
+        case .unresolved(let name):
+            let text = Messages.unresolvedItem(account.label, name)
+            found.append(Failure(code: .settingsChanged, reason: text, text: text))
+        case .refused(let text), .unchecked(let text):
             found.append(Failure(code: .checkFailed, reason: text, text: text))
         case .ok: break
         }

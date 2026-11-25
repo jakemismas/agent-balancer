@@ -103,6 +103,9 @@ public enum ReadingMerge {
         return kept
     }
 
+    /// The Fable reading follows `window`, except that a reply with the stored use in the same
+    /// window also gives the reading its time and weekly use, which the Fable age and rise rules
+    /// of a pick count from (section 7.4).
     static func mergeFable(stored: FableReading?, incoming: FableReading, now: Date)
         -> FableReading
     {
@@ -114,7 +117,8 @@ public enum ReadingMerge {
         let new = WindowReading(
             usedPercent: used, resetsAt: incoming.resetsAt, readAt: incoming.readAt ?? now)
         let kept = window(stored: old, incoming: new, now: now, name: WindowName.fable)
-        if kept == old { return stored }
+        let confirmed = used == storedUsed && sameWindow(stored.resetsAt, incoming.resetsAt)
+        if kept == old && !confirmed { return stored }
         // A held window keeps its reset time; the use, its time and the weekly use come from the
         // reply.
         var merged = incoming

@@ -17,12 +17,15 @@ state and is slower. Never parse the menu bar app or the log files.
 
 ## Before every launch
 
-1. Run `agent-balancer pick --json --model <model>` with a command timeout of at least 90 seconds.
+1. Run `agent-balancer pick --json --model <model>` with a command timeout of at least 90 seconds,
+   where `<model>` is the model your launch line starts. If your launch line names no model, leave
+   `--model` out; `pick` then skips accounts set to refuse Fable launches.
 2. Read the exit code.
    - Exit 0: a recipe. Apply it.
    - Exit 2: nothing fits. Do not launch. Leave the work waiting and show `reason` to the user.
    - Exit 1: no pick. Report the error text and stop.
-3. Apply `env` and `args` (or the typed strings) the same way for every account.
+3. Apply `env` and `args` (or the typed strings) the same way for every account. Your own flags
+   carry the same `--model <model>` you gave `pick`, or none when you gave it none.
    - Typing a line: type `<launchPrefix>claude <your own flags> <launchArgs> '<prompt>'` as one
      literal line. Copy `launchPrefix` and `launchArgs` exactly. Never rebuild them, never wrap
      the line in a script, never use a substitution. When `backgroundOnly` is true, the line must

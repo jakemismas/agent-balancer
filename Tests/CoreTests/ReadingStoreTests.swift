@@ -129,6 +129,67 @@ import Testing
         }
     }
 
+    /// A Fable pick of `reading` on a pool account a minute after `at`.
+    func fablePick(_ reading: Reading, at: Date) -> PickDecision {
+        let account = Account(label: "a", kind: Kind.token, role: Role.pool)
+        return Picker.decide(
+            inputs: [PickInput(account: account, reading: reading)], config: Config(),
+            model: .fable, openLeases: [:], now: at.addingTimeInterval(60))
+    }
+
+    @Test func aFableReprobeWithTheSameUseKeepsAFablePickOpenADayLater() throws {
+        let t = try TestHome()
+        let store = ReadingStore(context: t.context)
+        _ = try store.record(
+            reading(week: 40, at: t0, fableUsed: 31), label: "a", callsHook: false,
+            fable: fable, now: t0)
+        // 25 hours later, before the window resets, the probe shows the same Fable use.
+        let later = t0.addingTimeInterval(25 * 3_600)
+        let merged = try store.record(
+            reading(week: 40, at: later, fableUsed: 31), label: "a", callsHook: false,
+            fable: fable, now: later)
+        #expect(merged.fable?.usedPercent == 31)
+        #expect(merged.fable?.readAt == later)
+        let d = fablePick(merged, at: later)
+        #expect(d.chosen == 0, "\(d.candidates.first?.reason ?? "")")
+        #expect(d.reason.contains("Fable at least 69% of cap left."))
+    }
+
+    @Test func theFableRiseRuleCountsFromTheProbeThatConfirmedTheUse() throws {
+        let t = try TestHome()
+        let store = ReadingStore(context: t.context)
+        _ = try store.record(
+            reading(week: 40, at: t0, fableUsed: 31), label: "a", callsHook: false,
+            fable: fable, now: t0)
+        // All-models use rose 8 points; ten minutes later the probe shows the same Fable use.
+        let later = t0.addingTimeInterval(600)
+        let risen = try store.record(
+            reading(week: 48, at: later, fableUsed: 31), label: "a", callsHook: false,
+            fable: fable, now: later)
+        #expect(risen.fable?.readAt == later)
+        #expect(risen.fable?.weeklyUsedPercentAtRead == 48)
+        let d = fablePick(risen, at: later)
+        #expect(d.chosen == 0, "\(d.candidates.first?.reason ?? "")")
+    }
+
+    @Test func aLowerFableUseInTheSameWindowNeverLowersTheStoredUseOrMovesItsTime() throws {
+        let t = try TestHome()
+        let store = ReadingStore(context: t.context)
+        let first = try store.record(
+            reading(week: 40, at: t0, fableUsed: 31), label: "a", callsHook: false,
+            fable: fable, now: t0)
+        let later = t0.addingTimeInterval(25 * 3_600)
+        let merged = try store.record(
+            reading(week: 40, at: later, fableUsed: 20), label: "a", callsHook: false,
+            fable: fable, now: later)
+        #expect(merged.fable == first.fable)
+        #expect(try store.load(label: "a")?.fable?.usedPercent == 31)
+        // The lower reply confirms nothing, so the reading is as old as the reply that showed it.
+        let d = fablePick(merged, at: later)
+        #expect(d.chosen == nil)
+        #expect(d.candidates.first?.reason == "Fable reading is stale, refresh failed.")
+    }
+
     @Test func theFableReadingMergesByTheSameRule() {
         let merged = ReadingMerge.merge(
             stored: reading(week: 50, at: t0, fableUsed: 70),

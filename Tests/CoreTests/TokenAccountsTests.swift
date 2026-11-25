@@ -424,6 +424,36 @@ private func dataText(_ t: TestHome, skipping: URL) -> String {
             TokenKind.duplicateText("main")
                 == "Same reset times as main. If this is the same account, remove one.")
     }
+
+    /// A side's 5-hour state: a reset still ahead, no window, a window with no reset time, or a
+    /// reset that has passed.
+    static let fiveHourStates = ["ahead", "no window", "no reset time", "passed"]
+
+    /// Every pair of states, the probed side first, where at least one side has no reset ahead.
+    static let pairsWithoutTwoResetsAhead = fiveHourStates.flatMap { mine in
+        fiveHourStates.map { (mine, $0) }
+    }.filter { $0 != ("ahead", "ahead") }
+
+    func reading(week: TimeInterval, fiveHour state: String) -> Reading {
+        var r = reading(week: week, five: state == "passed" ? -10 : 9_000)
+        if state == "no window" { r.windows[WindowName.fiveHour] = nil }
+        if state == "no reset time" { r.windows[WindowName.fiveHour]?.resetsAt = nil }
+        return r
+    }
+
+    @Test(arguments: TokenDuplicateTests.pairsWithoutTwoResetsAhead)
+    func aSideWithNoFiveHourResetAheadMatchesOnTheWeeklyTimeAlone(mine: String, other: String) {
+        for (apart, found) in [(0.0, ["main"]), (60.0, [])] as [(TimeInterval, [String])] {
+            let readings = [
+                "main": reading(week: 400_000, fiveHour: other),
+                "pool-a": reading(week: 400_000 + apart, fiveHour: mine),
+            ]
+            #expect(
+                TokenKind.possibleDuplicates(
+                    of: "pool-a", accounts: accounts, readings: readings, now: now) == found,
+                "\(mine), \(other), \(apart) seconds apart")
+        }
+    }
 }
 
 @Suite struct TokenExpiryTests {

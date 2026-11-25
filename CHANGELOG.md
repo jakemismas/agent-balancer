@@ -133,6 +133,38 @@
   `launch_file_missing` and `doctor` counted 0 for such a folder. `add` refuses a label whose token
   file it cannot check, or whose token folder it cannot list, search or check, as it refuses one
   whose token file it can see, and names the commands that let the tool check it.
+- A Fable probe that shows the stored Fable use again, in the same window, now gives the Fable
+  reading its own read time and weekly use, so `pick --model fable` no longer refuses the account as
+  `Fable reading is stale, refresh failed.` from a day after the first Fable reading while each new
+  probe confirms the use. A lower use in the same window still never lowers the stored use, and
+  leaves the read time as it was. The architecture document says which time the Fable age counts
+  from.
+- The architecture document's error table and test plan state the duplicate warning's rule as the
+  tool applies it: with no 5-hour reset still ahead on one side, as on an idle account or one whose
+  plan has no 5-hour limit, equal weekly reset times alone raise `possible_duplicate`. They used to
+  say both reset times had to match.
+- `pick` with no `--model`, or with a name it cannot place as Fable or not, such as `default` or
+  `best`, now skips every account set with `fable.allowLaunches: false`, the main account included,
+  and its reason says `Model unknown, so Fable room not checked.` A name with `opus`, `sonnet` or
+  `haiku` in it is judged as before. Such a pick used to return an account set to refuse Fable
+  launches, whose session could then run a Fable model. The contract, the orchestrator page and the
+  skill now say to start `claude` with the same `--model` you give `pick`.
+- `verify`, `pick` and `run` now refuse a folder account whose listed link still points at the
+  target `link` recorded while the default folder's item resolves elsewhere, as after you point the
+  default folder's `settings.json` link at another file, and `status` shows the account's shared
+  link as broken. The reason names `agent-balancer link --repair <label>`, which links the new
+  target. Such an account used to read the old file while the hook check read the new one. A
+  default folder item that no longer resolves, or that the tool cannot check, as when its access
+  list denies reading its attributes, now fails the account too, with a text that names the item
+  and its fix.
+- `pick` now decides on the registry as saved once it holds the pick lock, so a `config set-main`,
+  `config clear-main` or `config set` saved while its probes ran or while it waited for the lock
+  counts: an account made the main account meanwhile is held to its reserve line. An account whose
+  key, kind or email changed meanwhile is still skipped as
+  `the account changed while the pick waited`, and an account added meanwhile is neither probed nor
+  judged by that pick. Such a pick used to judge each account by the registry it read before its
+  probes. With no registry saved by then, as after an `uninstall` that ran meanwhile, or with one it
+  cannot read, `pick` exits 1 and writes no launch file and no lease.
 
 ## 1.1.0
 

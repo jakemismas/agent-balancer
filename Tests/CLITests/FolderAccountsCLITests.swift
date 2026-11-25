@@ -409,6 +409,59 @@ private func text(_ data: Data) -> String { String(decoding: data, as: UTF8.self
         #expect(try cli.run(["verify", "spare", "--no-reading"]).status == 0)
     }
 
+    @Test func aSettingsLinkPointedAtAnotherFileAfterLinkIsRefusedUntilRepair() throws {
+        let cli = try setUp()
+        defer { cli.cleanup() }
+        let fm = FileManager.default
+        // The default folder's settings file is a link into a dotfiles folder, as `link` saw it.
+        let dotfiles = cli.home.appendingPathComponent("dotfiles")
+        try fm.createDirectory(at: dotfiles, withIntermediateDirectories: true)
+        let first = dotfiles.appendingPathComponent("settings-a.json")
+        let second = dotfiles.appendingPathComponent("settings-b.json")
+        for file in [first, second] {
+            try Self.hookSettings.write(to: file, atomically: true, encoding: .utf8)
+        }
+        let shared = cli.home.appendingPathComponent(".claude/settings.json")
+        try fm.removeItem(at: shared)
+        try fm.createSymbolicLink(at: shared, withDestinationURL: first)
+        // A reader saves the settings verdict that `link` takes, as the refusal says to.
+        _ = try cli.run(["doctor"])
+        try linked(cli)
+        #expect(try cli.run(["verify", "spare", "--no-reading"]).status == 0)
+        let before = try #require(try destination(cli, "settings.json"))
+
+        // The default folder's link now points at another file with the same hooks.
+        try fm.removeItem(at: shared)
+        try fm.createSymbolicLink(at: shared, withDestinationURL: second)
+        let repair = "agent-balancer link --repair spare"
+        let verify = try cli.run(["verify", "spare", "--no-reading"])
+        #expect(verify.status == 1)
+        #expect(text(verify.stdout).contains(repair))
+        #expect(text(verify.stdout).contains("points to an older target"))
+        let pick = try cli.run(["pick", "--json", "--dry-run"])
+        let candidates = try #require(try json(pick)["candidates"] as? [[String: Any]])
+        let spare = try #require(candidates.first { $0["label"] as? String == "spare" })
+        #expect(spare["eligible"] as? Bool == false)
+        #expect(spare["reason"] as? String == Messages.olderTarget("spare", "settings.json"))
+        #expect((spare["reason"] as? String)?.contains(repair) == true)
+        let run = try cli.run(["run", "spare"])
+        #expect(run.status == 1)
+        #expect(text(run.stderr).contains(repair))
+        let error = try row(cli, "spare")["error"] as? [String: Any]
+        #expect(error?["code"] as? String == "settings_changed")
+        #expect((error?["text"] as? String)?.contains(repair) == true)
+
+        // Repair links the new target, and the account is offered again.
+        let repaired = try cli.runOnTerminal(["link", "--repair", "spare"], typing: "spare\n")
+        #expect(repaired.status == 0, "\(text(repaired.stderr))")
+        let after = try #require(try destination(cli, "settings.json"))
+        #expect(after != before && after.hasSuffix("/dotfiles/settings-b.json"))
+        #expect(try cli.run(["verify", "spare", "--no-reading"]).status == 0)
+        let again = try cli.run(["pick", "--json", "--dry-run"])
+        let offered = try #require(try json(again)["candidates"] as? [[String: Any]])
+        #expect(offered.first { $0["label"] as? String == "spare" }?["eligible"] as? Bool == true)
+    }
+
     @Test func verifyFailsWhenTheSignInFolderIsNotReported() throws {
         let cli = try setUp()
         defer { cli.cleanup() }

@@ -666,6 +666,30 @@ import Testing
         #expect(stored.fiveHour == nil)
     }
 
+    @Test func aPickThatNamesNoPlacedModelSkipsAMainAccountThatRefusesFableLaunches() throws {
+        var main = login(role: Role.main)
+        main.fable = AccountFable(allowLaunches: false)
+        let (t, service) = try setUp([main])
+        // Weekly use 10 percent, its reset 3 days out, and a 5-hour window.
+        let seconds = Int(Date().timeIntervalSince1970)
+        try t.fake(
+            "probe.jsonl",
+            "{\"type\":\"rate_limit_event\",\"rate_limit_info\":{\"status\":\"allowed\","
+                + "\"unifiedWindows\":{\"five_hour\":{\"utilization\":0.1,\"resetsAt\":"
+                + "\(seconds + 3_600)},\"seven_day\":{\"utilization\":0.1,\"resetsAt\":"
+                + "\(seconds + 3 * 86_400)}}}}\n")
+        let skipped =
+            "No account has room. main: Model unknown, and Fable launches not allowed on the main account."
+        for request in [PickRequest(dryRun: true), PickRequest(model: "default", dryRun: true)] {
+            let result = try service.pick(request)
+            #expect(result.label == nil, "\(request.model ?? "none")")
+            #expect(result.reason == skipped, "\(request.model ?? "none")")
+        }
+        let haiku = try service.pick(PickRequest(model: "haiku", dryRun: true))
+        #expect(haiku.label == "main")
+        #expect(!haiku.reason.contains("Model unknown"))
+    }
+
     @Test func aStoredReadingThatCannotBeReadCountsAsNoFiveHourWindow() throws {
         let missing = "No 5-hour reading, which the main account needs."
         for role in [Role.pool, Role.main] {
@@ -879,6 +903,15 @@ import Testing
         let plain = try service.pick(PickRequest(model: "opus"))
         #expect(plain.label == "pool-a")
         #expect(!t.fakeRecord("models.log").contains("fable"))
+        // A model the tool cannot place starts no Fable probe and says the room was not checked.
+        for request in [PickRequest(dryRun: true), PickRequest(model: "default", dryRun: true)] {
+            let unknown = try service.pick(request)
+            #expect(unknown.label == "pool-a", "\(request.model ?? "none")")
+            #expect(
+                unknown.reason.hasSuffix(" Model unknown, so Fable room not checked."),
+                "\(request.model ?? "none")")
+            #expect(!t.fakeRecord("models.log").contains("fable"), "\(request.model ?? "none")")
+        }
         let fable = try service.pick(PickRequest(model: "fable"))
         #expect(fable.label == "pool-a")
         #expect(t.fakeRecord("models.log").contains("fable"))

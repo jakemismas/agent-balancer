@@ -125,28 +125,35 @@ public struct PickService: Sendable {
         defer { lock.release() }
 
         let now = clock()
+        // A role, reserve or end saved while the probes ran or the pick waited counts.
+        let current = try Self.registryNow(checked: config, context: context)
+        let decided = current.config
+        let accounts = current.accounts
         let leaseStore = LeaseStore(context: context)
-        var leases = try leaseStore.current(now: now, leaseMinutes: config.picker.leaseMinutes)
+        var leases = try leaseStore.current(now: now, leaseMinutes: decided.picker.leaseMinutes)
         Upkeep.run(
             context: context, snapshot: SessionsReader.read(context: context), openLeases: leases,
-            leaseMinutes: config.picker.leaseMinutes, keepDays: config.launch.keepDays, now: now)
+            leaseMinutes: decided.picker.leaseMinutes, keepDays: decided.launch.keepDays, now: now)
         // A rename or add since the registry was read can leave another account's reading here.
-        for account in config.accounts
-        where skips[account.label] == nil
-            && !Refresher.registryStillHolds(account, context: context)
-        {
-            skips[account.label] = "the account changed while the pick waited"
+        for label in current.changed where skips[label] == nil {
+            skips[label] = "the account changed while the pick waited"
+        }
+        // The registry's own skips again, as saved; one found before the probes stands.
+        for account in accounts where skips[account.label] == nil {
+            if let skip = registrySkip(account, config: decided, request: request) {
+                skips[account.label] = skip.reason
+            }
         }
         // A sign-in may have switched since the checks before the probes, so a login or folder
         // account is checked again before its reading is trusted.
-        for account in config.accounts
+        for account in accounts
         where skips[account.label] == nil && [Kind.login, Kind.folder].contains(account.kind) {
             if let issue = Refresher.identityIssue(account: account, runner: runner, now: now) {
                 skips[account.label] = Display.safe(issue.text, limit: 200)
             }
         }
         // Read last, after those checks: another command may have recorded a token's rejection.
-        for account in config.accounts
+        for account in accounts
         where account.kind == Kind.token && skips[account.label] == nil
             && tokenRejectionStands(account)
         {
@@ -162,12 +169,12 @@ public struct PickService: Sendable {
         var typedArgs: String?
         var typedPrefix = ""
         while true {
-            let inputs = config.accounts.map {
+            let inputs = accounts.map {
                 PickInput(
                     account: $0, reading: try? store.load(label: $0.label), skip: skips[$0.label])
             }
             decision = Picker.decide(
-                inputs: inputs, config: config, model: model,
+                inputs: inputs, config: decided, model: model,
                 openLeases: LeaseStore.counts(leases), now: now)
             guard let index = decision.chosen else { break }
             let account = inputs[index].account
@@ -213,7 +220,8 @@ public struct PickService: Sendable {
             break
         }
 
-        let label = decision.chosen.map { config.accounts[$0].label }
+        let chosen = decision.chosen.map { accounts[$0] }
+        let label = chosen?.label
         var result = PickResult(
             pickedAt: now, model: request.model ?? "default", label: label, env: nil, args: nil,
             launchPrefix: nil, launchArgs: nil, unsetEnv: nil, backgroundOnly: false,
@@ -223,7 +231,7 @@ public struct PickService: Sendable {
         } else if label != nil, let path {
             let settingsPath = path.path
             var env: [String: String] = [:]
-            if let label, config.account(label)?.kind == Kind.folder,
+            if let label, chosen?.kind == Kind.folder,
                 let dir = try? FolderPaths.configDir(context: context, label: label)
             {
                 env[ProtectedEnv.configDirVariable] = dir.path
@@ -306,12 +314,29 @@ public struct PickService: Sendable {
         }
     }
 
-    /// A reason to leave an account out before any probe, or nil.
-    func preSkip(
-        _ account: Account, config: Config, request: PickRequest, prefixlessReason: String?,
-        settingsIssue: String?,
-        carriesKey: Bool, runner: ClaudeRunner, observations: inout StatusObservations
-    ) -> Skip? {
+    /// The registry as saved now, and the accounts of `checked` in their order, each as saved, or
+    /// as checked when the saved registry no longer holds that account under its label
+    /// (`changed`). A registry gone or unreadable by now throws what a command throws for it at
+    /// its start, so the pick decides nothing.
+    static func registryNow(checked: Config, context: ToolContext) throws -> (
+        config: Config, accounts: [Account], changed: Set<String>
+    ) {
+        let saved = try ConfigStore(context: context).loadRequired()
+        var changed = Set<String>()
+        let accounts = checked.accounts.map { account -> Account in
+            guard let current = saved.account(account.label),
+                Refresher.isSameAccount(current, account)
+            else {
+                changed.insert(account.label)
+                return account
+            }
+            return current
+        }
+        return (saved, accounts, changed)
+    }
+
+    /// A reason to leave an account out that the registry alone gives, or nil.
+    func registrySkip(_ account: Account, config: Config, request: PickRequest) -> Skip? {
         if request.exclude.contains(account.label) { return Skip("excluded by caller") }
         if account.role != Role.main, let email = account.email?.lowercased(),
             config.accounts.contains(where: {
@@ -329,6 +354,16 @@ public struct PickService: Sendable {
         if request.fullLogin && account.kind == Kind.token {
             return Skip("token sessions have no connectors")
         }
+        return nil
+    }
+
+    /// A reason to leave an account out before any probe, or nil.
+    func preSkip(
+        _ account: Account, config: Config, request: PickRequest, prefixlessReason: String?,
+        settingsIssue: String?,
+        carriesKey: Bool, runner: ClaudeRunner, observations: inout StatusObservations
+    ) -> Skip? {
+        if let skip = registrySkip(account, config: config, request: request) { return skip }
         // A folder account's recipe carries its own literal prefix, which beats whatever the
         // caller's environment holds. A login or token recipe has no prefix.
         if let prefixlessReason, account.kind != Kind.folder { return Skip(prefixlessReason) }

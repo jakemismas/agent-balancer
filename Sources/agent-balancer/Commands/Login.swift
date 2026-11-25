@@ -113,9 +113,11 @@ struct LoginCommand: ParsableCommand {
             throw ToolError(
                 "'\(safe)' is not linked. Run `agent-balancer link \(label)` in Terminal first.",
                 code: .notLinked)
-        case .broken:
+        case .broken, .olderTarget:
             throw ToolError(Messages.linkBroken(label))
-        case .refused(let text):
+        case .unresolved(let name):
+            throw ToolError(Messages.unresolvedItem(label, name))
+        case .refused(let text), .unchecked(let text):
             throw ToolError(text, code: .checkFailed)
         case .ok: break
         }

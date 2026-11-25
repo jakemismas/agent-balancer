@@ -65,12 +65,17 @@ reads.
 - `--exclude <label>`: leave that account out of this pick. Repeat the flag for more labels. Use
   it for a label your own check refused, or one whose worker just hit a limit.
 - `--dry-run`: decide only. It writes no lease and no launch file and returns no recipe.
-- `--model <name>`: the model the launch is for.
+- `--model <name>`: the model the session starts with. Start `claude` with the same model, or leave
+  `--model` out of both. A name with `fable` in it also needs room in the Fable allowance; a name
+  with `opus`, `sonnet` or `haiku` in it is another model's. With no `--model`, or a name `pick`
+  cannot place, such as `default` or `best`, the session may run a Fable model, so `pick` skips
+  every account set to refuse Fable launches, does not check Fable room, and says so in `reason`.
+  `pick` trusts the name: it does not read what a model name maps to.
 
 ## Apply the recipe
 
-The caller applies the recipe the same way for every account and never branches on the account
-kind.
+The caller applies the recipe the same way for every account and never branches on the account kind.
+Your own flags carry the same `--model <model>` you gave `pick`, or none when you gave it none.
 
 **A typing caller** types this as one literal line:
 

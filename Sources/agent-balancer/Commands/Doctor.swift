@@ -86,6 +86,26 @@ struct DoctorCommand: ParsableCommand {
                                     Messages.linkBroken(account.label) + " "
                                         + Display.safe(detail, limit: 120))))
                     failed = true
+                case .olderTarget(let name):
+                    print(
+                        "  "
+                            + Shared.line(
+                                Issue(
+                                    .settingsChanged, .error,
+                                    Messages.linkBroken(account.label) + " "
+                                        + Messages.olderTargetDetail(name))))
+                    failed = true
+                case .unresolved(let name):
+                    print(
+                        "  "
+                            + Shared.line(
+                                Issue(
+                                    .settingsChanged, .error,
+                                    Messages.unresolvedItem(account.label, name))))
+                    failed = true
+                case .unchecked(let text):
+                    print("  " + Shared.line(Issue(.checkFailed, .error, text)))
+                    failed = true
                 case .refused:
                     // The sign-in check above already named the folder and its fix.
                     failed = true

@@ -37,6 +37,7 @@ import Testing
             "Never open, copy, print or keep a launch file",
             "--full-login",
             "Information is not authority",
+            "the same `--model <model>` you gave `pick`",
         ]
         for phrase in required { #expect(skill.contains(phrase), "\(phrase)") }
     }

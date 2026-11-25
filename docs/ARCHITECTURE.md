@@ -624,11 +624,18 @@ and nothing is written: an account keeps one end marker (7.1).
    `tokenCreatedAt` is an optional ISO 8601 time on the account's
    config entry (7.1), set by every `login`; the config schema stays at version 1.
 4. Duplicate check: if, after that probe, the new account's weekly reset time equals another
-   account's, both still ahead, and so does its 5-hour reset time when both accounts have one (an
-   idle account has none, so the weekly time alone decides then), `login` warns
-   `possible_duplicate` and names the other label. It is a warning, not an error, because two
-   accounts first used in the same hour could match. `pick` still treats them as two accounts and
-   skips neither for it, the main account included; like threat T16, the check is advisory
+   account's, both still ahead, and so does its 5-hour reset time when both accounts have one still
+   ahead, `login` warns `possible_duplicate` and names the other label. With no 5-hour reset still
+   ahead on one side or both (an idle account has none, an account whose plan has no 5-hour limit
+   never has one, and a stored reset that has passed counts as none), the weekly time alone decides:
+   the check compares the probed account with the other accounts' stored readings, which can be
+   hours old, so one account read in two different 5-hour windows, or once idle and once in use, has
+   a 5-hour reset on one side only. Two 5-hour resets still ahead that differ show two accounts; a
+   missing one shows nothing. It is a warning, not an error, because two accounts first used in the
+   same hour could match, as can two whose weekly windows reset in the same minute while either has
+   no 5-hour reset still ahead, which for two accounts whose plans have no 5-hour limit lasts while
+   their weekly reset times stay equal. `pick` still treats them as two accounts and skips neither
+   for it, the main account included; like threat T16, the check is advisory
    against code that runs as the user. The check runs in the reading cache's
    `afterProbe` hook, so it runs on every probe of a token account, at `login` and after it, and a
    token file swapped for another account's token shows as `possible_duplicate`. The status keeps
@@ -864,8 +871,8 @@ rules of section 7.
   the status, or when its command's process ends, as when the menu ends a `refresh`, is not
   counted, and neither is one whose reading or time a file error keeps from being saved: it runs
   again at the next Fable pick, and at the next `refresh` once a day has passed since the last one
-  counted. A pick for another model runs no Fable probe at all; `refresh` runs one once a day by
-  that count. A Fable probe has its own
+  counted. A pick for another model, or for one the tool cannot place (7.2 rule 4), runs no Fable
+  probe at all; `refresh` runs one once a day by that count. A Fable probe has its own
   budget and timeout, `fable.probeBudgetUsd` (default 0.50) and `fable.probeTimeoutSeconds`
   (default 20), set from the check recorded in 6.2, because a cold Fable probe costs more than
   the 0.05 cap of the plain probe and a cap below the cold cost still spends it and returns no
@@ -903,8 +910,9 @@ rules of section 7.
 
 1. **A skill file**, `skill/agent-balancer/SKILL.md`, in the repo and in the Homebrew share
    folder. It has front matter with a name and a one-sentence description. It tells a user's
-   Claude to read with `status --json --cached`, to run `pick --json` before every launch, to apply
-   `env` and `args` (or the typed strings) the same way for every account, to give its own
+   Claude to read with `status --json --cached`, to run `pick --json` before every launch with the
+   same `--model` its launch line carries, or none, to apply `env` and `args` (or the typed strings)
+   the same way for every account, to give its own
    settings to `pick --settings` and never to `claude`, never to branch on `kind`, never to open a
    launch file, and to use `--full-login` when a session needs connectors. A test greps for each
    of those commands and rules, and the banned-string check covers the file. The README gives the
@@ -1043,8 +1051,8 @@ link, is wider than 0700, has an access list that lets another user or group in 
 is not owned by the user, and a data folder path that is not
 absolute, has a `.` or `..` segment or fails the folder pattern; a folder that does not exist
 yet passes; the save is the only place the validator runs this rule, and every use of the folder (`link`, `verify`, `pick`, `run`, `login`, `refresh`, the status row and `doctor`) opens it without following a link and refuses a folder that is a link, not owned by the user, wider than 0700 or with such an access list, with the same text). A save that finds such a folder refuses for every account until it is fixed, and its error names the account, the first folder from `accounts/` down that fails, and the fix for what is there: `chmod 700` for a mode, `chmod -N` for an access list, a move for a link (never a `chmod`, which would act on what it points to), a file or another user's folder, or `agent-balancer remove <label>` to drop the account. Every printed command goes through one renderer. `--model` only
-chooses the budget rule and must match `^[A-Za-z0-9][A-Za-z0-9._:\[\]-]{0,63}$`. It is never
-printed into a command. A literal path in the prefix is required, never a substitution, so the
+chooses the Fable rules (7.2 rule 4) and must match `^[A-Za-z0-9][A-Za-z0-9._:\[\]-]{0,63}$`. It is
+never printed into a command. A literal path in the prefix is required, never a substitution, so the
 account stays visible to a reader.
 
 Conditions:
@@ -1066,8 +1074,9 @@ a launcher:
 1. Call `agent-balancer pick --json --caller launcher --model <model>` once per launch and use
    `label`, `env`, `args` and `unsetEnv`.
 2. Start `claude` with the launcher's own environment minus every name in `unsetEnv`, plus every
-   entry of `env`, as an environment beside an argument array, never pasted into a shell string.
-   It never sets the default folder path by hand.
+   entry of `env`, as an environment beside an argument array, never pasted into a shell string. It
+   never sets the default folder path by hand. Its own arguments carry the same `--model <model>` as
+   step 1, or none when step 1 named none.
 3. Never build an account folder path, never read `config.json` or any file under
    `~/.agent-balancer/`, and never keep a folder for a label from an earlier pick. One pick is
    good for one launch, within `leaseMinutes`.
@@ -1080,7 +1089,8 @@ a launcher:
 `verify <label>` runs before `pick` returns any account (cached 60 seconds in process memory only,
 never on disk) and before `run`. Each check is a refusal that removes the account from `pick`:
 
-1. every link is still a symlink to the recorded target;
+1. every link is still a symlink to the recorded target, and the default folder's item, while it
+   exists, still resolves to that target;
 2. each target still exists, is owned by the user, and is a regular file (`settings.json`,
    `CLAUDE.md`) or a folder (`skills/`, `agents/`, `commands/`). The tool never walks or reads
    inside the folders and compares no inode and no whole-file hash, so an ordinary edit of the
@@ -1122,7 +1132,27 @@ all (`check_failed`, "Check failed: the sign-in reported no email, so it could n
 as this account."). The tool reads no other identity field: `orgId` is an organization id, which
 never leaves `auth status` (binding rule 6), and `loginExpiresAt` is the stored sign-in's end, not
 the account. For an account with no expected email, only the plan tier (`plan_changed`) can mark
-a wrong account. Check 2 also fails a shared source (`settings.json`,
+a wrong account. Check 1 resolves the default folder's item of each listed link, following its links
+as `link` does, by path and metadata only, and opens no shared file. When that item now resolves to
+another target than the one recorded, as after you point the default folder's `settings.json` link
+at another file, the account fails: `verify` and `status` give the broken-link text, and
+`pick` and `run` say "The link of <name> points to an older target. Run
+`agent-balancer link --repair <label>` in Terminal." Without the check the account would read the
+old file while check 3 reads the new one through the default folder. An item that was a plain file
+when `link` ran, so its own path is the recorded target, and that you later replace with a link to
+a file elsewhere, such as the same file moved into a dotfiles folder, counts as resolving elsewhere
+too: the account asks for `link --repair <label>` though it still reads the same file. When the
+item is there but no longer resolves (a link to nothing, or an item that is not yours or not a
+plain file or folder), the account fails with "The default folder's <name> no longer resolves.
+Fix it there first, then run `agent-balancer link --repair <label>` in Terminal.", since repair
+refuses such an item. When `lstat` cannot check the item, as when its access list denies you
+`readattr`, the account fails with "The default folder's <name> cannot be checked, so the tool
+cannot tell where it resolves." and the `chmod -h -N` and `chflags -h nouchg,nouappnd` commands
+that let the tool check it. That text names no `link --repair`, because `link` reads such an item
+as gone and the repair would drop its link. Only an item gone from the default folder (`lstat`
+finds no such name) fails nothing here, and `link --repair` drops its link. Check 2 also fails a
+shared source
+(`settings.json`,
 `CLAUDE.md`, `skills/`, `agents/`, `commands/`) that exists in the default folder, by `lstat` with
 no read, while the manifest lists no link for it; the failure is the broken-link text, and
 `link --repair <label>` (or `link <label>`) adds the link after the same typed approval. Repair
@@ -1132,8 +1162,11 @@ each refusal names the item to fix (in the default folder or in the account fold
 run the same command again, and the broken-link text says so too. A folder whose
 manifest has no `settings.json` link is not hit by a hook change, because it loads none of those
 hooks. Failures map to these texts: never linked, `not_linked` ("Settings not shared. Run
-`agent-balancer link <label>` in Terminal."); a broken link or target, `settings_changed` ("A
-shared link is broken. Run `agent-balancer link --repair <label>` in Terminal. If repair refuses, fix the item it names, in the default folder or in the account folder, then run it again."); a changed hook
+`agent-balancer link <label>` in Terminal."); a broken link or target, a link to an older
+target included, `settings_changed` ("A
+shared link is broken. Run `agent-balancer link --repair <label>` in Terminal. If repair refuses, fix the item it names, in the default folder or in the account folder, then run it again."); a
+default folder item that no longer resolves, `settings_changed` with its own text above; one that
+cannot be checked, `check_failed` with its own text above; a changed hook
 set, `settings_changed` with the `--all` text of section 9.
 
 `run` and `login` use `verify --no-reading` (checks 1 to 4), so a new account can be started
@@ -1370,7 +1403,9 @@ claude -p "Reply with the single word OK." --model haiku --tools "" --disallowed
 
 Each reading carries `source`, a `readAt` (when the last probe that fed it finished, which the age
 rule reads) and one entry per window with its own `readAt` (when the stored value was taken). A
-lower value that does not replace the stored one leaves the window's `readAt` where it was.
+lower value that does not replace the stored one leaves the window's `readAt` where it was. The
+Fable reading also takes the `readAt` of a reply that shows its stored use in the same window, since
+the Fable age rule counts from it (7.4).
 `state/readings/<label>.json` is a fixed set of keys that a golden test pins: `schemaVersion`,
 `source`, `readAt`, `windows`, `fable` and `fableProbedAt`. `fable` has `source` `probe` (with
 `usedPercent` as a share of the Fable cap, `resetsAt`, `readAt`, `weeklyUsedPercentAtRead`) or
@@ -1677,10 +1712,25 @@ the last point at which a launch may start. A validator refuses any point above 
 3. Pool account: eligible only if `limitedAtPercent - weekly used >= minRoomPercent` and the
    5-hour window (when present) is under `limitedAtPercent`. With no 5-hour window, rule 10
    applies.
-4. Model-aware: for a Fable launch, also require Fable room (7.4): with a Fable reading,
+4. Model-aware: `--model` places the launch's model. A name with `fable` in it, in any letter case,
+   is a Fable launch; a name with `opus`, `sonnet` or `haiku` in it is another model's launch; no
+   `--model`, `default`, `best` and every other name are a model the tool cannot place. For a Fable
+   launch, also require Fable room (7.4): with a Fable reading,
    `100 - usedPercent >= fable.minRoomPercentOfCap`, both in percent of the Fable cap; with no
    reading, the guaranteed room of the fallback `>= minRoomPercent`. Skip any account with
-   `fable.allowLaunches: false`.
+   `fable.allowLaunches: false`. For a model the tool cannot place, also skip any account with
+   `fable.allowLaunches: false`
+   (`Model unknown, and Fable launches not allowed on the main account.`, or `on this account.`),
+   check no Fable room and start no Fable probe; a pick then carries
+   `Model unknown, so Fable room not checked.` where a Fable note goes. The reason: such a session
+   starts on a model the tool does not read, which can be a Fable model, and `allowLaunches: false`
+   is the user's own rule, so it holds when the tool cannot tell, as rule 10 holds the main account
+   to the worst case. Fable room only decides whether one run has room, needs a Fable reading that a
+   paid probe keeps fresh (4A.6, 7.4), and would refuse accounts for runs that may never use Fable,
+   so the pick says it did not check it. The tool trusts the name it is given: a caller starts
+   `claude` with the model it named to `pick`, or names none to either. It reads no model setting
+   and nothing that maps one model name to another (binding design rule 3), so a model the session
+   reaches through its environment, its settings, its agents or a command is outside this rule.
 5. Rank first the eligible that have a 5-hour window or whose `noLimit` lists `five_hour` (7.1),
    then the rest (rule 10); within each group, by effective expiry `min(weekly reset, endsAt)`,
    soonest first. An account marked `endingSoon` with no `endsAt` ranks as if its `endsAt` were
@@ -1698,16 +1748,27 @@ the last point at which a launch may start. A validator refuses any point above 
    `picker.expectedRunPercent` (default 5) to that account's weekly used and 5-hour used before
    rules 2 to 4, so an account near its limit is not handed out again seconds later. Rule 5 still
    ranks the soonest expiry first within each group, so two callers picking seconds apart can land
-   on the same account. `pick --dry-run` takes the lock but writes no lease. Once it holds the
-   lock, `pick` reads the registry again and skips, as `the account changed while the pick
-   waited`, every account that the saved registry no longer holds under its label with the same
-   `accountKey`, kind and email (the email compared without letter case), so a rename and an `add`
-   under the old label made while its probes ran never get the renamed account judged by the new
-   account's reading; `run <label>` refuses such an account the same way and starts nothing. A
-   command that changes which sign-in a label stands for can hold the lock while it waits for that
-   label's probe lock, up to 140 seconds with the default timeouts (6.3), so a `pick` that starts
-   then can exit 1 with `pick busy` after its 30 seconds, and `run` with `Another pick is running.
-   Try again in a moment.`
+   on the same account. `pick --dry-run` takes the lock but writes no lease. Once it holds the lock,
+   `pick` reads the registry again and decides on it as saved then, not as it read it before its
+   probes: each account it checked is judged with its role, reserve, `endsAt`, `endingSoon` and
+   every other field as saved, under the saved `picker` and `fable` settings, so a
+   `config set-main`, `config clear-main` or `config set` saved while its probes ran or while it
+   waited for the lock counts. The skips the registry alone gives, such as `duplicate login` and
+   `account ended`, are taken again from it, and a skip found before the probes stands, since the
+   checks after it never ran. It skips, as `the account changed while the pick waited`, every
+   account that the saved registry no longer holds under its label with the same `accountKey`, kind
+   and email (the email compared without letter case), so a rename and an `add` under the old label
+   made while its probes ran never get the renamed account judged by the new account's reading. An
+   account added meanwhile is neither probed nor judged in that pick; the next pick checks it.
+   `run <label>` refuses a changed account the same way and starts nothing. With no registry saved
+   by then, as after an `uninstall` that ran meanwhile, `pick` decides nothing: it exits 1 with
+   "Setup has not run. Run `agent-balancer init`." and writes no launch file, lease or `picks.log`
+   line. A registry it cannot read stops it the same way, with the text any command gives for that
+   registry at its start. A command that
+   changes which sign-in a label stands for can hold the lock while it waits for that label's probe
+   lock, up to 140 seconds with the default timeouts (6.3), so a `pick` that starts then can exit 1
+   with `pick busy` after its 30 seconds, and `run` with
+   `Another pick is running. Try again in a moment.`
 8. Units: the probe's `utilization` (0 to 1, a value above 1 counting as 1) is stored as percent
    0 to 100 with one decimal before any rule runs.
 9. A protected account also needs a 5-hour window and
@@ -1798,9 +1859,14 @@ Fable weekly meter as a share of the Fable cap. The row says `source: probe`, `u
 that reading, and Fable room is `100 - usedPercent` percent of the Fable cap. The pick needs
 `100 - usedPercent >= fable.minRoomPercentOfCap` (default 10), in percent of the Fable cap on both
 sides. `fable.capPercentOfWeekly` is used only by the fallback, so the unconfirmed 50 percent
-ratio never decides a pick that has a reading. A Fable reading is stale for a Fable pick when it
-is older than a day or all-models use has risen by `fable.recheckAfterWeeklyRisePercent` since it
-was taken.
+ratio never decides a pick that has a reading. A Fable reading is stale for a Fable pick when its
+`readAt` is older than a day or all-models use has risen by `fable.recheckAfterWeeklyRisePercent`
+since its `weeklyUsedPercentAtRead`. Both count from the last Fable probe whose reply showed the
+stored use: a reply with a higher use, or with the same use in the same window (the same reset time,
+to the minute), gives the reading its own `readAt` and `weeklyUsedPercentAtRead`, so a probe that
+confirms the use keeps the reading fresh. A reply with a lower use in the same window changes
+nothing, its time included, because stored use never goes down (6.3), and neither does one that
+names another reset time while the stored one holds, unless its use is higher.
 
 **The fallback.** It applies only to an account with no Fable reading yet, or with `fable.probe`
 switched off. The tool then knows only that Fable used `F` sits between 0 and `min(T, 50)` percent
@@ -1875,16 +1941,16 @@ short scrubbed text the menu shows as is.
 | `login_rejected` | `auth status` says logged out, or the probe returns an auth error | error | "Login rejected. Run `agent-balancer login pool-b` in Terminal." |
 | `wrong_account` | `auth status` email differs from config | error | "Folder is logged in as another account." |
 | `duplicate_login` | two configured accounts report one email | error | "Logged in as the same account as pool-a. Log one folder into its own account." |
-| `settings_changed` | a link of a folder account is broken, or a hook entry recorded at link time is gone or changed (5.7); or, after `init`, the hook record is missing or unreadable (4A.5); or, for `run`, the saved verdict is missing or older than the file, or the settings path is a link that goes nowhere or is not a file | error on every affected account, shown as one banner | "Settings changed. Run `agent-balancer link --accept-source-change` in Terminal." For `run`, with no verdict that matches the file's stamp: "Settings changed since the last check. Run `agent-balancer doctor` in Terminal." For a settings path that no reader can fix, the texts of 4A.5 that name the repair |
+| `settings_changed` | a link of a folder account is broken or points to an older target than the default folder's item, or that item no longer resolves (5.7), or a hook entry recorded at link time is gone or changed (5.7); or, after `init`, the hook record is missing or unreadable (4A.5); or, for `run`, the saved verdict is missing or older than the file, or the settings path is a link that goes nowhere or is not a file | error on every affected account, shown as one banner | "Settings changed. Run `agent-balancer link --accept-source-change` in Terminal." For `run`, with no verdict that matches the file's stamp: "Settings changed since the last check. Run `agent-balancer doctor` in Terminal." For a settings path that no reader can fix, the texts of 4A.5 that name the repair |
 | `plan_changed` | `planTier` differs from `expectedPlanTier` | error | "Plan is max_5x, expected max_20x." |
 | `account_ended` | `endsAt` passed; or, for an account marked `endingSoon`, the first sign-in check that placed the expected account's sign-in, for its current email (10.1), where `planTier` differs from `expectedPlanTier` or is missing. Once ended that way it stays ended until the flag is cleared (`config set <label> ending-soon false`, `ends <date>` or `ends none`) or the account's email changes (7.1) | ended | "Account ended." |
-| `check_failed` | a sign-in that reports no email for an account with an expected email (5.7), probe timeout, no `rate_limit_event`, unparsable output, `claude` missing, a reply with no weekly use (or no 5-hour use when one is named or stored), a bad value in any window with a valid name | error | "Check failed: probe timed out after 60 s." |
+| `check_failed` | a sign-in that reports no email for an account with an expected email (5.7), a default folder item of a folder account's link that cannot be checked (5.7), probe timeout, no `rate_limit_event`, unparsable output, `claude` missing, a reply with no weekly use (or no 5-hour use when one is named or stored), a bad value in any window with a valid name | error | "Check failed: probe timed out after 60 s." |
 | `limited` | probe status not `allowed`, or weekly or 5-hour use at or above `limitedAtPercent`; a full Fable sub-cap alone is the warning below | limited | "Limited until Wed 4:00 PM." |
 | `fable_limited` (warning) | Fable use is readable and at or above `limitedAtPercent` of the Fable cap; only Fable picks skip the account | ok | "Fable limited until Thu 9:00 AM." |
 | `login_expiring` (warning) | `loginExpiresAt` within 7 days; for a token account within 14 days of its estimated end (4A.4) | ok | "Login expires Dec 7." |
 | `token_missing` | a token account whose token file is absent, is not a regular 0600 file owned by the user, or does not parse; also one whose token file has an access list that lets another user or group in, cannot be read or cannot be checked, or sits in a token folder the folder checks refuse, which the text then names with its fix (4A.4) | error | "No token saved. Run `agent-balancer login pool-a` in Terminal." |
 | `not_linked` | a folder account that was never linked (4A.5) | error | "Settings not shared. Run `agent-balancer link spare` in Terminal." |
-| `possible_duplicate` (warning) | a token account whose weekly and 5-hour reset times both equal another account's (4A.4) | ok | "Same reset times as pool-a. If this is the same account, remove one." |
+| `possible_duplicate` (warning) | a token account whose weekly reset time equals another account's, both still ahead, and whose 5-hour reset time does too when both have one still ahead; with none ahead on a side, the weekly time alone decides (4A.4) | ok | "Same reset times as pool-a. If this is the same account, remove one." |
 | `key_in_settings` (warning, no event) | the default folder's `settings.json` carries `apiKeyHelper`, or a credential name of 4A.3 rule 2 or `CLAUDE_CONFIG_DIR` in its `env`, read by name only (4A.3) | ok | "Settings carry an API key or key helper. Every account is skipped." |
 | `stale` (warning) | reading older than twice the refresh interval | ok | "Last read 2 h ago." |
 | `launch_file_missing` (warning, no event) | a live session's records name a launch file that does not exist (section 8); the text carries a count only, never a session name or a path | unchanged | "1 live session names a launch file that is gone." |
@@ -2039,7 +2105,9 @@ Field rules:
   account's included, so the menu header can show the next launch without running `pick`. The
   main account's probe-source rule stays: a main account whose reading is not a probe reading is
   not picked for `next`. `pick` confirms, and its answer can differ while a lease is open or a
-  reading is old.
+  reading is old. `all` is the answer for a model placed as not Fable, so a pick that names no
+  model, or one `pick` cannot place, can also differ on an account with `fable.allowLaunches: false`
+  (7.2 rule 4).
 - Error and warning texts are scrubbed of token-like strings, email addresses and ids before they
   are stored.
 
@@ -2088,11 +2156,14 @@ probes found.
 
 `label: null` with `reason` when nothing fits (exit 2); then `env`, `args`, `launchPrefix`,
 `launchArgs` and `unsetEnv` are null, `backgroundOnly` is false and no launch file is written.
-`--model` takes `fable`, a Fable model id, or anything else (treated as all-models only). The
-answer does not carry the kind, whether it is a full login, the readings age, the account key or
-any organization grouping; `status --json` carries them per account (10.1). A caller applies
-`env` and `args` (or the two typed strings) the same way for every kind and never branches on the
-kind (4A.2).
+`--model` names the model the session starts with, and only 7.2 rule 4 reads it: a name with `fable`
+in it gets the Fable rules, one with `opus`, `sonnet` or `haiku` in it gets none, and with no
+`--model`, or with `default`, `best` or any other name, the session may run a Fable model, so the
+pick skips every account with `fable.allowLaunches: false`, checks no Fable room, starts no Fable
+probe and says `Model unknown, so Fable room not checked.` in `reason`. The answer does not carry
+the kind, whether it is a full login, the readings age, the account key or any organization
+grouping; `status --json` carries them per account (10.1). A caller applies `env` and `args` (or the
+two typed strings) the same way for every kind and never branches on the kind (4A.2).
 
 Stable in schema version 1, promised to both callers (section 16): `label` (a string, or null when
 nothing fits); `reason` (a string in every answer); `env` (on exit 0 an object of strings,
@@ -3164,7 +3235,8 @@ Threat numbers are not reused or renumbered.
   prints no token; `--paste` reads without echo and never from an argument; a wrong shape is
   refused; replace rewrites the file and every launch file of the label and writes one
   `token_replaced` event; `remove` deletes both; the duplicate warning fires on two accounts with
-  equal reset times, on any probe, and not otherwise; `token_missing` on a deleted or widened file
+  equal weekly reset times, and equal 5-hour reset times when both have one still ahead, on any
+  probe, and not otherwise; `token_missing` on a deleted or widened file
   and on one whose access list lets another user or group in; `login` and `login --paste` refuse
   before any sign-in each folder and file a later step of the run checks, writes, replaces,
   deletes or reads, a file it cannot delete or that a flag locks and a folder whose new files the
@@ -3207,6 +3279,8 @@ public copy.
    - **Launcher:** add `--caller launcher`. Start `claude` with your own environment, minus every
      name in `unsetEnv`, plus every entry of `env`, and with `args` after your own flags, as an
      argument array. Never paste any of it into a shell string.
+   - Your own flags carry the same `--model <model>` you gave `pick`, or none when you gave it none
+     (7.2 rule 4).
 3. **Never:** pass your own `--settings` to `claude` (give it to `pick`); branch on the account
    kind; open, copy, print or keep a launch file or anything else under `~/.agent-balancer/`;
    build a folder or file path yourself; reuse a recipe. One pick is one launch, within

@@ -165,6 +165,80 @@ import Testing
         #expect(!refresh.contains("unless such a rebuild could not save that file."))
     }
 
+    @Test func theDocsStateTheRuleForAModelThePickCannotPlace() throws {
+        let contract = try Self.prose("docs/CONTRACT.md")
+        #expect(contract.contains("so `pick` skips every account set to refuse Fable launches"))
+        let rules = try Self.section("### 7.2 Rules, in order", level: "###")
+        #expect(rules.contains("Model unknown, so Fable room not checked."))
+        let pick = try Self.section("### 10.2 `agent-balancer pick --json`", level: "###")
+        #expect(!pick.contains("(treated as all-models only)"))
+    }
+
+    @Test func theDuplicateRowStatesTheRuleTheToolApplies() throws {
+        let errors = try Self.section("## 9. Errors and states", level: "##")
+        #expect(
+            errors.contains("and whose 5-hour reset time does too when both have one still ahead"))
+        #expect(!errors.contains("weekly and 5-hour reset times both equal"))
+        let token = try Self.section("### 4A.4 The token kind", level: "###")
+        #expect(token.contains("when both accounts have one still ahead"))
+    }
+
+    @Test func theFableAgeCountsFromTheLastProbeThatShowedTheStoredUse() throws {
+        let budgets = try Self.section(
+            "### 7.4 Two budgets per account: the Fable reading and its fallback", level: "###")
+        #expect(
+            budgets.contains(
+                "Both count from the last Fable probe whose reply showed the stored use: a reply with a higher use, or with the same use in the same window"
+            ))
+        let cache = try Self.section("### 6.3 Cache and age", level: "###")
+        #expect(
+            cache.contains(
+                "The Fable reading also takes the `readAt` of a reply that shows its stored use in the same window"
+            ))
+    }
+
+    @Test func ruleSevenSaysThePickDecidesOnTheRegistryAsSavedUnderTheLock() throws {
+        let rules = try Self.section("### 7.2 Rules, in order", level: "###")
+        #expect(
+            rules.contains(
+                "Once it holds the lock, `pick` reads the registry again and decides on it as saved then, not as it read it before its probes"
+            ))
+        #expect(
+            rules.contains("An account added meanwhile is neither probed nor judged in that pick"))
+    }
+
+    @Test func theDriftChecksListALinkWhoseDefaultFolderItemMoved() throws {
+        let drift = try Self.section("### 5.7 Drift checks that fail closed", level: "###")
+        #expect(
+            drift.contains(
+                "1. every link is still a symlink to the recorded target, and the default folder's item, while it exists, still resolves to that target;"
+            ))
+        #expect(
+            drift.contains(
+                "Check 1 resolves the default folder's item of each listed link, following its links as `link` does, by path and metadata only, and opens no shared file."
+            ))
+    }
+
+    @Test func theDriftChecksNameADefaultFolderItemThatNoLongerResolvesOrCannotBeChecked() throws {
+        let drift = try Self.section("### 5.7 Drift checks that fail closed", level: "###")
+        #expect(
+            drift.contains(
+                "the account fails with \"The default folder's <name> no longer resolves. Fix it there first, then run `agent-balancer link --repair <label>` in Terminal.\""
+            ))
+        #expect(
+            drift.contains(
+                "the account fails with \"The default folder's <name> cannot be checked, so the tool cannot tell where it resolves.\""
+            ))
+    }
+
+    @Test func ruleSevenSaysAPickWithNoRegistrySavedUnderTheLockDecidesNothing() throws {
+        let rules = try Self.section("### 7.2 Rules, in order", level: "###")
+        #expect(
+            rules.contains(
+                "With no registry saved by then, as after an `uninstall` that ran meanwhile, `pick` decides nothing: it exits 1"
+            ))
+    }
+
     @Test func theContractsUninstallExitStatusNamesAnEntryItCannotCheck() throws {
         let contract = try Self.prose("docs/CONTRACT.md")
         #expect(

@@ -10,7 +10,11 @@ struct PickCommand: ParsableCommand {
     @Flag(name: .long, help: "Print the answer as JSON.")
     var json = false
 
-    @Option(name: .long, help: "The model the launch is for. Only the Fable budget rule uses it.")
+    @Option(
+        name: .long,
+        help:
+            "The model the session starts with; give claude the same one. Only the Fable rules use it."
+    )
     var model: String?
 
     @Option(name: .long, help: "The caller's own settings as one JSON object.")

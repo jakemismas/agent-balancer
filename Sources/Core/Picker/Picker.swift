@@ -1,16 +1,22 @@
 import Foundation
 
-/// The model a pick is for. Only the Fable budget rule depends on it (section 7.2 rule 4).
+/// The model a pick is for. Only the Fable rules depend on it (section 7.2 rule 4).
 public enum PickModel: Equatable, Sendable {
     case fable
     case other
+    /// No `--model`, or a name placed neither way: the session may start on a Fable model.
+    case unknown
+
+    /// Name parts of the model families that are not Fable.
+    static let otherFamilies = ["opus", "sonnet", "haiku"]
 
     public static func parse(_ name: String?) -> PickModel {
-        guard let name else { return .other }
-        return name.lowercased().contains("fable") ? .fable : .other
+        guard let name = name?.lowercased() else { return .unknown }
+        if name.contains("fable") { return .fable }
+        return otherFamilies.contains { name.contains($0) } ? .other : .unknown
     }
 
-    /// `--model` only chooses the budget rule and must match this shape.
+    /// `--model` only chooses the Fable rules and must match this shape.
     public static func isValidName(_ name: String) -> Bool {
         name.range(of: "^[A-Za-z0-9][A-Za-z0-9._:\\[\\]-]{0,63}$", options: .regularExpression)
             != nil
@@ -199,9 +205,10 @@ public enum Picker {
         }
 
         var fableNote: String?
-        if model == .fable {
+        if model != .other {
             switch fableCheck(
-                account: account, reading: reading, used: used, config: config, now: now)
+                account: account, model: model, reading: reading, used: used, config: config,
+                now: now)
             {
             case .no(let why): return .no(why)
             case .yes(let note): fableNote = note
@@ -236,14 +243,20 @@ public enum Picker {
         case yes(String)
     }
 
-    /// Rule 4 and section 7.4.
+    /// Rule 4 and section 7.4, for a Fable model or one the tool cannot place.
     private static func fableCheck(
-        account: Account, reading: Reading, used: Double, config: Config, now: Date
+        account: Account, model: PickModel, reading: Reading, used: Double, config: Config,
+        now: Date
     ) -> FableVerdict {
         if account.fable?.allowLaunches == false {
             let place = account.role == Role.main ? "the main account" : "this account"
-            return .no("Fable launches not allowed on \(place).")
+            return .no(
+                model == .fable
+                    ? "Fable launches not allowed on \(place)."
+                    : "Model unknown, and Fable launches not allowed on \(place).")
         }
+        // Room needs a Fable reading that only a Fable pick's paid probe keeps fresh.
+        if model == .unknown { return .yes("Model unknown, so Fable room not checked.") }
         let settings = config.fable
         if settings.probe, let f = reading.fable, f.source == ReadingSource.probe,
             let fableUsed = f.usedPercent

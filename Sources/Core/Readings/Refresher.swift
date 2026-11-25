@@ -560,8 +560,14 @@ public struct Refresher: Sendable {
         }
         guard let saved else { return true }
         guard let current = saved.account(account.label) else { return false }
-        return current.accountKey == account.accountKey && current.kind == account.kind
-            && current.email?.lowercased() == account.email?.lowercased()
+        return isSameAccount(current, account)
+    }
+
+    /// True when two registry entries of one label stand for the same account: the same account
+    /// key, kind and email, the email compared without letter case.
+    static func isSameAccount(_ a: Account, _ b: Account) -> Bool {
+        a.accountKey == b.accountKey && a.kind == b.kind
+            && a.email?.lowercased() == b.email?.lowercased()
     }
 
     /// The first error that says a login or folder account is not signed in as its own account, or

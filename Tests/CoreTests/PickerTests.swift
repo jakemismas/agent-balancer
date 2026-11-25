@@ -206,18 +206,26 @@ import Testing
     @Test func theMainAccountNeedsAFiveHourReading() {
         let missing = "No 5-hour reading, which the main account needs."
         let none = [PickInput(account: main(), reading: reading(week: 10, five: nil))]
-        for d in [decide(none), decide(none, model: .fable), decide(none, leases: ["main": 1])] {
+        for d in [
+            decide(none), decide(none, model: .fable), decide(none, model: .unknown),
+            decide(none, leases: ["main": 1]),
+        ] {
             #expect(d.chosen == nil)
             #expect(d.candidates.map(\.eligible) == [false])
             #expect(reason(d, "main") == missing)
             #expect(d.reason == "No account has room. main: " + missing)
         }
-        // The 5-hour refusal comes before the Fable one.
-        let noFable = decide(
-            [PickInput(account: main().withFable(false), reading: reading(week: 10, five: nil))],
-            model: .fable)
-        #expect(noFable.chosen == nil)
-        #expect(reason(noFable, "main") == missing)
+        // The 5-hour refusal comes before the Fable one, and before an unknown model's.
+        for model in [PickModel.fable, .unknown] {
+            let noFable = decide(
+                [
+                    PickInput(
+                        account: main().withFable(false), reading: reading(week: 10, five: nil))
+                ],
+                model: model)
+            #expect(noFable.chosen == nil, "\(model)")
+            #expect(reason(noFable, "main") == missing, "\(model)")
+        }
         // The rule follows the role, whatever the kind.
         for kind in [Kind.token, Kind.folder] {
             let other = Account(label: "m", kind: kind, role: Role.main)
@@ -449,16 +457,74 @@ import Testing
             ], model: .fable)
         #expect(d.chosen == 1)
         #expect(reason(d, "main") == "Fable launches not allowed on the main account.")
+        // A model the tool places as not Fable is not refused for it.
         let other = decide(
-            [PickInput(account: main().withFable(false), reading: reading(week: 10))])
+            [PickInput(account: main().withFable(false), reading: reading(week: 10))],
+            model: PickModel.parse("haiku"))
         #expect(other.chosen == 0)
+        #expect(!other.reason.contains("Model unknown"))
+    }
+
+    @Test func anUnknownModelSkipsAccountsThatRefuseFableLaunches() {
+        let inputs = [
+            PickInput(account: main().withFable(false), reading: reading(week: 10)),
+            PickInput(account: pool("b").withFable(false), reading: reading(week: 10)),
+            PickInput(account: pool("c"), reading: reading(week: 60)),
+        ]
+        let unknown = decide(inputs, model: .unknown)
+        #expect(unknown.chosen == 2)
+        #expect(
+            reason(unknown, "main")
+                == "Model unknown, and Fable launches not allowed on the main account.")
+        #expect(
+            reason(unknown, "b") == "Model unknown, and Fable launches not allowed on this account."
+        )
+        let resets = Picker.shortTime(Self.now.addingTimeInterval(3 * 86_400))
+        #expect(
+            unknown.reason
+                == "Soonest weekly reset: resets \(resets). Model unknown, so Fable room not checked."
+        )
+        // A Fable pick checks the room that an unknown model leaves unchecked.
+        let fable = decide(inputs, model: .fable)
+        #expect(fable.chosen == nil)
+        #expect(
+            reason(fable, "c") == "Fable room not readable and not guaranteed above 50% weekly use."
+        )
+        let alone = decide([inputs[0]], model: .unknown)
+        #expect(alone.chosen == nil)
+        #expect(
+            alone.reason
+                == "No account has room. main: Model unknown, and Fable launches not allowed on the main account."
+        )
+    }
+
+    @Test func theUnknownModelNoteComesBeforeTheFiveHourSentence() {
+        let d = decide(
+            [PickInput(account: pool("a"), reading: reading(week: 10, five: nil))], model: .unknown)
+        let resets = Picker.shortTime(Self.now.addingTimeInterval(3 * 86_400))
+        #expect(
+            d.reason
+                == "Soonest weekly reset: resets \(resets). Model unknown, so Fable room not checked. 5-hour use unknown."
+        )
     }
 
     @Test func modelNamesAreClassifiedAndValidated() {
-        #expect(PickModel.parse("fable") == .fable)
-        #expect(PickModel.parse("claude-fable-5") == .fable)
-        #expect(PickModel.parse("opus") == .other)
-        #expect(PickModel.parse(nil) == .other)
+        for name in [
+            "fable", "FABLE", "fable[1m]", "claude-fable-5", "claude-fable-5-2", "sonnet-fable",
+        ] {
+            #expect(PickModel.parse(name) == .fable, "\(name)")
+        }
+        for name in [
+            "opus", "haiku", "Sonnet", "OPUS", "opusplan", "opusplan[1m]", "sonnet[1m]",
+            "claude-opus-5-5", "claude-3-5-haiku-20241022",
+        ] {
+            #expect(PickModel.parse(name) == .other, "\(name)")
+        }
+        // No name, or one placed neither way, may start a session on a Fable model.
+        #expect(PickModel.parse(nil) == .unknown)
+        for name in ["default", "best", "claude-mythos-5-2", "mystery"] {
+            #expect(PickModel.parse(name) == .unknown, "\(name)")
+        }
         #expect(PickModel.isValidName("sonnet[1m]"))
         #expect(!PickModel.isValidName("a b"))
         #expect(!PickModel.isValidName("x; rm"))

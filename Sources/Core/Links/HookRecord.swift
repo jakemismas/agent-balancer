@@ -509,6 +509,25 @@ public struct HookRecord: Sendable {
         }?.name
     }
 
+    /// What the default folder's item of a listed link says against the link's recorded target,
+    /// by `lstat` and the resolver `link` uses, nothing opened: nil when the item is gone or
+    /// resolves to that target.
+    public func defaultItemVerdict(_ entry: LinkEntry, isFolder: Bool) -> FolderVerdict? {
+        let name = URL(fileURLWithPath: entry.path).lastPathComponent
+        let source = context.defaultClaudeFolder.appendingPathComponent(name)
+        var st = stat()
+        guard lstat(source.path, &st) == 0 else {
+            let code = errno
+            // Only a missing item is gone; an access list that denies `readattr` hides one.
+            if code == ENOENT || code == ENOTDIR { return nil }
+            return .unchecked(Messages.uncheckedItem(name, context.display(source)))
+        }
+        guard let target = Linker.resolve(source, isFolder: isFolder).target else {
+            return .unresolved(name)
+        }
+        return target == entry.target ? nil : .olderTarget(name)
+    }
+
     /// True when the folder account's list holds the shared settings link.
     public func sharesSettings(_ label: String) -> Bool {
         entries(for: label).contains {

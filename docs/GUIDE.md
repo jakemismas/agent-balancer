@@ -166,11 +166,20 @@ account, a limit the tool cannot read can lock you out until it resets.
   command that clears it.
 - It starts `claude` only from `~/.local/bin`, `/opt/homebrew/bin` or `/usr/local/bin`. It refuses
   one when another user or group can change, by its mode or an access list, the file its path
-  resolves to, the folder that holds that file unless it is `/opt/homebrew/bin` or
-  `/usr/local/bin`, or `~/.local/bin` when `claude` sits there. `agent-balancer doctor` names what
-  it refuses and the command that clears it, and `agent-balancer pick` and
-  `agent-balancer run --print-command` refuse such a `claude` before they write a launch file. The
-  menu bar app starts `agent-balancer` only after the same test of the file its path resolves to.
+  resolves to, the folder that holds that file unless it is `/opt/homebrew/bin` or `/usr/local/bin`,
+  or `~/.local/bin` when `claude` sits there. `agent-balancer doctor` names what it refuses and,
+  where one is known, the command that clears it, and `agent-balancer pick` and
+  `agent-balancer run --print-command` refuse such a `claude` before they check a sign-in or write a
+  launch file. Under a umask that leaves new folders group-writable, such as 002, each new version
+  of a Homebrew cask or npm install of `claude` comes in a new folder that others in your group can
+  write, so it refuses that version until you run chmod -R go-w on that folder, which also clears
+  the files in it. The menu bar app starts `agent-balancer` only after the same test of the file
+  its path resolves to, and shows the refusal and its fix when that test fails. It does not check
+  the folders above the one that holds the file `claude` resolves to, such as
+  `~/.local/share/claude`, a program `claude` starts by name, such as node or security, or the
+  `claude` that a line from `agent-balancer pick` or `agent-balancer run --print-command` starts,
+  which your shell finds on its own PATH; the shell command type -a claude lists each one in the
+  order your shell tries them.
 - With safe mode off (`probe.safeMode` set to false), your hooks run in every probe the tool
   starts: in `agent-balancer refresh`, in `agent-balancer pick` and in the first check that
   `agent-balancer login` runs after it saves a token. Safe mode is on by default.

@@ -30,12 +30,31 @@ public struct CLIRunner: Sendable {
     /// group or others, has an access list that lets another user or group change it or that
     /// cannot be read, or cannot be checked at all, is refused. No folder is judged.
     public func locate() throws -> URL {
+        guard let found = try firstTrusted() else {
+            throw ToolError("agent-balancer was not found.", code: .checkFailed)
+        }
+        return found
+    }
+
+    /// What a lookup of the tool finds: the path to start, or the refusal, with its fix, of a
+    /// tool that is there and fails the test; both are nil when none is at the fixed paths.
+    public func lookup() -> (found: URL?, refusal: String?) {
+        do {
+            return (try firstTrusted(), nil)
+        } catch {
+            return (nil, (error as? ToolError)?.message ?? "\(error)")
+        }
+    }
+
+    /// The first candidate that exists and passes the test, nil when none exists; the first one
+    /// that exists and fails throws its refusal.
+    private func firstTrusted() throws -> URL? {
         let runner = ClaudeRunner(context: context)
         for candidate in candidates {
             let shown = context.display(candidate)
             if try runner.lookUpProgram(candidate, shown: shown) != nil { return candidate }
         }
-        throw ToolError("agent-balancer was not found.", code: .checkFailed)
+        return nil
     }
 
     /// True when `locate` finds a usable tool.

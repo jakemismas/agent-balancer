@@ -64,7 +64,8 @@ reads.
 - `--caller typed|launcher`: how the recipe is applied. The default is `typed`.
 - `--exclude <label>`: leave that account out of this pick. Repeat the flag for more labels. Use
   it for a label your own check refused, or one whose worker just hit a limit.
-- `--dry-run`: decide only. It writes no lease and no launch file and returns no recipe.
+- `--dry-run`: decide only. It writes no lease and no launch file and returns no recipe. A dry run
+  refuses a `claude` the tool refuses, as a pick does.
 - `--model <name>`: the model the session starts with. Start `claude` with the same model, or leave
   `--model` out of both. A name with `fable` in it also needs room in the Fable allowance; a name
   with `opus`, `sonnet` or `haiku` in it is another model's. With no `--model`, or a name `pick`
@@ -89,6 +90,9 @@ a substitution.
 **A launcher** is a program that starts `claude` itself. Ask for `--caller launcher`. Start
 `claude` with your own environment, minus every name in `unsetEnv`, plus every entry of `env`, and
 with `args` after your own flags, as an argument array. Never paste any of it into a shell string.
+
+The tool checks only the `claude` it would start itself, the first of its fixed list that exists
+(docs/ARCHITECTURE.md section 6.2), not the one your typed line or your launcher starts.
 
 ## Never
 

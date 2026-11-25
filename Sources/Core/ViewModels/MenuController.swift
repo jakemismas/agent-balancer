@@ -55,10 +55,11 @@ public final class MenuController {
     /// clears a refresh that failed because setup had not run. Cheap, and safe to call often.
     public func reload() {
         let config = reader.validConfig()
+        let tool = runner.lookup()
         let inputs = MenuInputs(
-            configExists: reader.configExists(), cliFound: runner.isAvailable,
+            configExists: reader.configExists(), cliFound: tool.found != nil,
             cliTried: runner.triedPaths, status: reader.load(), now: clock(),
-            backgroundMinutes: StatusReader.backgroundMinutes(config))
+            backgroundMinutes: StatusReader.backgroundMinutes(config), cliRefusal: tool.refusal)
         if failedBeforeSetup && config != nil {
             failedBeforeSetup = false
             refreshState = .idle

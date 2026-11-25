@@ -68,9 +68,12 @@ private func text(_ data: Data) -> String { String(decoding: data, as: UTF8.self
         let me = NSUserName()
         let versions = ".local/share/claude/versions/2.1.0"
         let typed = "~/" + versions
-        func run(_ command: String) -> String { "Run `\(command)` in Terminal." }
+        func run(_ command: String) -> String {
+            "Run `\(command)` in Terminal"
+                + (command.contains("chmod -N") ? " to drop every entry of its access list." : ".")
+        }
         let lock =
-            "Run `chflags nouchg ~/.local/bin/claude`, then `chmod -N ~/.local/bin/claude` in Terminal."
+            "Run `chflags nouchg ~/.local/bin/claude`, then `chmod -N ~/.local/bin/claude` in Terminal to drop every entry of its access list."
         let cases: [(entry: String, on: String, linked: Bool, flag: String?, said: String)] = [
             (
                 "everyone allow write,append", ".local/bin/claude", false, nil,
@@ -115,12 +118,12 @@ private func text(_ data: Data) -> String { String(decoding: data, as: UTF8.self
             (
                 "user:\(me) deny search", ".local/bin", false, "uchg",
                 "Refused ~/.local/bin/claude: it cannot be checked, because you cannot search the folder `~/.local/bin`. "
-                    + "Run `chflags nouchg ~/.local/bin`, then `chmod -N ~/.local/bin` in Terminal."
+                    + "Run `chflags nouchg ~/.local/bin`, then `chmod -N ~/.local/bin` in Terminal to drop every entry of its access list."
             ),
             (
                 "user:\(me) deny search", ".local/bin", false, "uappnd",
                 "Refused ~/.local/bin/claude: it cannot be checked, because you cannot search the folder `~/.local/bin`. "
-                    + "Run `chflags nouappnd ~/.local/bin`, then `chmod -N ~/.local/bin` in Terminal."
+                    + "Run `chflags nouappnd ~/.local/bin`, then `chmod -N ~/.local/bin` in Terminal to drop every entry of its access list."
             ),
         ]
         for item in cases {

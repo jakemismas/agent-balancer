@@ -286,4 +286,57 @@ import Testing
             #expect(row.contains(says), "\(script): \(row)")
         }
     }
+
+    @Test func sectionsSixTwoElevenAndFourteenStateWhatTheBinaryChecksLeaveUnjudged() throws {
+        let probe = try Self.section("### 6.2 The probe", level: "###")
+        for phrase in [
+            "a link swapped between the check and the start runs another program",
+            "up to the first folder that root owns and others cannot write, are not judged",
+            "point it at another file that passes these tests",
+            "is found on the child's `PATH` with none of these checks",
+            "which the tool does not check",
+        ] {
+            #expect(probe.contains(phrase), "\(phrase)")
+        }
+        let threats = try Self.section("## 14. Threat model", level: "##")
+        #expect(threats.contains("so for that line this threat is not mitigated"))
+        #expect(!threats.contains("refuse such a binary before they write a launch file; `doctor`"))
+        let menu = try Self.section("## 11. Menu bar", level: "##")
+        #expect(menu.contains("would stop no one they do not already let in"))
+        let contract = try Self.prose("docs/CONTRACT.md")
+        #expect(contract.contains("not the one your typed line or your launcher starts"))
+        let guide = try Self.prose("docs/GUIDE.md")
+        #expect(guide.contains("which your shell finds on its own PATH"))
+    }
+
+    @Test func theDocsSayWhatTheBinaryChecksNameAndThatADryRunChecksTheBinaryToo() throws {
+        let guide = try Self.prose("docs/GUIDE.md")
+        for phrase in [
+            "names what it refuses and, where one is known, the command that clears it",
+            "each new version of a Homebrew cask or npm install of `claude` comes in a new folder",
+            "until you run chmod -R go-w on that folder, which also clears the files in it",
+        ] {
+            #expect(guide.contains(phrase), "\(phrase)")
+        }
+        let contract = try Self.prose("docs/CONTRACT.md")
+        #expect(contract.contains("A dry run refuses a `claude` the tool refuses, as a pick does."))
+        let pick = try Self.section("### 10.2 `agent-balancer pick --json`", level: "###")
+        #expect(pick.contains("it refuses a `claude` the runner refuses as a pick does"))
+        let orchestrators = try Self.prose("docs/ORCHESTRATORS.md")
+        #expect(
+            orchestrators.contains("It still refuses a `claude` the tool refuses, as a pick does"))
+        let probe = try Self.section("### 6.2 The probe", level: "###")
+        for phrase in [
+            "every bit counts but `read` (`list`), `execute` (`search`), `readattr`, `readextattr`, `readsecurity` and `synchronize`",
+            "a system policy, such as a sandbox profile",
+            "`chmod u+x`", "never names a `chmod -N` for your home folder",
+            "drops every entry of its access list",
+            "before their sign-in checks and probes, a dry run included",
+            "It tells the home from another entry by device and inode",
+            "one that leads to your home folder gets no command at all",
+            "It names none, and says why,", "`sudo chmod -R go-w` on that folder clears both",
+        ] {
+            #expect(probe.contains(phrase), "\(phrase)")
+        }
+    }
 }

@@ -15,7 +15,10 @@ private func text(_ data: Data) -> String { String(decoding: data, as: UTF8.self
     let versions = ".local/share/claude/versions"
     let place = "~/.local/share/claude/versions"
 
-    func run(_ command: String) -> String { "Run `\(command)` in Terminal." }
+    func run(_ command: String) -> String {
+        "Run `\(command)` in Terminal"
+            + (command.contains("chmod -N") ? " to drop every entry of its access list." : ".")
+    }
 
     var modeText: String {
         "Refused ~/.local/bin/claude: its real target's folder `\(place)` must be owned by you or root and not writable by others."
@@ -54,7 +57,7 @@ private func text(_ data: Data) -> String { String(decoding: data, as: UTF8.self
             (
                 ["+a", "everyone allow add_file"], "uappnd",
                 listText
-                    + " Run `chflags nouappnd \(place)`, then `chmod -N \(place)` in Terminal."
+                    + " Run `chflags nouappnd \(place)`, then `chmod -N \(place)` in Terminal to drop every entry of its access list."
             ),
             (
                 ["+a", "user:\(me) deny readsecurity"], nil,
@@ -204,7 +207,10 @@ private func text(_ data: Data) -> String { String(decoding: data, as: UTF8.self
     @Test func pickRefusesWhatTheRunnerRefusesBeforeItWritesALaunchFile() throws {
         try expectRefusedBeforeALaunchFile(
             first: ["pick"],
-            refused: [["pick"], ["pick", "--json"], ["pick", "--caller", "launcher", "--json"]])
+            refused: [
+                ["pick"], ["pick", "--json"], ["pick", "--caller", "launcher", "--json"],
+                ["pick", "--dry-run", "--json"],
+            ])
     }
 
     /// `run --print-command` starts nothing but prints a line that does; plain `run` finds the
@@ -213,5 +219,114 @@ private func text(_ data: Data) -> String { String(decoding: data, as: UTF8.self
         try expectRefusedBeforeALaunchFile(
             first: ["run", "--print-command", "pool-a"],
             refused: [["run", "--print-command", "pool-a"], ["run", "pool-a"]])
+    }
+
+    /// A login account and a folder account: `pick` and its dry run refuse a binary the runner
+    /// refuses with its whole text before any sign-in check or probe starts it, and exit 1.
+    @Test func pickAndItsDryRunRefuseARefusedBinaryForEveryKindBeforeItsSignInChecks() throws {
+        for kind in [Kind.login, Kind.folder] {
+            let cli = try base.setUp()
+            defer { base.finish(cli) }
+            if kind == Kind.folder {
+                let store = ConfigStore(context: ToolContext(home: cli.home, ambient: [:]))
+                var config = try #require(try store.load())
+                config.accounts = [Account(label: "work", kind: Kind.folder, role: Role.pool)]
+                try store.save(config)
+            }
+            try link(cli)
+            let folder = cli.home.appendingPathComponent(versions).path
+            #expect(try base.runTool("/bin/chmod", ["+a", "everyone allow add_file", folder]) == 0)
+            let said = listText + " " + run("chmod -N \(place)")
+            #expect(said.count > 200)
+            let started = cli.fakeRecord("args.log")
+            let runs = [
+                ["pick"], ["pick", "--json"], ["pick", "--dry-run"],
+                ["pick", "--dry-run", "--json"],
+            ]
+            for arguments in runs {
+                let out = try cli.run(arguments)
+                #expect(out.status == 1, "\(kind) \(arguments)")
+                #expect(text(out.stderr) == "Error: \(said)\n", "\(kind) \(arguments)")
+                #expect(out.stdout.isEmpty, "\(kind) \(arguments)")
+            }
+            #expect(cli.fakeRecord("args.log") == started, "\(kind)")
+        }
+    }
+
+    /// A system policy, here a sandbox profile that keeps the lookup from reading the real
+    /// target's attributes, is not an access list or a mode, so the refusal names no `chmod -N`.
+    @Test(.enabled(if: FileManager.default.isExecutableFile(atPath: "/usr/bin/sandbox-exec")))
+    func aSystemPolicyThatStopsTheLookupNamesNoChmod() throws {
+        let cli = try base.setUp()
+        defer { base.finish(cli) }
+        try link(cli)
+        let name = cli.home.lastPathComponent
+        let profile =
+            "(version 1)(allow default)(deny file-read-metadata (regex #\"/\(name)/\\.local/share/claude/versions/2\\.1\\.0$\"))"
+        let out = try Support.run(
+            URL(fileURLWithPath: "/usr/bin/sandbox-exec"), ["-p", profile, cli.exe.path, "doctor"],
+            env: ["HOME": cli.home.path, "PATH": "/usr/bin:/bin"])
+        let said = text(out.stdout)
+        #expect(out.status == 1, "\(said)")
+        #expect(
+            said.contains(
+                "Error check_failed: Refused ~/.local/bin/claude: it cannot be checked, because a system policy, such as a sandbox profile, keeps you from `~/\(versions)/2.1.0`, and no chmod clears that.\n"
+            ), "\(said)")
+        #expect(!said.contains("chmod -N"), "\(said)")
+    }
+
+    /// With no binary of the fixed list, `pick` and `run --print-command` go on for a token
+    /// account, whose line starts the `claude` your shell finds, while `run` refuses; a login
+    /// account still fails its sign-in check. Without the guard the test would reach the host's
+    /// own `claude`.
+    @Test(.enabled(if: Support.noHostClaude))
+    func pickAndThePrintedLineGoOnWhenNoBinaryOfTheListExists() throws {
+        func json(_ out: Support.Output) -> [String: Any] {
+            ((try? JSONSerialization.jsonObject(with: out.stdout)) as? [String: Any]) ?? [:]
+        }
+        do {
+            let cli = try tokenHome()
+            defer { base.finish(cli) }
+            let first = try cli.run(["pick"])
+            #expect(first.status == 0, "\(text(first.stderr))")
+            #expect(launchFiles(cli).count == 1)
+            try FileManager.default.removeItem(at: cli.fakePath)
+            let picked = try cli.run(["pick", "--json"])
+            #expect(picked.status == 0, "\(text(picked.stderr))")
+            #expect(json(picked)["label"] as? String == "pool-a")
+            let args = json(picked)["args"] as? [String] ?? []
+            #expect(args.count == 2 && args.first == "--settings", "\(args)")
+            let launcher = try cli.run(["pick", "--caller", "launcher", "--json"])
+            #expect(launcher.status == 0, "\(text(launcher.stderr))")
+            #expect(json(launcher)["label"] as? String == "pool-a")
+            let line = try cli.run(["run", "--print-command", "pool-a"])
+            #expect(line.status == 0, "\(text(line.stderr))")
+            #expect(text(line.stdout).hasPrefix("claude --settings '"))
+            let files = launchFiles(cli)
+            #expect(files.count == 4)
+            let leases = cli.read("state/leases.json")
+            let picks = cli.read("state/picks.log")
+            let run = try cli.run(["run", "pool-a"])
+            #expect(run.status == 1)
+            #expect(
+                text(run.stderr)
+                    == "Error: The claude program was not found in ~/.local/bin, /opt/homebrew/bin or /usr/local/bin.\n"
+            )
+            #expect(run.stdout.isEmpty)
+            #expect(launchFiles(cli) == files)
+            #expect(cli.read("state/leases.json") == leases)
+            #expect(cli.read("state/picks.log") == picks)
+        }
+        let cli = try base.setUp()
+        defer { base.finish(cli) }
+        try FileManager.default.removeItem(at: cli.fakePath)
+        let pick = try cli.run(["pick", "--json"])
+        #expect(pick.status == 2, "\(text(pick.stderr))")
+        let line = try cli.run(["run", "--print-command", "main"])
+        #expect(line.status == 1)
+        #expect(text(line.stderr).contains("Check failed: The claude program was not found"))
+        let launch = LaunchFiles.rootURL(context: ToolContext(home: cli.home, ambient: [:]))
+        let made = (try? FileManager.default.subpathsOfDirectory(atPath: launch.path)) ?? []
+        #expect(made.filter { $0.hasSuffix(".json") }.isEmpty, "\(made)")
     }
 }

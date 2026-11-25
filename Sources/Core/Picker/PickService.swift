@@ -57,6 +57,9 @@ public struct PickService: Sendable {
             try Self.checkHooksOff(inherited)
             try Self.checkStoredLogin(inherited)
         }
+        // A refused binary stops every pick, a dry run too, before its sign-in checks.
+        let runner = ClaudeRunner(context: context)
+        try runner.checkFound()
 
         // Settings of the default folder: hook record, and key names (never values).
         let state = settingsState()
@@ -68,7 +71,6 @@ public struct PickService: Sendable {
 
         // Skips settled before any probe.
         var skips: [String: String] = [:]
-        let runner = ClaudeRunner(context: context)
         for account in config.accounts {
             if let skip = preSkip(
                 account, config: config, request: request, prefixlessReason: prefixlessReason,
@@ -182,7 +184,7 @@ public struct PickService: Sendable {
             guard let index = decision.chosen else { break }
             let account = inputs[index].account
             if request.dryRun { break }
-            // The recipe starts claude with this account, so a refused binary gets no launch file.
+            // Checked again just before the launch file, since the binary may change during probes.
             try runner.checkFound()
             let id = freshLeaseId(leases)
             // Render the typed recipe before any file exists, so a refusal leaves nothing behind.

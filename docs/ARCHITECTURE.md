@@ -1439,25 +1439,84 @@ claude -p "Reply with the single word OK." --model haiku --tools "" --disallowed
   path through a file or a loop of links, which leave nothing that can run there. The refusal says
   it cannot be checked and names where the lookup stops, found one name at a time with `lstat`, and
   with `readlink` for a link, which needs no right on its target: the first folder the user cannot
-  search, or the first entry whose attributes the user cannot read, a link named as one. It names a
-  `chmod -N` only where running it as printed lets the lookup through: on a folder the user owns
-  whose mode lets the owner search it, so only its list can deny that, after the `chflags` that
-  clears a `uchg` or `uappnd` lock on it, which `chmod -N` cannot pass (a system flag gets no
-  command), or on an entry that is not a link, which an events-only open (`O_EVTONLY` with
-  `O_NOFOLLOW`, which reads nothing in it) shows to be the user's or root's (`sudo` first) and
-  unlocked, since the `chflags` command fails on an entry whose attributes the user cannot read.
-  Otherwise it names none and says what blocks the check.
+  search, or the first entry whose attributes the user cannot read, a link named as one. Only EACCES
+  is a denial by an access list or a mode. An EPERM comes from a system policy, such as a sandbox
+  profile or privacy protection, and so does an EACCES on a folder of the user's that has no access
+  list and whose mode lets its owner search it; the refusal says a system policy keeps the user from
+  that entry and that no chmod clears it, and names no command. It names a command where running it
+  as printed lets the lookup through, after the `chflags` that clears a `uchg` or `uappnd` lock,
+  which neither `chmod` can pass:
+  - `chmod u+x` on a folder of the user's whose mode keeps its owner out;
+  - `chmod -N` on a folder of the user's whose mode lets its owner search it and that has an access
+    list, since nothing else there can deny that;
+  - `chmod -N` on an entry that is not a link, which an events-only open (`O_EVTONLY` with
+    `O_NOFOLLOW`, which reads nothing in it) shows to be the user's or root's (`sudo` first) and
+    unlocked;
+  - "If you own it", the user's own `chmod -N`, or `chmod -h -N` for a link whose target can still
+    be read, on an entry the events-only open cannot reach, whose owner and flags the tool cannot
+    read: when another user or root owns it, or a flag locks it, that command fails and the refusal
+    stays.
+  Every `chmod -N` it names says that it drops every entry of its access list, deny entries kept on
+  purpose included. It never names a `chmod -N` for your home folder, which would also drop the
+  entry macOS keeps on a home folder: it says to check the home's list with `ls -led ~` instead, or,
+  when you cannot read the home's attributes, that reading its list needs that right too, so
+  `ls -led ~` fails and `chmod -a` fails, and empties the list when you own it. It tells the home
+  from another entry by device and inode, read through an events-only open of the home as written,
+  which follows its links, and of the entry, or the entry's own `stat`, so a path that spells the
+  home another way, through a link, in other letter case or through `/System/Volumes/Data`, is
+  known too. A link counts as the folder it leads to, and one that leads to your home folder gets
+  no command at all, since a shell can make a command on it follow the link there. When it cannot
+  read them, it names no command for that entry unless it knows the entry is not a folder: a file,
+  or a link that leads to one, keeps its own. It names none, and says why, for a link whose own
+  list denies the user `read`, since `chmod -h -N` cannot open such a link; for an entry with a
+  flag whose attributes the user cannot read, since the `chflags` command cannot read it either;
+  for a folder of root's or of another user's, or an entry of another user's, which only its owner
+  or an administrator can change; and for a system flag, which only an administrator can clear.
 - Every command that would start `claude` refuses with one text that names the binary and the
   command that clears the list: `chmod -N` on the real target's path for the file and on the real
   folder's for `~/.local/bin`, with `sudo` first when root owns it, after the `chflags` that clears
-  a `uchg` or `uappnd` lock, which `chmod -N` cannot pass; a system flag gets no command, since
-  only an administrator can clear it. For the folder that holds the real target the text also
-  names that folder, with `chmod -N` for its list and `chmod go-w` for its mode, after such a
-  `chflags`; `chmod go-w` only when the user owns it, since a folder of root's that others can
-  write, such as `/tmp`, is shared on purpose. `pick` and `run --print-command` start no `claude`
-  but return a line that does, so they refuse with the same text before they write a launch file,
-  for every kind of account; when no binary is found they go on, since none is refused. `run`
-  itself finds the binary before it writes anything. `doctor` prints the text and exits 1.
+  a `uchg` or `uappnd` lock, which `chmod -N` cannot pass; a system flag gets no command, since only
+  an administrator can clear it. For the folder that holds the real target the text also names that
+  folder, with `chmod -N` for its list and `chmod go-w` for its mode, after such a `chflags`:
+  `chmod go-w` when the user owns it, and `sudo chmod go-w` for a folder of root's that others can
+  write whose sticky bit is off, such as a global npm folder after `sudo chmod -R 777`, which leaves
+  the file writable too, so the file is refused first, and `sudo chmod -R go-w` on that folder
+  clears both; none for one of root's whose sticky bit is on, such as `/tmp`, which is shared on
+  purpose, or for another user's. `pick` and `run --print-command` start no `claude` but return a
+  line that does, so they refuse with the same whole text before their sign-in checks and probes, a
+  dry run included, for every kind of account, and `pick` checks again before it writes a launch
+  file; when no binary is found they go on, since none is refused. `run` itself finds the binary
+  before it writes anything. `doctor` prints the text and exits 1.
+- These checks leave four things unjudged, stated here and not checked:
+  1. The runner starts the path it found, not the real target it checked, and the menu app starts
+     the command line tool the same way (section 11), so the start follows the links again: a link
+     swapped between the check and the start runs another program. Swapping one takes the right to
+     change a folder on the way, such as the folder that holds a link or a folder above it. At the
+     default modes of the standard layouts that is you and root, and for a cask or an npm install
+     also the group that owns Homebrew's folders (`admin` on a standard install), whose bin folders
+     are not judged. Starting the real target instead would leave the same window wherever a folder
+     above it is not judged (item 2).
+  2. The folder of a link the lookup follows, other than `~/.local/bin`, and the folders above the
+     real target's folder, up to the first folder that root owns and others cannot write, are not
+     judged: for the native installer's link `~/.local/share/claude`, `~/.local/share`, `~/.local`
+     and your home folder; for a cask or an npm install folders such as `/opt/homebrew/Caskroom` and
+     `/opt/homebrew/lib`, which a standard Homebrew install leaves writable by its group, as it does
+     its bin folders, so judging them would refuse every cask and npm install. Whoever can change
+     one of these folders can swap what the path resolves to between the check and the start, or,
+     before the check, point it at another file that passes these tests, such as a program that root
+     owns, whose folder is then the one judged.
+  3. A program that `claude` starts by name is found on the child's `PATH` with none of these
+     checks: for a probe and `auth status`, in the folder that holds the `claude` found, then in
+     Homebrew's bin folders, which are not judged, then in the system's; for `run` and `login`, on
+     your own `PATH`. Examples are the `node` that an npm install runs through `#!/usr/bin/env node`
+     and the `security` tool that Claude Code runs to read the Keychain. Whoever can write a folder
+     on that `PATH` ahead of the program's own can run a program in its place as you. The tool
+     starts each child of its own by a full path.
+  4. The line that `pick` and `run --print-command` hand out starts `claude` by name, so it runs the
+     `claude` your shell or your launcher finds on its own `PATH`, which the tool does not check:
+     another binary of the list earlier on that `PATH`, a `claude` outside the list, an alias or a
+     shell function. Their check judges only the binary the runner would start, the first of the
+     list that exists, and none when none exists.
 
 ### 6.3 Cache and age
 
@@ -2284,7 +2343,8 @@ Flags:
   `label` and `eligible` for every account. The answer has `dryRun: true`, the chosen `label`
   when one fits (exit 0, or exit 2 when none), and `env`, `args`, `launchPrefix`, `launchArgs` and
   `unsetEnv` all null, because no launch file exists to name. It still refreshes stale readings
-  and takes the pick lock.
+  and takes the pick lock, and it refuses a `claude` the runner refuses as a pick does, with the
+  whole text and exit 1, before any of that (6.2).
 
 ### 10.3 `agent-balancer events --json`
 
@@ -2443,14 +2503,22 @@ empty lists, and the events record keeps only each label's newest line.
   numbers stay in `status --json` as `reserve` (10.1) for a caller.
 - **Empty and first-run states:** no config yet: one card "Run `agent-balancer init`" with a Copy
   button; config but no readings: rows say "Reading accounts" until the first probe finishes; CLI
-  not found: an error card with the lookup paths tried; a status file with a newer
-  `schemaVersion`: "Update agent-balancer". Never an empty window.
+  not found: an error card with the lookup paths tried; a CLI the lookup refuses: an error card with
+  the refusal and its fix, which the Manage accounts window shows as its reason too; a status file
+  with a newer `schemaVersion`: "Update agent-balancer". Never an empty window.
 - **Finding the CLI:** the app looks only at `/opt/homebrew/bin/agent-balancer`, then
-  `/usr/local/bin/agent-balancer`, after the test the runner applies to the `claude` binary
-  (6.2): the owner and mode test and the access list test of its real target, and a lookup that
-  stops is refused, not skipped, with the runner's texts. It judges no folder: the runner's tests
-  of `~/.local/bin` and of the folder that holds the real target do not apply to it. No
-  executable path comes from config.
+  `/usr/local/bin/agent-balancer`, after the test the runner applies to the `claude` binary (6.2):
+  the owner and mode test and the access list test of its real target, and a lookup that stops is
+  refused, not skipped, with the runner's texts. It judges no folder: the runner's tests of
+  `~/.local/bin` and of the folder that holds the real target do not apply to it. The runner keeps
+  its test of that folder for every layout, since a `claude` can be linked in from anywhere. The
+  tool has one install, Homebrew's formula (section 12), whose real target sits in a keg under
+  `/opt/homebrew/Cellar`, reached through `/opt/homebrew/bin`; a standard install leaves both
+  writable by Homebrew's group and unjudged (6.2), so judging the keg's folder would stop no one
+  they do not already let in, and would refuse the tool after each upgrade under a group-writable
+  umask, which Homebrew keeps for an administrator. Like the runner, the app starts the path found,
+  so a link swapped between the check and the start runs another program (6.2). No executable path
+  comes from config.
 - **Size:** the popover caps at the visible screen height minus 40 points and scrolls inside;
   every command shown has a Copy button. Open at login is a checkmark item in the menu, off until
   the user turns it on. The refresh interval is changed with
@@ -3271,7 +3339,7 @@ file deletion outside the no-follow writer.
 | T2 | A token-like string lands in output or logs (for example echoed in a `claude` error) | The scrubber's token pass works on whole captured buffers after the size cap and before parsing, so a token split across two reads is still caught. A second pass (email addresses, UUIDs, `/Users/<name>`) runs only on stderr, error texts and log lines, never on the JSON fields the readers map. The leak test plants canaries in every input |
 | T3 | Network exfiltration or telemetry | No networking code; the safety script fails if `URLSession`, `Network` or socket APIs appear; the only network user is the `claude` binary |
 | T4 | Command injection through config | `Process` with argument arrays only, never a shell; labels and folders must match the patterns in 5.2, and folders must be owned by the user |
-| T5 | A fake `claude` earlier on `PATH` | The runner looks for `claude` only in the fixed list in 6.2 and refuses a binary whose real target is not owned by the user or root, or that another user or group can change through its mode or its access list, and `~/.local/bin` the same way when the binary sits there, and the folder that holds the real target unless it is one of Homebrew's bin folders (6.2); `pick` and `run --print-command` refuse such a binary before they write a launch file; `doctor` shows the path, and the `chmod -N` or `chmod go-w` that clears it where one is known to |
+| T5 | A fake `claude` earlier on `PATH` | The runner looks for `claude` only in the fixed list in 6.2 and refuses a binary whose real target is not owned by the user or root, or that another user or group can change through its mode or its access list, and `~/.local/bin` the same way when the binary sits there, and the folder that holds the real target unless it is one of Homebrew's bin folders (6.2); `pick` and `run --print-command` refuse such a binary before they write a launch file, but the line they hand out starts the `claude` your shell finds on its own `PATH`, which the tool does not check, so for that line this threat is not mitigated; `doctor` shows the path, and the `chmod -N` or `chmod go-w` that clears it where one is known to; 6.2 lists what these checks leave unjudged |
 | T6 | A shared settings link gives chats a second path to edit the settings that apply to every session | Section 5: where links live, and the user's own path rules for settings files |
 | T7 | Probe runaway spends capacity | Lock per account folder, the reading-age skip rule (6.2), `--max-budget-usd 0.05`, timeout |
 | T8 | Two callers pick the same account at once | `pick` decides and writes its lease under an exclusive lock (7.2 rule 7), so the next pick sees the first one |

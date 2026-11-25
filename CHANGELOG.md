@@ -221,6 +221,35 @@
   for the account now under its label: a rejection of the old account no longer makes `pick` skip
   the new account as `login rejected`, and a working probe of the old account cannot end the
   rejection of a new token whose first check failed, so `run` still refuses that token.
+- A `claude` lookup that a system policy stops, such as a sandbox profile or privacy protection, now
+  says so and names no `chmod -N`, which could not clear it. A folder of yours whose mode keeps you
+  out now names `chmod u+x`, and an entry whose owner the tool cannot read names your own `chmod -N`
+  for when it is yours, where both named none. No refusal names a `chmod -N` for your home folder,
+  which would also drop the entry macOS keeps there, however a path spells it, nor any command for a
+  link that leads there; it says to check the home's list with `ls -led ~` instead, or, when you
+  cannot read the home's attributes, why neither `ls -led ~` nor `chmod -a` works there. A link
+  whose own list denies you `read` says that no chmod can clear that list, and a stop that a flag or
+  another owner may keep from every command of yours says so. The rights that pass the access list
+  check are reading, running, listing, searching, reading its attributes or list, and `synchronize`,
+  which the earlier entry left out. Tests now set each rights bit alone on the binary and on
+  `~/.local/bin`, and pin a locked entry whose attributes you cannot read.
+- `pick` and `pick --dry-run` now refuse a `claude` the runner refuses before any sign-in check or
+  probe, for every kind of account, and exit 1 with the whole refusal. A login or folder account
+  used to be skipped with the refusal cut at 200 characters, and a dry run named an account. Every
+  `chmod -N` the binary checks name now says that it drops every entry of that access list, and a
+  folder of root's that others can write, with its sticky bit off, gets `sudo chmod go-w`. The menu
+  bar card and the Manage accounts window show a refusal of the command line tool and its fix
+  instead of "not found". The README names the real target's folder among what must be owned by you
+  or root, and the guide says why a group-writable umask gets each new cask or npm version refused
+  until `chmod -R go-w` runs on its folder.
+- The architecture now states what the `claude` binary checks leave unjudged: the path found is
+  started, so a link swapped after the check runs another program; the folder of a link the lookup
+  follows and the folders above the real target's folder are not judged; a program `claude` starts
+  by name, such as `node` or `security`, is found on `PATH` unchecked; and the line that `pick` and
+  `run --print-command` hand out runs the `claude` your shell finds, which the threat table no
+  longer counts as covered. It also says why the menu app judges no folder of the command line tool.
+  Tests pin that `pick` and `run --print-command` go on when no binary of the fixed list exists, and
+  that the native installer, a Homebrew cask and an npm install pass.
 
 ## 1.1.0
 

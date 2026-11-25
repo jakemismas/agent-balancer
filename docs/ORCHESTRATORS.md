@@ -33,7 +33,7 @@ seconds and wait up to 30 seconds for the pick lock.
 | `--full-login` | Get only accounts with a full login, for a session that needs claude.ai connectors, Remote Control or claude.ai skills. |
 | `--exclude <label>` | Leave out an account your own check refused, or one whose worker just hit a limit. Repeat it for more labels. |
 | `--settings '<json>'` | Pass your own settings for the session, as one JSON object. Never pass `--settings` to `claude` yourself. |
-| `--dry-run` | Decide only. It writes no lease and no launch file and returns no recipe. |
+| `--dry-run` | Decide only. It writes no lease and no launch file and returns no recipe. It still refuses a `claude` the tool refuses, as a pick does, and exits 1. |
 
 ## Read the exit code
 

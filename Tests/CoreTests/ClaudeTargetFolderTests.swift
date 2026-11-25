@@ -23,10 +23,13 @@ import Testing
         -> String
     {
         "Refused \(shown): the access list of its real target's folder `\(place)` lets another user or group change it, or cannot be read. "
-            + (fix ?? "Run `chmod -N \(place)` in Terminal.")
+            + (fix ?? "Run `chmod -N \(place)` in Terminal to drop every entry of its access list.")
     }
 
-    func run(_ command: String) -> String { "Run `\(command)` in Terminal." }
+    func run(_ command: String) -> String {
+        "Run `\(command)` in Terminal"
+            + (command.contains("chmod -N") ? " to drop every entry of its access list." : ".")
+    }
 
     /// Links `.local/bin/claude` to a copy of the fake at `relative`, and returns its folder.
     func install(_ t: TestHome, _ relative: String? = nil) throws -> URL {
@@ -114,7 +117,8 @@ import Testing
                 #expect(try base.chflagsRun([flag, folder.path]) == 0, "\(name)")
                 let change = byMode ? "go-w" : "-N"
                 let fix =
-                    "Run `chflags no\(flag) \(place)`, then `chmod \(change) \(place)` in Terminal."
+                    "Run `chflags no\(flag) \(place)`, then `chmod \(change) \(place)` in Terminal"
+                    + (byMode ? "." : " to drop every entry of its access list.")
                 let wanted = byMode ? modeText(place, fix: fix) : listText(place, fix: fix)
                 #expect(base.refusal(t) == wanted, "\(name)")
                 // The lock keeps the `chmod` alone from clearing it.
@@ -271,5 +275,108 @@ import Testing
                 + run("chmod -N \(folder)"))
         #expect(try base.chmodRun(["-N", cellar.path]) == 0)
         #expect(refusal() == nil)
+    }
+
+    @Test func aFolderOfRootsThatOthersCanWriteWithoutTheStickyBitGetsSudoChmodGoW() throws {
+        let t = try TestHome()
+        let place = "/usr/local/lib/node_modules"
+        func folder(root: Bool = true, sticky: Bool = false, flags: UInt32 = 0) -> FileFacts {
+            FileFacts(
+                realPath: place, ownerIsUserOrRoot: root, ownerIsUser: false,
+                writableByOthers: true, listLetsOthersChange: false,
+                flags: NoFollowWriter.FileFlags(flags), isRegularFile: false, isExecutable: true,
+                isSticky: sticky)
+        }
+        #expect(t.runner.modeFix(folder()) == run("sudo chmod go-w \(place)"))
+        #expect(
+            t.runner.modeFix(folder(flags: UInt32(UF_IMMUTABLE)))
+                == "Run `sudo chflags nouchg \(place)`, then `sudo chmod go-w \(place)` in Terminal."
+        )
+        // One shared on purpose, like `/tmp`, and another user's get none.
+        #expect(t.runner.modeFix(folder(sticky: true)) == nil)
+        #expect(t.runner.modeFix(folder(root: false)) == nil)
+    }
+
+    @Test @MainActor func theMenuCardAndTheManageWindowShowTheRefusalAndItsFix() throws {
+        let t = try TestHome()
+        defer { base.clear(t) }
+        let bin = t.home.appendingPathComponent("bin")
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        let tool = bin.appendingPathComponent("agent-balancer")
+        try "#!/bin/sh\nexit 0\n".write(to: tool, atomically: true, encoding: .utf8)
+        #expect(chmod(tool.path, 0o755) == 0)
+        try base.add("everyone allow write", tool)
+        let runner = CLIRunner(context: t.context, candidates: [tool])
+        let refusal =
+            "Refused ~/bin/agent-balancer: its real target's access list lets another user or group change it, or cannot be read. Run chmod -N ~/bin/agent-balancer in Terminal to drop every entry of its access list."
+        let menu = MenuController(context: t.context, runner: runner)
+        #expect(
+            menu.screen
+                == .card(
+                    CardModel(
+                        title: "agent-balancer refused", text: refusal, command: nil, lines: [])))
+        let manage = ManageViewModel(context: t.context, runner: runner)
+        #expect(manage.offReason == "Management is off: " + refusal)
+        #expect(try base.chmodRun(["-N", tool.path]) == 0)
+        menu.reload()
+        if case .card(let card) = menu.screen {
+            #expect(card.title == "Set up agent-balancer")
+        } else {
+            Issue.record("expected the setup card")
+        }
+        #expect(manage.offReason == nil)
+    }
+
+    /// The native installer, a Homebrew cask and an npm install, each with Homebrew's real modes
+    /// set explicitly, pass the runner's tests and run.
+    @Test func theThreeInstallLayoutsPassWithTheirStandardModes() throws {
+        let fm = FileManager.default
+        let layouts: [(name: String, link: String, real: String, text: String?, wide: [String])] = [
+            (
+                "native", ".local/bin/claude", ".local/share/claude/versions/2.1.0", nil, []
+            ),
+            (
+                "cask", "brew/bin/claude", "brew/Caskroom/claude-code/2.1.0/claude", nil,
+                ["brew/bin", "brew/Caskroom"]
+            ),
+            (
+                "npm", "brew/bin/claude", "brew/lib/node_modules/@anthropic-ai/claude-code/cli.js",
+                "../lib/node_modules/@anthropic-ai/claude-code/cli.js", ["brew/bin", "brew/lib"]
+            ),
+        ]
+        for layout in layouts {
+            let t = try TestHome()
+            defer { base.clear(t) }
+            let link = t.home.appendingPathComponent(layout.link)
+            let real = t.home.appendingPathComponent(layout.real)
+            for folder in [link.deletingLastPathComponent(), real.deletingLastPathComponent()] {
+                try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+            }
+            try fm.copyItem(at: t.fixtures.appendingPathComponent("bin/claude"), to: real)
+            #expect(chmod(real.path, 0o755) == 0, "\(layout.name)")
+            try fm.createSymbolicLink(
+                atPath: link.path, withDestinationPath: layout.text ?? real.path)
+            // Every folder from the home down gets its mode explicitly, whatever the umask.
+            var folders = [t.home]
+            for path in [layout.link, layout.real] {
+                var url = t.home
+                for part in path.split(separator: "/").dropLast() {
+                    url.appendPathComponent(String(part))
+                    folders.append(url)
+                }
+            }
+            for folder in folders {
+                let wide = layout.wide.contains {
+                    t.home.appendingPathComponent($0).path == folder.path
+                }
+                #expect(chmod(folder.path, wide ? 0o775 : 0o755) == 0, "\(layout.name)")
+            }
+            let runner =
+                layout.name == "native"
+                ? t.runner : ClaudeRunner(context: t.context, candidates: [link])
+            #expect(base.refusal(runner) == nil, "\(layout.name)")
+            #expect(try runner.locate().path == link.path, "\(layout.name)")
+            #expect(try runner.run(arguments: ["--version"]).status == 0, "\(layout.name)")
+        }
     }
 }

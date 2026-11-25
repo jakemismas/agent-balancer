@@ -6,15 +6,17 @@ import Testing
 
 /// The runner refuses a `claude` whose real target, or `~/.local/bin` when the binary sits there,
 /// has an access list entry that gives another user or group any right but reading, running,
-/// listing, searching and reading its attributes or list, inherited or not, or a list the user
-/// cannot read, as it refuses one that group or others can write; an entry that only lets others
-/// read or run it, one for the user alone and one that only denies change nothing. A lookup that
-/// stops is refused, naming where it stops and only a command that lets it through.
+/// listing, searching, reading its attributes or list and `synchronize`, inherited or not, or a
+/// list the user cannot read, as it refuses one that group or others can write; an entry that
+/// only lets others read or run it, one for the user alone and one that only denies change
+/// nothing. A lookup that stops is refused, naming where it stops and only a command that lets it
+/// through, or why none does.
 @Suite struct ClaudeAccessListTests {
     func runTool(_ tool: String, _ arguments: [String]) throws -> Int32 {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: tool)
         task.arguments = arguments
+        task.standardOutput = FileHandle.nullDevice
         task.standardError = Pipe()
         try task.run()
         task.waitUntilExit()
@@ -108,12 +110,12 @@ import Testing
 
     func binaryText(_ target: String, fix: String? = nil) -> String {
         "Refused ~/.local/bin/claude: its real target's access list lets another user or group change it, or cannot be read. "
-            + (fix ?? "Run `chmod -N \(target)` in Terminal.")
+            + (fix ?? "Run `chmod -N \(target)` in Terminal to drop every entry of its access list.")
     }
 
     func folderText(_ folder: String = "~/.local/bin", fix: String? = nil) -> String {
         "Refused ~/.local/bin/claude: its folder's access list lets another user or group change it, or cannot be read. "
-            + (fix ?? "Run `chmod -N \(folder)` in Terminal.")
+            + (fix ?? "Run `chmod -N \(folder)` in Terminal to drop every entry of its access list.")
     }
 
     /// What a refusal says when the lookup stops, of the binary or of its folder.
@@ -121,7 +123,10 @@ import Testing
         -> String
     {
         "Refused \(shown ?? "~/.local/bin/claude"): \(folder ? "its folder" : "it") cannot be checked, because \(because)."
-            + (fix.map { " Run `\($0)` in Terminal." } ?? "")
+            + (fix.map {
+                " Run `\($0)` in Terminal"
+                    + ($0.contains("chmod -N") ? " to drop every entry of its access list." : ".")
+            } ?? "")
     }
 
     /// What `locate` refuses the binary with, or nil when it finds it.
@@ -363,16 +368,38 @@ import Testing
                 == stopText("you cannot search the folder `\(place)`", fix: "chmod -N \(place)"))
         #expect(try chmodRun(["-N", versions.path]) == 0)
         #expect(refusal(t) == nil)
+        // Denying `readsecurity` too stops the lookup at the folder itself; `chmod -N` clears it.
+        try add("user:\(me) deny search,readsecurity", versions)
+        #expect(
+            refusal(t)
+                == stopText(
+                    "you cannot read the attributes of `\(place)`", fix: "chmod -N \(place)"))
+        #expect(try chmodRun(["-N", versions.path]) == 0)
+        #expect(refusal(t) == nil)
+        // A mode that keeps its owner out gets `chmod u+x`, which run as printed lets it through.
         #expect(chmod(versions.path, 0o600) == 0)
-        #expect(refusal(t) == stopText("you cannot search the folder `\(place)`", fix: nil))
+        let closed = stopText("you cannot search the folder `\(place)`", fix: "chmod u+x \(place)")
+        #expect(refusal(t) == closed)
         // The same file named directly gets the same answer.
         let direct = ClaudeRunner(
             context: t.context, candidates: [versions.appendingPathComponent("2.1.0")])
         #expect(
             refusal(direct)
                 == stopText(
-                    "you cannot search the folder `\(place)`", fix: nil,
+                    "you cannot search the folder `\(place)`", fix: "chmod u+x \(place)",
                     shown: "\(place)/2.1.0"))
+        #expect(try chmodRun(["u+x", versions.path]) == 0)
+        #expect(refusal(t) == nil)
+        // `~/.local/bin` itself, locked too, gets the `chflags` first.
+        #expect(chmod(localBin(t).path, 0o600) == 0)
+        #expect(try chflagsRun(["uchg", localBin(t).path]) == 0)
+        #expect(
+            refusal(t)
+                == stopText("you cannot search the folder `~/.local/bin`", fix: nil)
+                + " Run `chflags nouchg ~/.local/bin`, then `chmod u+x ~/.local/bin` in Terminal.")
+        #expect(try chflagsRun(["nouchg", localBin(t).path]) == 0)
+        #expect(try chmodRun(["u+x", localBin(t).path]) == 0)
+        #expect(refusal(t) == nil)
     }
 
     @Test func aListTheUserCannotReadOnTheBinaryOrLocalBinRefusesTheBinary() throws {
@@ -446,7 +473,8 @@ import Testing
             #expect(try chmodRun(["-N", share.path]) == 0)
             #expect(refusal(t) == nil)
         }
-        // A target the user cannot open either: its owner is unknown, so no command is named.
+        // A target the user cannot open either: its owner is unread, so the user's own command
+        // is named for when it is the user's.
         do {
             let t = try TestHome()
             defer { clear(t) }
@@ -454,9 +482,32 @@ import Testing
             try add("user:\(me) deny read,readattr", real)
             #expect(
                 refusal(t)
-                    == stopText("you cannot read the attributes of `~/\(target)`", fix: nil))
+                    == stopText("you cannot read the attributes of `~/\(target)`", fix: nil)
+                    + " If you own it, run `chmod -N ~/\(target)` in Terminal to drop every entry of its access list."
+            )
             #expect(try chmodRun(["-N", real.path]) == 0)
             #expect(refusal(t) == nil)
+        }
+        // `chmod -h -N` clears the link's own list and keeps its target's, unlike `chmod -N`.
+        do {
+            let t = try TestHome()
+            defer {
+                clearLinkList(t.fakePath)
+                clear(t)
+            }
+            let real = try linkInstall(t, target)
+            try add("everyone deny delete", real)
+            #expect(try chmodRun(["-h", "+a", "user:\(me) deny readattr", t.fakePath.path]) == 0)
+            #expect(
+                refusal(t)
+                    == stopText(
+                        "you cannot read the attributes of the link `~/.local/bin/claude`",
+                        fix: nil)
+                    + " If you own it, run `chmod -h -N ~/.local/bin/claude` in Terminal to drop every entry of its access list."
+            )
+            #expect(try chmodRun(["-h", "-N", t.fakePath.path]) == 0)
+            #expect(refusal(t) == nil)
+            #expect(AccessList.hasList(path: real.path))
         }
         // The link's own list: no `chmod` clears it, so none is named.
         for denied in ["read,readattr,readsecurity", "read"] {
@@ -468,7 +519,9 @@ import Testing
             _ = try linkInstall(t, target)
             #expect(try chmodRun(["-h", "+a", "user:\(me) deny \(denied)", t.fakePath.path]) == 0)
             #expect(
-                refusal(t) == stopText("you cannot read the link `~/.local/bin/claude`", fix: nil),
+                refusal(t)
+                    == stopText("you cannot read the link `~/.local/bin/claude`", fix: nil)
+                    + " No chmod can clear the access list of a link you cannot read.",
                 "\(denied)")
             clearLinkList(t.fakePath)
             #expect(refusal(t) == nil, "\(denied)")
@@ -486,7 +539,8 @@ import Testing
                 let place = onFolder ? "~/.local/bin" : "~/.local/bin/claude"
                 try add(onFolder ? "everyone allow add_file" : "everyone allow write", url)
                 #expect(try chflagsRun([flag, url.path]) == 0, "\(name)")
-                let fix = "Run `chflags no\(flag) \(place)`, then `chmod -N \(place)` in Terminal."
+                let fix =
+                    "Run `chflags no\(flag) \(place)`, then `chmod -N \(place)` in Terminal to drop every entry of its access list."
                 let wanted = onFolder ? folderText(fix: fix) : binaryText(place, fix: fix)
                 #expect(refusal(t) == wanted, "\(name)")
                 #expect(try chmodRun(["-N", url.path]) != 0, "\(name)")
@@ -518,7 +572,7 @@ import Testing
             let unlock = flags.split(separator: ",").map { "no" + $0 }.joined(separator: ",")
             let wanted =
                 stopText("you cannot search the folder `\(place)`", fix: nil)
-                + " Run `chflags \(unlock) \(place)`, then `chmod -N \(place)` in Terminal."
+                + " Run `chflags \(unlock) \(place)`, then `chmod -N \(place)` in Terminal to drop every entry of its access list."
             #expect(refusal(t) == wanted, "\(name)")
             // The lock keeps `chmod -N` alone from clearing the list.
             #expect(try chmodRun(["-N", folder.path]) != 0, "\(name)")
@@ -527,5 +581,387 @@ import Testing
             #expect(try chmodRun(["-N", folder.path]) == 0, "\(name)")
             #expect(refusal(t) == nil, "\(name)")
         }
+    }
+
+    /// The rights bits that change nothing, by number: `read` (`list`), `execute` (`search`),
+    /// `readattr`, `readextattr`, `readsecurity` and `synchronize`.
+    static let passingBits: Set<Int> = [1, 3, 7, 9, 11, 20]
+
+    @Test func eachRightsBitAloneOnTheBinaryOrLocalBinGetsTheChecksAnswer() throws {
+        for onFolder in [false, true] {
+            for bit in 0..<32 {
+                let name = "bit \(bit) on folder \(onFolder)"
+                let t = try TestHome()
+                defer { clear(t) }
+                try t.installFake()
+                try addRaw(UInt32(1) << UInt32(bit), onFolder ? localBin(t) : t.fakePath)
+                let refused = onFolder ? folderText() : binaryText("~/.local/bin/claude")
+                #expect(refusal(t) == (Self.passingBits.contains(bit) ? nil : refused), "\(name)")
+            }
+        }
+    }
+
+    @Test func aLockedEntryWhoseAttributesTheUserCannotReadNamesNoCommand() throws {
+        for onFolder in [false, true] {
+            let t = try TestHome()
+            let url = onFolder ? localBin(t) : t.fakePath
+            defer {
+                // The `chflags` command cannot read such an entry, so the call clears its lock.
+                _ = chflags(url.path, 0)
+                clear(t)
+            }
+            try t.installFake()
+            try add("user:\(me) deny readattr", url)
+            #expect(chflags(url.path, UInt32(UF_IMMUTABLE)) == 0, "folder \(onFolder)")
+            let place = onFolder ? "~/.local/bin" : "~/.local/bin/claude"
+            #expect(
+                refusal(t)
+                    == stopText(
+                        "you cannot read the attributes of `\(place)`", fix: nil, folder: onFolder)
+                    + " A flag on it may keep its list from being changed, and the chflags command cannot read it to clear that flag.",
+                "folder \(onFolder)")
+            #expect(try chflagsRun(["nouchg", url.path]) != 0, "folder \(onFolder)")
+        }
+    }
+
+    @Test func aStopThatNoListOrModeMakesNamesNoChmod() throws {
+        let t = try TestHome()
+        defer { clear(t) }
+        try t.installFake()
+        let path = t.fakePath.path
+        // EPERM is a system policy's, such as a sandbox profile's, which no `chmod` clears.
+        #expect(FileFacts.unreadable(path, error: EPERM) == .policy(path: path))
+        #expect(
+            FileFacts.unreadable(path, error: EACCES)
+                == .unreadable(path: path, isLink: false, clearedBy: .user, identity: .notAFolder))
+        let text = t.runner.uncheckedText(
+            "~/.local/bin/claude", .policy(path: path), ofFolder: false)
+        #expect(
+            text
+                == "Refused ~/.local/bin/claude: it cannot be checked, because a system policy, such as a sandbox profile, keeps you from `~/.local/bin/claude`, and no chmod clears that."
+        )
+        #expect(!text.contains("chmod -N"))
+    }
+
+    @Test func aHomeFolderIsNeverOfferedChmodNButWhatToCheck() throws {
+        let check =
+            "Check its access list with `ls -led ~`: clearing the whole list would also drop the entry macOS keeps on a home folder."
+        // A home the user cannot search.
+        do {
+            let t = try TestHome()
+            defer { clear(t) }
+            try t.installFake()
+            try add("user:\(me) deny search", t.home)
+            #expect(
+                refusal(t)
+                    == stopText("you cannot search the folder `~`", fix: nil, folder: true) + " "
+                    + check)
+        }
+        // A home that holds the real target, whose list lets others change it.
+        let t = try TestHome()
+        defer { clear(t) }
+        _ = try linkInstall(t, "claude")
+        try add("everyone allow add_file", t.home)
+        #expect(
+            refusal(t)
+                == "Refused ~/.local/bin/claude: the access list of its real target's folder `~` lets another user or group change it, or cannot be read. "
+                + check)
+        let home = FileFacts.identity(t.home.path, options: O_DIRECTORY)
+        #expect(
+            t.runner.clearSentence(t.home.path, home, ownerIsUser: true, unlocking: []) == check)
+    }
+
+    /// Makes `real/home` in a fresh folder spelled by its real path, so no link is above it, and
+    /// a home that spells it as `layout` says: directly, through a link to the folder that holds
+    /// it, or as a link to it, each link naming `real` as `folder` spells it, with the fake
+    /// `claude` at its `.local/bin/claude`.
+    func makeHome(_ base: TestHome, _ layout: String, folder: String = "real") throws -> (
+        home: TestHome, real: URL
+    ) {
+        let root = URL(fileURLWithPath: try #require(FileFacts.resolve(base.home.path)))
+        let real = root.appendingPathComponent("real/home")
+        try FileManager.default.createDirectory(at: real, withIntermediateDirectories: true)
+        var spelled = real
+        if layout == "linked folder" {
+            let link = root.appendingPathComponent("link")
+            try FileManager.default.createSymbolicLink(
+                atPath: link.path, withDestinationPath: folder)
+            spelled = link.appendingPathComponent("home")
+        } else if layout == "linked home" {
+            spelled = root.appendingPathComponent("homelink")
+            try FileManager.default.createSymbolicLink(
+                atPath: spelled.path, withDestinationPath: folder + "/home")
+        }
+        let home = TestHome.wrapping(spelled, fixtures: base.fixtures)
+        try home.installFake()
+        return (home, real)
+    }
+
+    @Test func aHomeWhoseAttributesCannotBeReadGetsNoCommandThroughItsLinksOrNot() throws {
+        let unread =
+            "Reading its list needs that right too, so `ls -led ~` fails, and `chmod -a` cannot remove one entry: it fails, and empties the list when you own it. Clearing the whole list would also drop the entry macOS keeps on a home folder."
+        for layout in ["direct", "linked folder", "linked home"] {
+            for denied in ["readattr", "read,readattr"] {
+                let name = "\(layout), \(denied) denied"
+                let base = try TestHome()
+                let (t, real) = try makeHome(base, layout)
+                defer {
+                    _ = try? chmodRun(["-N", real.path])
+                    clear(base)
+                }
+                // An entry like the one macOS keeps on a home folder, then the user's own.
+                try add("everyone deny delete", real)
+                try add("user:\(me) deny \(denied)", real)
+                let text = refusal(t)
+                #expect(
+                    text
+                        == stopText(
+                            "you cannot read the attributes of `~`", fix: nil, folder: true,
+                            shown: t.context.display(t.fakePath)) + " " + unread, "\(name)")
+                #expect(text?.contains("chmod -N") == false, "\(name)")
+                // As the text says, `chmod -a` fails and empties the list.
+                #expect(
+                    try chmodRun(["-a", "user:\(me) deny \(denied)", real.path]) != 0, "\(name)")
+                #expect(!AccessList.hasList(path: real.path), "\(name)")
+                #expect(refusal(t) == nil, "\(name)")
+            }
+        }
+    }
+
+    @Test func aListThatDeniesReadingItStillCountsAsAList() throws {
+        let t = try TestHome()
+        defer { clear(t) }
+        let folder = t.home.appendingPathComponent("vault")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        #expect(!AccessList.hasList(path: folder.path))
+        try add("user:\(me) deny readsecurity", folder)
+        #expect(AccessList.hasList(path: folder.path))
+        #expect(try chmodRun(["-N", folder.path]) == 0)
+        #expect(!AccessList.hasList(path: folder.path))
+    }
+
+    @Test func aHomeSpelledInOtherLetterCaseIsKnownByItsDeviceAndInode() throws {
+        for layout in ["linked folder", "linked home"] {
+            for denied in ["readattr", "search", "read,readattr"] {
+                let name = "\(layout), \(denied) denied"
+                let base = try TestHome()
+                let (t, real) = try makeHome(base, layout, folder: "REAL")
+                defer {
+                    _ = try? chmodRun(["-N", real.path])
+                    clear(base)
+                }
+                let spelled = real.deletingLastPathComponent().deletingLastPathComponent()
+                    .appendingPathComponent("REAL/home").path
+                // The volume ignores letter case, so the lookup reaches the home as `REAL/home`.
+                try #require(FileManager.default.fileExists(atPath: spelled))
+                try add("everyone deny delete", real)
+                try add("user:\(me) deny \(denied)", real)
+                let place = PickService.shellQuote(spelled)
+                let drop =
+                    "clearing the whole list would also drop the entry macOS keeps on a home folder."
+                let because: String
+                let check: String
+                if denied == "search" {
+                    because = "you cannot search the folder `\(place)`"
+                    check = "Check its access list with `ls -led \(place)`: " + drop
+                } else {
+                    because = "you cannot read the attributes of `\(place)`"
+                    // With listing denied too, neither it nor the home can be opened.
+                    let reason =
+                        denied == "readattr"
+                        ? "C" + drop.dropFirst()
+                        : "Whether it is your home folder cannot be checked, and " + drop
+                    check =
+                        "Reading its list needs that right too, so `ls -led \(place)` fails, and `chmod -a` cannot remove one entry: it fails, and empties the list when you own it. "
+                        + reason
+                }
+                let text = refusal(t)
+                #expect(
+                    text
+                        == stopText(
+                            because, fix: nil, folder: true,
+                            shown: t.context.display(t.fakePath)) + " " + check, "\(name)")
+                #expect(text?.contains("chmod -N") == false, "\(name)")
+                #expect(
+                    (try runTool("/bin/ls", ["-led", spelled]) == 0) == (denied == "search"),
+                    "\(name)")
+                #expect(AccessList.hasList(path: real.path), "\(name)")
+            }
+        }
+    }
+
+    @Test func aLinkThatLeadsToTheHomeGetsNoCommandHoweverItIsSpelled() throws {
+        let leads =
+            "It leads to your home folder, so no command is named for it: one that follows the link acts on the home folder itself."
+        // The home a link that denies reading its attributes, written with a slash after it.
+        do {
+            let base = try TestHome()
+            let (linked, real) = try makeHome(base, "linked home")
+            let t = TestHome.wrapping(
+                URL(fileURLWithPath: linked.home.path + "/", isDirectory: true),
+                fixtures: base.fixtures)
+            defer {
+                clearLinkList(linked.home)
+                _ = try? chmodRun(["-N", real.path])
+                clear(base)
+            }
+            try add("everyone deny delete", real)
+            #expect(
+                try chmodRun(["-h", "+a", "user:\(me) deny readattr", linked.home.path]) == 0)
+            let text = refusal(t)
+            #expect(
+                text
+                    == stopText(
+                        "you cannot read the attributes of the link `~`", fix: nil, folder: true,
+                        shown: t.context.display(t.fakePath)) + " " + leads)
+            #expect(text?.contains("chmod") == false)
+        }
+        // Another link to the home, its target in other letter case, on the way to the binary.
+        do {
+            let base = try TestHome()
+            let (t, real) = try makeHome(base, "direct")
+            let alias = real.deletingLastPathComponent().deletingLastPathComponent()
+                .appendingPathComponent("alias")
+            defer {
+                clearLinkList(alias)
+                _ = try? chmodRun(["-N", real.path])
+                clear(base)
+            }
+            try FileManager.default.createSymbolicLink(
+                atPath: alias.path, withDestinationPath: "REAL/home")
+            try FileManager.default.moveItem(
+                at: t.fakePath, to: real.appendingPathComponent("claude-2.1.0"))
+            try FileManager.default.createSymbolicLink(
+                atPath: t.fakePath.path,
+                withDestinationPath: alias.appendingPathComponent("claude-2.1.0").path)
+            #expect(refusal(t) == nil)
+            try add("everyone deny delete", real)
+            #expect(try chmodRun(["-h", "+a", "user:\(me) deny readattr", alias.path]) == 0)
+            let text = refusal(t)
+            #expect(
+                text
+                    == stopText(
+                        "you cannot read the attributes of the link `\(PickService.shellQuote(alias.path))`",
+                        fix: nil, shown: t.context.display(t.fakePath)) + " " + leads)
+            #expect(text?.contains("chmod") == false)
+        }
+        // A link in the home keeps its `chmod -h -N`, which acts on it alone, slash or not.
+        do {
+            let base = try TestHome()
+            let (linked, real) = try makeHome(base, "linked home")
+            let written = linked.home.path + "/"
+            let t = TestHome.wrapping(
+                URL(fileURLWithPath: written, isDirectory: true), fixtures: base.fixtures)
+            defer {
+                clearLinkList(t.fakePath)
+                _ = try? chmodRun(["-N", real.path])
+                clear(base)
+            }
+            _ = try linkInstall(t, ".local/share/claude/versions/2.1.0")
+            try add("everyone deny delete", real)
+            #expect(try chmodRun(["-h", "+a", "user:\(me) deny readattr", t.fakePath.path]) == 0)
+            #expect(
+                refusal(t)
+                    == stopText(
+                        "you cannot read the attributes of the link `~/.local/bin/claude`",
+                        fix: nil, shown: t.context.display(t.fakePath))
+                    + " If you own it, run `chmod -h -N ~/.local/bin/claude` in Terminal to drop every entry of its access list."
+            )
+            // Run as a shell expands it, with the slash the home is written with.
+            #expect(try chmodRun(["-h", "-N", written + "/.local/bin/claude"]) == 0)
+            #expect(refusal(t) == nil)
+            #expect(AccessList.hasList(path: real.path))
+        }
+    }
+
+    @Test func aHomeSpelledThroughTheDataVolumeIsKnownWhenItsListIsJudged() throws {
+        let base = try TestHome()
+        defer { clear(base) }
+        let root = try #require(FileFacts.resolve(base.home.path))
+        // macOS reaches each folder of its data volume through `/System/Volumes/Data` too.
+        let data = "/System/Volumes/Data" + root
+        let identity = FileFacts.identity(root, options: O_DIRECTORY)
+        try #require(identity != nil && FileFacts.identity(data, options: O_DIRECTORY) == identity)
+        let real = URL(fileURLWithPath: root).appendingPathComponent("home")
+        try FileManager.default.createDirectory(at: real, withIntermediateDirectories: true)
+        let t = TestHome.wrapping(
+            URL(fileURLWithPath: data).appendingPathComponent("home"), fixtures: base.fixtures)
+        // The link names the home by the shorter path, which its real path keeps.
+        _ = try linkInstall(t, "claude", linkText: real.appendingPathComponent("claude").path)
+        #expect(refusal(t) == nil)
+        try add("everyone allow add_file", real)
+        let place = PickService.shellQuote(real.path)
+        let text = refusal(t)
+        #expect(
+            text
+                == "Refused \(t.context.display(t.fakePath)): the access list of its real target's folder `\(place)` lets another user or group change it, or cannot be read. Check its access list with `ls -led \(place)`: clearing the whole list would also drop the entry macOS keeps on a home folder."
+        )
+        #expect(text?.contains("chmod -N") == false)
+    }
+
+    @Test func noFolderGetsChmodNWhileTheHomeCannotBeOpened() throws {
+        let base = try TestHome()
+        defer { clear(base) }
+        let root = URL(fileURLWithPath: try #require(FileFacts.resolve(base.home.path)))
+        let above = root.appendingPathComponent("above")
+        let t = TestHome.wrapping(above.appendingPathComponent("home"), fixtures: base.fixtures)
+        try t.installFake()
+        // A folder above the home that the user cannot search keeps the home from being opened.
+        try add("user:\(me) deny search", above)
+        #expect(t.runner.homeIdentity == nil)
+        #expect(FileFacts.resolve(t.home.path) == nil)
+        let maybe =
+            "hether it is your home folder cannot be checked, and clearing the whole list would also drop the entry macOS keeps on a home folder."
+        let place = PickService.shellQuote(above.path)
+        #expect(
+            refusal(t)
+                == stopText(
+                    "you cannot search the folder `\(place)`", fix: nil, folder: true,
+                    shown: t.context.display(t.fakePath))
+                + " Check its access list with `ls -led \(place)`: w" + maybe
+        )
+        func text(_ stop: FileFacts.Stop) -> String {
+            t.runner.uncheckedText("~/.local/bin/claude", stop, ofFolder: false)
+        }
+        let refused = "Refused ~/.local/bin/claude: it cannot be checked, because "
+        // A folder whose attributes cannot be read cannot be told from the home either.
+        let folder = PickService.shellQuote(root.path)
+        let home = FileFacts.identity(root.path, options: O_DIRECTORY)
+        #expect(
+            text(
+                .unreadable(
+                    path: root.path, isLink: false, clearedBy: .unreadOwner, identity: home))
+                == refused
+                + "you cannot read the attributes of `\(folder)`. Reading its list needs that right too, so `ls -led \(folder)` fails, and `chmod -a` cannot remove one entry: it fails, and empties the list when you own it. W"
+                + maybe)
+        // A file, or a link that leads to one, is never the home folder and keeps its command.
+        let file = root.appendingPathComponent("claude").path
+        let typed = PickService.shellQuote(file)
+        #expect(
+            text(.unreadable(path: file, isLink: false, clearedBy: .user, identity: .notAFolder))
+                == refused
+                + "you cannot read the attributes of `\(typed)`. Run `chmod -N \(typed)` in Terminal to drop every entry of its access list."
+        )
+        let facts = FileFacts(
+            realPath: file, ownerIsUserOrRoot: true, ownerIsUser: true, writableByOthers: false,
+            listLetsOthersChange: true, flags: nil, isRegularFile: true, isExecutable: true,
+            isSticky: false, identity: .notAFolder)
+        #expect(
+            t.runner.clearFix(facts)
+                == "Run `chmod -N \(typed)` in Terminal to drop every entry of its access list.")
+        #expect(
+            text(
+                .unreadable(
+                    path: file, isLink: true, clearedBy: .unreadOwner, identity: .notAFolder))
+                == refused
+                + "you cannot read the attributes of the link `\(typed)`. If you own it, run `chmod -h -N \(typed)` in Terminal to drop every entry of its access list."
+        )
+        #expect(
+            text(.unreadable(path: file, isLink: true, clearedBy: .unreadOwner, identity: home))
+                == refused
+                + "you cannot read the attributes of the link `\(typed)`. Whether it leads to your home folder cannot be checked, so no command is named for it."
+        )
+        #expect(try chmodRun(["-N", above.path]) == 0)
+        #expect(refusal(t) == nil)
     }
 }

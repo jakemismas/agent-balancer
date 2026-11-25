@@ -255,7 +255,9 @@ private func text(_ data: Data) -> String { String(decoding: data, as: UTF8.self
         #expect(!tokenCli.fakeRecord("args.log").contains("--settings"))
     }
 
-    @Test func runRejectsAMissingClaudeBeforeWritingAnyFile() throws {
+    /// Without the guard this would start the host's own `claude`.
+    @Test(.enabled(if: Support.noHostClaude))
+    func runRejectsAMissingClaudeBeforeWritingAnyFile() throws {
         let cli = try setUp(token: Canary.realShapeToken())
         defer { cli.cleanup() }
         try FileManager.default.removeItem(at: cli.fakePath)

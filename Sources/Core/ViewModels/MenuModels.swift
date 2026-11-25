@@ -167,10 +167,12 @@ public struct MenuInputs: Sendable {
     public var status: StatusLoad
     public var now: Date
     public var backgroundMinutes: Int
+    /// The refusal, with its fix, of a tool that is there and fails the test, or nil.
+    public var cliRefusal: String?
 
     public init(
         configExists: Bool, cliFound: Bool, cliTried: [String], status: StatusLoad, now: Date,
-        backgroundMinutes: Int
+        backgroundMinutes: Int, cliRefusal: String? = nil
     ) {
         self.configExists = configExists
         self.cliFound = cliFound
@@ -178,6 +180,7 @@ public struct MenuInputs: Sendable {
         self.status = status
         self.now = now
         self.backgroundMinutes = backgroundMinutes
+        self.cliRefusal = cliRefusal
     }
 }
 
@@ -199,6 +202,12 @@ public enum MenuBuilder {
         }
         if case .loaded(let snapshot) = inputs.status, !snapshot.accounts.isEmpty {
             return .accounts(accounts(snapshot, inputs))
+        }
+        if !inputs.cliFound, let refusal = inputs.cliRefusal {
+            return .card(
+                CardModel(
+                    title: "agent-balancer refused", text: refusalText(refusal), command: nil,
+                    lines: []))
         }
         if !inputs.cliFound {
             return .card(
@@ -260,6 +269,12 @@ public enum MenuBuilder {
     /// display-safe pass because a status file can be rewritten.
     static func plain(_ text: String) -> String {
         Display.safe(text.replacingOccurrences(of: "`", with: ""), limit: 400)
+    }
+
+    /// The lookup's refusal of the tool as a screen shows it: whole, so its fix is never cut, and
+    /// without the backticks around its commands.
+    static func refusalText(_ text: String) -> String {
+        Display.safe(text.replacingOccurrences(of: "`", with: ""), limit: 4096)
     }
 
     /// An account label from the status file, as the screen shows it.

@@ -339,7 +339,11 @@ public final class ManageViewModel {
     /// One line saying why every action is disabled, or nil when management is on.
     public var offReason: String? {
         if context.inChatShell { return "Management is off: this app was started from a chat." }
-        if !runner.isAvailable { return "Management is off: agent-balancer was not found." }
+        let tool = runner.lookup()
+        if let refusal = tool.refusal {
+            return "Management is off: " + MenuBuilder.refusalText(refusal)
+        }
+        if tool.found == nil { return "Management is off: agent-balancer was not found." }
         return nil
     }
 

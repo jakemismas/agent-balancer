@@ -1,3 +1,4 @@
+import Core
 import Foundation
 
 /// Paths and process helpers the CLI tests share.
@@ -169,6 +170,15 @@ enum Support {
         }
         return FileManager.default.temporaryDirectory
     }()
+
+    /// True when neither Homebrew bin folder holds a `claude`, so a test that removes the fake
+    /// cannot reach the host's own.
+    static var noHostClaude: Bool {
+        ["/opt/homebrew/bin/claude", "/usr/local/bin/claude"].allSatisfy {
+            if case .missing = FileFacts.look(URL(fileURLWithPath: $0)) { return true }
+            return false
+        }
+    }
 
     static func makeTempDir() throws -> URL {
         let dir = FileManager.default.temporaryDirectory

@@ -63,6 +63,16 @@ enum AccessList {
         verdict(path: path, counting: .anyChange) != .closed
     }
 
+    /// Whether the entry at `path` itself has an access list with an entry, or one the user
+    /// cannot read because it denies the user reading it.
+    static func hasList(path: String) -> Bool {
+        errno = 0
+        guard let list = acl_get_link_np(path, ACL_TYPE_EXTENDED) else { return errno == EACCES }
+        defer { acl_free(UnsafeMutableRawPointer(list)) }
+        var entry: acl_entry_t?
+        return acl_get_entry(list, ACL_FIRST_ENTRY.rawValue, &entry) == 0
+    }
+
     /// The verdict when a read gives no list, from its `errno`: no extended list (`ENOENT`) and a
     /// volume that keeps no access lists (`ENOTSUP`, `EOPNOTSUPP`) hold no entry; any other error
     /// leaves the list unread.

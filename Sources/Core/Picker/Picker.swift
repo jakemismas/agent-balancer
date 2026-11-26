@@ -18,7 +18,7 @@ public enum PickModel: Equatable, Sendable {
 
     /// `--model` only chooses the Fable rules and must match this shape.
     public static func isValidName(_ name: String) -> Bool {
-        name.range(of: "^[A-Za-z0-9][A-Za-z0-9._:\\[\\]-]{0,63}$", options: .regularExpression)
+        name.range(of: #"\A[A-Za-z0-9][A-Za-z0-9._:\[\]-]{0,63}\z"#, options: .regularExpression)
             != nil
     }
 }

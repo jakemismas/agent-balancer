@@ -274,6 +274,46 @@
   it at 240 characters. The architecture and the guide say what `remove` does in each case, and that
   no command it names clears a lock a program set on an entry whose access list denies you
   `readattr`.
+- Every name check now anchors its pattern at the very start and end of the name, so a name that
+  ends in a line break or a carriage return no longer passes as the name before it: a caller's
+  `env` name, a `launch.envNames` or `launch.settingsKeys` entry, a name in the default folder's
+  settings `env`, an inherited name a launcher recipe unsets, `--model`, `events --type` and a
+  window name in a probe reply. A config that lists such a name, which used to load, now fails
+  every command that loads it, and `--model` with one now exits 1. A probe entry whose window name
+  fails the check still has its usage checked, so a bad value there fails the reply as
+  `check_failed`, where it used to pass; one with a good value is still dropped and the reply
+  still parses. A stored reading drops a window whose name fails the check when it loads. The
+  architecture states each pattern in its anchored form.
+- `launch.envNames` and a caller's `env` never take `SSLKEYLOGFILE`, `JAVA_TOOL_OPTIONS`,
+  `JDK_JAVA_OPTIONS`, `_JAVA_OPTIONS` or any `OPENSSL_*` name, or a `CLAUDE_*` name outside the
+  protected group that the installed `claude` uses to start a program, name a folder or file its
+  hooks, plugins, mods, skills or memory load from or write to, change permissions, route
+  requests, join another session or bill a project, or whose use a byte search of it could not
+  settle, such as `CLAUDE_DEV_MODS_DIR`, `CLAUDE_PTY_HOST_EXEC`, `CLAUDE_REMOTE_WORKFLOW_SCRIPT`
+  and the `CLAUDE_PLUGIN_*` family. A config that lists one, which used to load, now fails every
+  command that loads it. `CLAUDE_ROLE`, `CLAUDE_CLIENT` and names of your own still pass, and the
+  architecture lists every refused name and says why the other `CLAUDE_*` names pass.
+- The two typed strings follow one rule: `launchArgs` now takes only a launch file path that
+  passes the folder pattern, as `launchPrefix` does. Under a data folder whose path holds a
+  space, `$(` or a letter outside ASCII, a typed `pick` of a `login` or `token` account and `run`
+  of one, which used to go ahead, now refuse, exit 1 and write nothing, as for a `folder` account.
+  `pick` without `--json` prints `launchPrefix` and `launchArgs` exactly as the JSON answer holds
+  them, so the prefix no longer shows in an extra pair of quotes. `run --print-command` refuses
+  an argument that holds a newline, a tab or another control or non-display character before it
+  writes anything, where it used to print it in `$'...'` form; `run` without the flag still
+  passes such an argument to `claude`.
+- One rule judges a `CLAUDE_CODE_` name the tool does not list, in your shell and in the default
+  folder's settings `env`: a name that holds `SIMPLE`, `SAFE`, `RESTRICT` or `HOOKS` may switch
+  hooks off, except six names that `claude` 2.1.332 reads for something that leaves hooks on, such
+  as `CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS` and `CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT`. A typed
+  `pick` or `run --print-command` from a shell that holds one of the six now gets a line, and the
+  refusal names the variable. Such a name in the settings `env`, which skipped no account unless
+  it was a listed name, now refuses every account as hooks off, as `disableAllHooks` does, so a
+  pick, a launcher's included, finds no candidate and exits 2; that includes
+  `CLAUDE_CODE_DISABLE_PERMISSION_PROMPT_NOTIFY_HOOKS`, which stops the permission prompt's
+  Notification hooks. The settings verdict that `run` and `link <label>` read moves to a new
+  schema, so after the update each refuses once with "Settings changed since the last check"
+  until `agent-balancer doctor` or another reader runs.
 
 ## 1.1.0
 

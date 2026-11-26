@@ -53,16 +53,53 @@ import Testing
     }
 
     @Test func aHooksOffNameRefusesATypedLine() {
-        #expect(throws: ToolError.self) {
-            try PickService.checkHooksOff(PickService.AmbientState(["CLAUDE_CODE_SIMPLE": "1"]))
-        }
-        for name in ProtectedEnv.settingsSourceNames {
-            #expect(throws: ToolError.self) {
-                try PickService.checkHooksOff(PickService.AmbientState([name: "/x"]))
+        let names =
+            ProtectedEnv.behaviorNames + ProtectedEnv.settingsSourceNames + [
+                "CLAUDE_CODE_NEW_HOOKS_X"
+            ]
+        for name in names {
+            do {
+                try PickService.checkHooksOff(PickService.AmbientState([name: "/x", "TERM": "x"]))
+                Issue.record("\(name) was not refused")
+            } catch let error as ToolError {
+                #expect(error.message.hasPrefix("\(name) is set in this shell"), "\(name)")
+                #expect(!error.message.contains("/x"), "\(name)")
+            } catch {
+                Issue.record("unexpected error for \(name)")
             }
         }
-        #expect(throws: Never.self) {
-            try PickService.checkHooksOff(PickService.AmbientState(["TERM": "x"]))
+        // The first such name in sorted order is the one the refusal names.
+        let two = PickService.AmbientState([
+            "CLAUDE_CODE_SIMPLE": "1", "CLAUDE_CODE_SAFE_MODE": "1",
+        ])
+        #expect(two.hooksOffName == "CLAUDE_CODE_SAFE_MODE")
+        for name in ChildEnvironmentTests.namesThatLeaveHooksOn + ["TERM"] {
+            #expect(throws: Never.self) {
+                try PickService.checkHooksOff(PickService.AmbientState([name: "1"]))
+            }
+        }
+    }
+
+    /// Both typed strings take only paths that pass the folder pattern of section 5.2.
+    @Test func launchArgsTakesOnlyAPathThatPassesTheFolderPattern() throws {
+        let base = "/opt/ab-home"
+        let context = ToolContext(home: URL(fileURLWithPath: base), ambient: [:])
+        let good = try LaunchFiles.fileURL(context: context, label: "main", leaseId: "l-0123abcd")
+            .path
+        #expect(good.hasPrefix(base + "/"))
+        #expect(try Recipe.launchArgs(settingsPath: good) == "--settings '\(good)'")
+        let tail = String(good.dropFirst(base.count))
+        for home in [
+            "/opt/ab home", "/opt/x$(id)", "/opt/caf\u{E9}", "/opt/it's", "/opt/a\\b", "/opt/a\tb",
+            "/opt/./x", "opt/relative",
+        ] {
+            #expect(!FolderPaths.isValidPath(home + tail), "\(home)")
+            #expect(throws: ToolError.self, "\(home)") {
+                try Recipe.launchArgs(settingsPath: home + tail)
+            }
+            #expect(throws: ToolError.self, "\(home)") {
+                try Recipe.launchPrefix(configDir: home + "/.agent-balancer/accounts/x/.claude")
+            }
         }
     }
 }

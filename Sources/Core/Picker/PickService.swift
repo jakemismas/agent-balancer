@@ -268,13 +268,13 @@ public struct PickService: Sendable {
     struct AmbientState {
         var configDir: Bool
         var key: Bool
-        /// A name that switches hooks off in the session the line starts.
-        var hooksOff: Bool
+        /// The first name that may switch hooks off, so the refusal can name it.
+        var hooksOffName: String?
         /// The first name that chooses the stored login, so the refusal can name it.
         var storeName: String?
 
         init(_ ambient: [String: String]) {
-            hooksOff = ambient.keys.contains { ProtectedEnv.mayDisableHooks($0) }
+            hooksOffName = ambient.keys.filter(ProtectedEnv.mayDisableHooks).min()
             configDir = ambient[ProtectedEnv.configDirVariable] != nil
             key = ambient.keys.contains { ProtectedEnv.carriesCredential($0) }
             storeName = ProtectedEnv.storeNames.first { ambient[$0] != nil }
@@ -282,9 +282,10 @@ public struct PickService: Sendable {
     }
 
     static func checkHooksOff(_ ambient: AmbientState) throws {
-        if ambient.hooksOff {
+        if let name = ambient.hooksOffName {
+            let shown = Display.safe(Scrubber.scrubText(name), limit: 64)
             throw ToolError(
-                "A variable that switches hooks off is set in this shell, so no line is given. Unset it in your own terminal and try again."
+                "\(shown) is set in this shell and may switch hooks off, so no line is given. Start the line from a shell without it."
             )
         }
     }

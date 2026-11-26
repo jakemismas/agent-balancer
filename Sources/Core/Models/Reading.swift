@@ -16,6 +16,11 @@ public enum WindowName {
     public static let picker: Set<String> = [fiveHour, sevenDay]
     /// The windows a plan may lack, which an account's `noLimit` may name.
     public static let mayHaveNoLimit: Set<String> = [fiveHour]
+
+    /// The shape a window name must have to be kept, from a probe reply or a stored reading.
+    public static func isValid(_ name: String) -> Bool {
+        name.range(of: #"\A[a-z0-9_]{1,40}\z"#, options: .regularExpression) != nil
+    }
 }
 
 /// One usage window: percent used (0 to 100, one decimal), when it resets and when the stored
@@ -142,12 +147,13 @@ public struct Reading: Codable, Equatable, Sendable {
         return age >= -60 && age < Double(maxAgeMinutes) * 60
     }
 
-    /// The reading without any stored use that is not a percent from 0 to 100. Such a value would
-    /// hold a window at that use, because stored use never goes down.
+    /// The reading without any stored use that is not a percent from 0 to 100, and without a
+    /// window whose name a probe reply could not give. Such a value would hold a window at that
+    /// use, because stored use never goes down.
     func sanitized() -> Reading {
         func valid(_ p: Double?) -> Bool { p.map { $0.isFinite && $0 >= 0 && $0 <= 100 } ?? true }
         var out = self
-        out.windows = windows.filter { valid($0.value.usedPercent) }
+        out.windows = windows.filter { WindowName.isValid($0.key) && valid($0.value.usedPercent) }
         if let f = fable,
             !(valid(f.usedPercent) && valid(f.weeklyUsedPercentAtRead)
                 && valid(f.upToPercentOfWeekly) && valid(f.guaranteedRoomPercentOfCap))

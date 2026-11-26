@@ -339,4 +339,68 @@ import Testing
             #expect(probe.contains(phrase), "\(phrase)")
         }
     }
+
+    @Test func theArchitectureStatesEveryNamePatternAnchored() throws {
+        let doc = try Self.prose("docs/ARCHITECTURE.md")
+        for pattern in [
+            CallerSettings.envNamePattern, #"\A/([A-Za-z0-9._-]+/)*[A-Za-z0-9._-]+\z"#,
+            #"\A[a-z0-9][a-z0-9-]{0,31}\z"#, #"\A[A-Za-z0-9][A-Za-z0-9._:\[\]-]{0,63}\z"#,
+        ] {
+            #expect(doc.contains("`\(pattern)`"), "\(pattern)")
+        }
+        for old in [
+            "^[A-Z][A-Z0-9_]{0,63}$", "^/([A-Za-z0-9._-]+/)*[A-Za-z0-9._-]+$",
+            "^[a-z0-9][a-z0-9-]{0,31}$", #"^[A-Za-z0-9][A-Za-z0-9._:\[\]-]{0,63}$"#,
+        ] {
+            #expect(!doc.contains(old), "\(old)")
+        }
+    }
+
+    /// The `CLAUDE_*` bullet of 4A.2 lists exactly the names and families the code refuses.
+    @Test func sectionFourA2ListsTheNeverAllowedNamesTheCodeRefuses() throws {
+        let recipe = try Self.section("### 4A.2 The launch recipe", level: "###")
+        for prefix in CallerSettings.forbiddenEnvPrefixes {
+            #expect(recipe.contains("`\(prefix)`"), "\(prefix)")
+        }
+        for name in ["SSLKEYLOGFILE", "JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "_JAVA_OPTIONS"] {
+            #expect(CallerSettings.forbiddenEnvNames.contains(name), "\(name)")
+            #expect(recipe.contains("`\(name)`"), "\(name)")
+        }
+        let start = try #require(
+            recipe.range(
+                of: "The `CLAUDE_*` names outside the protected group that are never allowed"))
+        let end = try #require(
+            recipe.range(of: "`claude` uses these", range: start.upperBound..<recipe.endIndex))
+        let quoted = recipe[start.upperBound..<end.lowerBound]
+            .split(separator: "`", omittingEmptySubsequences: false).enumerated()
+            .filter { $0.offset % 2 == 1 }.map { String($0.element) }
+        let listed = Set(quoted.filter { $0.hasPrefix("CLAUDE_") })
+        let refused = ProtectedEnv.launchRefusedNames.union(
+            ProtectedEnv.launchRefusedPrefixes.map { $0 + "*" })
+        #expect(listed == refused)
+        #expect(recipe.contains("`CLAUDE_ROLE` and `CLAUDE_CLIENT` are not in the binary at all."))
+    }
+
+    @Test func sectionFourA2StatesOneShapeForEveryTypedString() throws {
+        let recipe = try Self.section("### 4A.2 The launch recipe", level: "###")
+        for phrase in [
+            "Both strings take only paths that pass the pattern of 5.2",
+            "`pick` without `--json` prints both strings exactly as the JSON answer holds them.",
+            "The printed line holds only plain or single-quoted arguments",
+        ] {
+            #expect(recipe.contains(phrase), "\(phrase)")
+        }
+    }
+
+    @Test func sectionFourA3NamesTheWordsAndEveryNameThatLeavesHooksOn() throws {
+        let ambient = try Self.section("### 4A.3 The ambient rule", level: "###")
+        for name in ProtectedEnv.hooksStayOnNames.sorted() {
+            #expect(ambient.contains("`\(name)`"), "\(name)")
+        }
+        for word in ["SIMPLE", "SAFE", "RESTRICT", "HOOKS"] {
+            #expect(ambient.contains("`\(word)`"), "\(word)")
+        }
+        #expect(ambient.contains("The same rule judges the default folder's settings `env`"))
+        #expect(!ambient.contains("by its exact spelling"))
+    }
 }

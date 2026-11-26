@@ -103,6 +103,92 @@ import Testing
         }
     }
 
+    /// Names that load code into the TLS library or a Java process, or write TLS keys to a file.
+    static let codeLoadingNames = [
+        "OPENSSL_CONF", "OPENSSL_MODULES", "OPENSSL_ENGINES", "OPENSSL_ANY_LATER_NAME",
+        "SSLKEYLOGFILE", "JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS",
+    ]
+
+    @Test(arguments: CallerSettingsTests.codeLoadingNames)
+    func aCodeLoadingNameIsRefusedAtPickTimeEvenWhenListed(name: String) {
+        #expect(CallerSettings.isForbiddenEnvName(name))
+        let text = "{\"env\":{\"\(name)\":\"x\"}}"
+        #expect(refusal(text)?.contains("'\(name)' is never allowed") == true)
+        let listed = refusal(text, launch(envNames: [name]))
+        #expect(listed == "launch.envNames holds a name that is never allowed.")
+    }
+
+    /// `_JAVA_OPTIONS` already fails the name shape; the list refuses it as well.
+    @Test func theJavaOptionsNameWithALeadingUnderscoreIsRefusedTwice() {
+        #expect(CallerSettings.isForbiddenEnvName("_JAVA_OPTIONS"))
+        #expect(refusal(#"{"env":{"_JAVA_OPTIONS":"x"}}"#)?.contains("is not valid") == true)
+    }
+
+    /// `CLAUDE_` names outside the protected group that claude uses to load code, start a
+    /// program, open a path, change permissions or join another session, or could not be settled.
+    static let refusedByName = [
+        "CLAUDE_DEV_MODS_DIR", "CLAUDE_PROJECT_DIR", "CLAUDE_SKILL_DIR", "CLAUDE_TMPDIR",
+        "CLAUDE_STAGE_FILE_ROOT", "CLAUDE_CLIENT_PRESENCE_FILE", "CLAUDE_RELAUNCH_SESSION_ADD_DIRS",
+        "CLAUDE_MEMORY_STORES", "CLAUDE_ARTIFACT_HOST_GRANT", "CLAUDE_PROJECT_UUID",
+        "CLAUDE_WORKFLOW_NAME_ONLY", "CLAUDE_SNIP", "CLAUDE_SERVE_DRAIN_TIMEOUT_MS",
+        "CLAUDE_AGENTS_AUTO_RELAUNCHED_AT", "CLAUDE_MOD_MADE", "CLAUDE_SCRIPT_HOOK_ACK",
+    ]
+
+    /// The families, each by a name claude 2.1.332 holds or, for the options family, one shaped
+    /// like those its plugins get.
+    static let refusedFamilies = [
+        "CLAUDE_PTY_", "CLAUDE_SSH_", "CLAUDE_PLUGIN_", "CLAUDE_REMOTE_WORKFLOW_",
+        "CLAUDE_GATEWAY_",
+        "CLAUDE_CHROME_", "CLAUDE_COWORK_", "CLAUDE_INTERNAL_",
+    ]
+
+    static let refusedClaudeNames =
+        refusedByName + [
+            "CLAUDE_PTY_HOST_EXEC", "CLAUDE_PTY_HOST_NO_STABLE_PATH", "CLAUDE_PTY_RECORD",
+            "CLAUDE_SSH_LOCAL_BINARY", "CLAUDE_SSH_RUN_DIR", "CLAUDE_PLUGIN_ROOT",
+            "CLAUDE_PLUGIN_DATA", "CLAUDE_PLUGIN_OPTION_TOKEN", "CLAUDE_REMOTE_WORKFLOW_SCRIPT",
+            "CLAUDE_REMOTE_WORKFLOW_ARGS", "CLAUDE_GATEWAY_ALLOW_LOOPBACK",
+            "CLAUDE_CHROME_PERMISSION_MODE", "CLAUDE_COWORK_MEMORY_PATH_OVERRIDE",
+            "CLAUDE_INTERNAL_FC_OVERRIDES",
+        ]
+
+    @Test(arguments: CallerSettingsTests.refusedClaudeNames)
+    func aClaudeNameThatLoadsCodeOrIsUnsettledIsRefusedAtPickTime(name: String) {
+        #expect(CallerSettings.isForbiddenEnvName(name))
+        let text = "{\"env\":{\"\(name)\":\"x\"}}"
+        #expect(refusal(text)?.contains("'\(name)' is never allowed") == true)
+        #expect(
+            refusal(text, launch(envNames: [name]))
+                == "launch.envNames holds a name that is never allowed.")
+    }
+
+    @Test func everyRefusedClaudeFamilyRefusesANameOfItsOwn() {
+        #expect(ProtectedEnv.launchRefusedNames == Set(Self.refusedByName))
+        #expect(ProtectedEnv.launchRefusedPrefixes == Self.refusedFamilies)
+        for prefix in Self.refusedFamilies {
+            #expect(prefix.hasPrefix("CLAUDE_") && prefix.hasSuffix("_"), "\(prefix)")
+            #expect(CallerSettings.isForbiddenEnvName(prefix + "LATER_NAME"), "\(prefix)")
+        }
+    }
+
+    /// Names of the user's own, and names claude reads for a time, a display choice, a label or a
+    /// switch, still pass the name check.
+    @Test func claudeNamesThatLoadNoCodeStillPass() {
+        let design = launch(envNames: ["CLAUDE_ROLE", "CLAUDE_CLIENT"])
+        let env = #"{"env":{"CLAUDE_ROLE":"worker","CLAUDE_CLIENT":"card-1"}}"#
+        #expect(refusal(env, design) == nil)
+        for name in [
+            "CLAUDE_ROLE", "CLAUDE_CLIENT", "CLAUDE_CLIENT_ID", "CLAUDE_TEAM",
+            "CLAUDE_AFK_TIMEOUT_MS", "CLAUDE_AX_SCREEN_READER", "CLAUDE_STREAM_IDLE_TIMEOUT_MS",
+            "CLAUDE_AUTO_BACKGROUND_TASKS", "CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR",
+            "CLAUDE_HELPER_CONTEXT", "CLAUDE_DEBUG",
+        ] {
+            #expect(!CallerSettings.isForbiddenEnvName(name), "\(name)")
+            let text = "{\"env\":{\"\(name)\":\"x\"}}"
+            #expect(refusal(text, launch(envNames: [name])) == nil, "\(name)")
+        }
+    }
+
     @Test func aRefusalNamesTheKeyAndNeverTheValue() {
         let secret = "sk-" + "ant-" + "oat01-" + String(repeating: "z", count: 40)
         let message = refusal("{\"env\":{\"MY_FLAG\":5,\"OTHER\":\"\(secret)\"}}")

@@ -38,7 +38,8 @@ public struct SettingsFacts: Equatable, Sendable {
     public var apiKeyHelperPresent: Bool
     /// `env` names that carry a credential or choose the account (`ProtectedEnv.isKeyInSettings`).
     public var keyEnvNames: [String]
-    /// `env` names that switch hooks off or bring in a settings source, by exact name.
+    /// `env` names that may switch hooks off or bring in a settings source, by the rule a
+    /// typed line follows.
     public var hooksOffEnvNames: [String] = []
 
     public static let empty = SettingsFacts(
@@ -188,10 +189,10 @@ public struct HookRecord: Sendable {
         var hooksOffNames: [String] = []
         if let env = object["env"] as? [String: Any] {
             let names = env.keys.filter {
-                $0.range(of: "^[A-Z][A-Z0-9_]{0,63}$", options: .regularExpression) != nil
+                $0.range(of: #"\A[A-Z][A-Z0-9_]{0,63}\z"#, options: .regularExpression) != nil
             }
             keyNames = names.filter(ProtectedEnv.isKeyInSettings).sorted()
-            hooksOffNames = names.filter(ProtectedEnv.switchesHooksOff).sorted()
+            hooksOffNames = names.filter(ProtectedEnv.mayDisableHooks).sorted()
         }
         return SettingsFacts(
             hooks: entries.sorted(), disableAllHooks: (object["disableAllHooks"] as? Bool) == true,
@@ -233,6 +234,9 @@ public struct HookRecord: Sendable {
     /// What a reader saw: the stamp of the file, then the hooks and the key flag, or `readable`
     /// false when the file could not be read or parsed. No env name and no value is kept.
     struct VerdictFile: Codable, Equatable {
+        /// Schema 1 judged env names by exact name, so such a verdict counts as stale.
+        static let verdictSchema = 2
+
         var schemaVersion: Int
         var stamp: SettingsStamp
         var readable: Bool
@@ -243,7 +247,8 @@ public struct HookRecord: Sendable {
 
     func saveVerdict(stamp: SettingsStamp, facts: SettingsFacts?) {
         let file = VerdictFile(
-            schemaVersion: 1, stamp: stamp, readable: facts != nil, hooks: facts?.hooks ?? [],
+            schemaVersion: VerdictFile.verdictSchema, stamp: stamp, readable: facts != nil,
+            hooks: facts?.hooks ?? [],
             disableAllHooks: facts?.hooksOff ?? false, carriesKey: facts?.carriesKey ?? false
         )
         let encoder = JSONEncoder()
@@ -291,7 +296,7 @@ public struct HookRecord: Sendable {
             let data = try? reader.read(
                 folders: Layout.stateFolders, name: Layout.settingsSeenName),
             let file = try? JSONDecoder().decode(VerdictFile.self, from: data),
-            file.schemaVersion == 1, file.readable, file.stamp == stamp,
+            file.schemaVersion == VerdictFile.verdictSchema, file.readable, file.stamp == stamp,
             file.hooks.allSatisfy({
                 HookEntry.isHash($0.fingerprint) && HookEntry.isHash($0.commandHash)
             })

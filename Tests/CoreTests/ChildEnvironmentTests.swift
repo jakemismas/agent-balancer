@@ -71,12 +71,36 @@ import Testing
         for name in [
             "CLAUDE_CODE_SIMPLE", "CLAUDE_CODE_PERSONAL_HOOKS_OFF", "CLAUDE_CODE_RESTRICTED",
             "CLAUDE_CODE_RESTRICT_PERSONAL_CONFIG", "CLAUDE_CODE_SAFE_MODE",
-            "CLAUDE_CODE_NEW_SAFE_X",
+            "CLAUDE_CODE_NEW_SAFE_X", "CLAUDE_CODE_DISABLE_PERMISSION_PROMPT_NOTIFY_HOOKS",
+            "CLAUDE_CODE_NEW_HOOKS_X",
         ] {
             #expect(ProtectedEnv.mayDisableHooks(name), "\(name)")
         }
+        for name in Self.namesThatLeaveHooksOn + ["CLAUDE_CODE_NEW_NAME_X"] {
+            #expect(!ProtectedEnv.mayDisableHooks(name), "\(name)")
+        }
         #expect(!ProtectedEnv.mayDisableHooks("CLAUDE_CODE_CHILD_SESSION"))
         #expect(!ProtectedEnv.mayDisableHooks("PATH"))
+    }
+
+    /// The six names claude 2.1.332 reads for something that leaves hooks on.
+    static let namesThatLeaveHooksOn = [
+        "CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS", "CLAUDE_CODE_RESUME_SESSIONSTART_HOOKS_WAIT_MS",
+        "CLAUDE_CODE_HOOKS_SAME_THREAD", "CLAUDE_CODE_ENABLE_FUNCTION_HOOKS",
+        "CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT", "CLAUDE_CODE_FLEETVIEW_SIMPLE",
+    ]
+
+    /// Each of the six holds a word, so none is a dead entry, and none is a listed name or one a
+    /// launcher unsets by name.
+    @Test func theNamesThatLeaveHooksOnHoldAWordAndAreListedNowhereElse() {
+        #expect(ProtectedEnv.hooksStayOnNames == Set(Self.namesThatLeaveHooksOn))
+        let listed = Set(
+            ProtectedEnv.behaviorNames + ProtectedEnv.settingsSourceNames + Recipe.unsetNames)
+        #expect(ProtectedEnv.hooksStayOnNames.isDisjoint(with: listed))
+        for name in ProtectedEnv.hooksStayOnNames {
+            let worded = ["SIMPLE", "SAFE", "RESTRICT", "HOOKS"].contains { name.contains($0) }
+            #expect(worded && name.hasPrefix(ProtectedEnv.codePrefix), "\(name)")
+        }
     }
 
     @Test func everySettingsSourceTheProgramReadsCountsAsHooksOff() {
@@ -92,10 +116,11 @@ import Testing
             "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_SUBAGENT_MODEL",
             "CLAUDE_CODE_MESSAGING_SOCKET", "CLAUDE_CODE_MESSAGING_TOKEN",
             "CLAUDE_CODE_SESSION_ATTENDED", "CLAUDE_CODE_EXECPATH", "CLAUDE_CODE_CHILD_SESSION",
+            "CLAUDE_CODE_CHILD_NOTES_DIR", "CLAUDE_CODE_HOST_SHORT_TEMP_DIRS",
         ] {
             #expect(!ProtectedEnv.mayDisableHooks(name), "\(name)")
         }
-        // Only an exact name counts in a settings file, so a timing knob blocks nothing there.
+        // The listed names alone, without the words; a settings file now follows the shell's rule.
         #expect(!ProtectedEnv.switchesHooksOff("CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS"))
         #expect(ProtectedEnv.switchesHooksOff("CLAUDE_CODE_SIMPLE"))
     }

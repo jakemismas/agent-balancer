@@ -73,12 +73,13 @@ public enum ConfigValidator {
         try require("history.retentionDays", config.history.retentionDays, 0...ConfigLimits.days)
         let launch = config.launch
         try require("launch.keepDays", launch.keepDays, 1...ConfigLimits.days)
+        let keyPattern = #"\A[A-Za-z][A-Za-z0-9_]{0,63}\z"#
         for key in launch.settingsKeys
-        where key.range(of: "^[A-Za-z][A-Za-z0-9_]{0,63}$", options: .regularExpression) == nil {
+        where key.range(of: keyPattern, options: .regularExpression) == nil {
             throw ToolError("launch.settingsKeys holds a name that is not valid.")
         }
         for name in launch.envNames
-        where name.range(of: "^[A-Z][A-Z0-9_]{0,63}$", options: .regularExpression) == nil {
+        where name.range(of: CallerSettings.envNamePattern, options: .regularExpression) == nil {
             throw ToolError("launch.envNames holds a name that is not valid.")
         }
         try CallerSettings.checkLaunchLists(launch)

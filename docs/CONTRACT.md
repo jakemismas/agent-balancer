@@ -155,7 +155,9 @@ types it does not know. An event can come more than once, with a new `seq` and t
 its label, never as a count, so a repeat changes nothing. After a failed save an event can also
 be missing, and a label's last event and `status --json` can disagree; either can be behind until
 the label's next event, and `pick` decides from live checks and, for a token account, from the
-probe rejection `state/current.json` records. `history` gives the readings over time, for a chart
+probe rejection that `state/current.json` or `state/token-rejections.json` records. A rejection
+that only the second holds, as after a `refresh` the menu ended, shows in `status --json` only
+after the account's next probe. `history` gives the readings over time, for a chart
 or a burn-rate estimate. The fields of each answer that the schema documents are stable in
 version 1.
 

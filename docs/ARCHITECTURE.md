@@ -104,7 +104,9 @@ agent-balancer/
                    recipe parts; the only place that branches on kind
       Launch/      launch files: caller settings allowlist, merge, lease, upkeep (`Upkeep`, 4A.6)
       Status/      `StatusBuilder`: merges readings, sign-in checks and in-use sessions into the
-                   status document and rebuilds `state/status.json` (sections 10.1 and 13)
+                   status document and rebuilds `state/status.json` (sections 10.1 and 13);
+                   `TerminateGate` makes the terminate signal wait for a probe's rejection that
+                   `refresh` is keeping (6.4)
       Doctor/      `DoctorChecks`: the launch file count and oldest age, the synced-folder test,
                    and the folders and files whose access list lets others in (section 13), all
                    used by the `doctor` command (the other checks stay in the command)
@@ -298,8 +300,11 @@ only when its rebuild has no stored reading it can read and decode: while it rea
 reading decides, because a stored reading older than the probe's own puts the order in doubt (a
 clock set back, or a file put back). One probe clears it whatever the times: the first check of
 a token that `login` saves, when it works and the rebuild that records it saves
-`state/current.json` (4A.5). `refresh` probes again an account whose sign-in
-a probe found rejected, as the status records it, even when its reading is fresh (6.2).
+`state/current.json` (4A.5). When that rebuild saves none, `login` keeps the check in
+`state/token-checks.json`, and the next rebuild that reads it there and saves
+`state/current.json` clears a rejection recorded before the check (4A.5). `refresh` probes again
+an account whose sign-in a probe found rejected, as the status records it, even when its reading
+is fresh (6.2).
 The app reads `status.json`, checks whether `config.json` exists (to choose the "no config yet"
 state), writes no file itself, and calls the CLI for actions.
 
@@ -687,8 +692,10 @@ first save after the token file went missing while the reading stayed, as after 
 backup that left out `tokens/`, which is excluded from backups (Where a token may be, below),
 deletes the old token's reading. When the first check works, it also ends a probe's rejection
 recorded before that check, whatever the reading times, once the status rebuild that records the
-check saves `state/current.json` (4A.5). Only a replace writes
-`token_replaced`.
+check saves `state/current.json` (4A.5). When that rebuild saves none, as when it waits past 30
+seconds for the history lock, `login` keeps the check unless it cannot take the token records
+lock either (4A.5), and the next rebuild that reads the kept check and saves the file ends the
+rejection then. Only a replace writes `token_replaced`.
 
 Removing: `remove <label>` never refuses because a session still names a launch file. Removing
 the main account needs a person at a terminal (5.1): with standard input not a terminal, `remove`
@@ -840,7 +847,7 @@ used (section 13).
 | Kind | `pick` returns a recipe only when |
 |---|---|
 | `login` | `auth status` shows the default folder logged in as the configured email and plan |
-| `token` | The token file exists, is a regular file owned by the user with mode 0600 and an access list that lets no other user or group in (section 13), holds a token that parses, and its last probe did not end in an auth error. While its probe's `login_rejected` stands and the status has seen its latest reading (only a probe that works stores a newer one), it is skipped as `login rejected` before any probe, even on a fresh reading. `pick` and `run` read the rejection again under the pick lock right before they decide, `pick` after its sign-in checks there, and `pick` also skips the account when its own probe, still running at its deadline, ends with an auth error before the pick decides (6.4). A rejection whose command has not finished its status rebuild by then is not seen, nor is the pick's own probe while it still runs. The rejection ends once the status sees a stored reading newer than the time the rejection is dated to (section 4), or, when the rebuild has no stored reading it can read and decode, records a probe that works with a newer reading (a `refresh` probes it again, 6.2, and so does `login` when it saves a new token). A `login` that saves a new token also ends it once its first check of that token works, whatever the reading times, in the status rebuild that records that check: the rejection was recorded before that check, of the token it replaced or of the new token by a probe that ran between the save and the check, and `login` holds the label's probe lock from that check until the rebuild has run, so no later probe's rejection is ended by it. So a rejection dated to a reading stored while the wall clock ran ahead keeps the token out, once the clock is set right, until the clock passes that time, even when the token works again; a `login` with a new token whose first check works brings the account back at once, once that rebuild saves `state/current.json`. When that rebuild is skipped at its 30 second wait for the history lock, saves no `state/current.json` or fails, nothing stored marks the check, so a rejection dated ahead of the clock stands, `pick` and `run` keep the token out, and the account comes back with another such `login` whose rebuild saves the file, or with a stored reading newer than the rejection once the clock passes its time; one dated at or before the clock ends at the next rebuild, which sees the check's newer stored reading. Otherwise the order of probes is judged by reading times, and no rebuild moves a standing rejection's time back, so neither a reading file put back in an older form nor an older working probe whose rebuild lands late after the wall clock is set back ends it while the stored reading can be read. Two routes remain. With the wall clock set back before a rejection, a reading or a working probe from before the step that no rebuild had seen can look newer than the rejection, when the stored reading cannot be read at the rebuild that records the rejection or at that probe's own late rebuild. And a process that runs as the user can write a reading newer than the rejection, or hide one no rebuild had seen while the rejection is recorded and put it back later (T16). A `state/current.json` that cannot be read, is of another schema version or is unsound counts as no rejection |
+| `token` | The token file exists, is a regular file owned by the user with mode 0600 and an access list that lets no other user or group in (section 13), holds a token that parses, and its last probe did not end in an auth error. While its probe's `login_rejected` stands and the status has seen its latest reading (only a probe that works stores a newer one), it is skipped as `login rejected` before any probe, even on a fresh reading. `pick` and `run` read the rejection again under the pick lock right before they decide, `pick` after its sign-in checks there, and `pick` also skips the account when its own probe, still running at its deadline, ends with an auth error before the pick decides (6.4). A rejection whose command has not finished its status rebuild by then is not seen, except a token account's rejection that `refresh` keeps as its probe answers (6.4), nor is the pick's own probe while it still runs. The rejection ends once the status sees a stored reading newer than the time the rejection is dated to (section 4), or, when the rebuild has no stored reading it can read and decode, records a probe that works with a newer reading (a `refresh` probes it again, 6.2, and so does `login` when it saves a new token). A `login` that saves a new token also ends it once its first check of that token works, whatever the reading times, in the status rebuild that records that check: the rejection was recorded before that check, of the token it replaced or of the new token by a probe that ran between the save and the check, and `login` holds the label's probe lock from that check until the rebuild has run, so no later probe's rejection is ended by it. So a rejection dated to a reading stored while the wall clock ran ahead keeps the token out, once the clock is set right, until the clock passes that time, even when the token works again; a `login` with a new token whose first check works brings the account back at once, once that rebuild saves `state/current.json`. When that rebuild is skipped at its 30 second wait for the history lock, saves no `state/current.json` or fails, `login`, still holding the probe lock, keeps the check in `state/token-checks.json` and then deletes the label's record from `state/token-rejections.json` (section 13), so every record left there postdates the check; the next rebuild that reads the kept check and saves `state/current.json` ends the rejection that file held from before the check, as the check's own rebuild would have (a rebuild that read the token records before the check leaves it to the next one), and until then a rejection dated ahead of the clock keeps the token out of `pick` and `run`. A rejection that a probe records after the check still stands: that rebuild ends the earlier one before it folds its own probes, and keeps a record written after the check. When `login` cannot keep the check either (as while another command holds `locks/token-records.lock` for 30 seconds), or a rebuild that folds the kept check is ended between clearing it and saving `state/current.json` (section 13), nothing stored marks the check, so a rejection dated ahead of the clock stands until another such `login`, or a stored reading newer than the rejection once the clock passes its time; one dated at or before the clock ends at the next rebuild, which sees the check's newer stored reading. Otherwise the order of probes is judged by reading times, and no rebuild moves a standing rejection's time back, so neither a reading file put back in an older form nor an older working probe whose rebuild lands late after the wall clock is set back ends it while the stored reading can be read. Two routes remain. With the wall clock set back before a rejection, a reading or a working probe from before the step that no rebuild had seen can look newer than the rejection, when the stored reading cannot be read at the rebuild that records the rejection or at that probe's own late rebuild. And a process that runs as the user can write a reading newer than the rejection, or hide one no rebuild had seen while the rejection is recorded and put it back later (T16). A `state/current.json` that cannot be read, is of another schema version or is unsound counts as no rejection |
 | `folder` | `verify` passes (5.7): every link in the manifest is intact and no hook entry recorded at link time is gone. A folder account must be linked, always: a never-linked folder is refused with the reason `not linked`, because a folder without the shared settings runs with no hooks. A user with nothing to share still runs `link` once; it records an empty manifest |
 
 `init` always writes the hook record of the default folder, empty when there are no hooks. A
@@ -1471,8 +1478,10 @@ the Fable age rule counts from it (7.4).
 `fableProbedAt` is the time read once the account's plain step ended, before the last Fable probe
 counted as tried began; in `refresh` the status rebuild that records the plain step comes between
 (6.4). It is noted once the command takes that probe's result (6.2), so the once-a-day limit holds
-when one fails, and a probe that is not counted leaves it as it was. `refresh --force` does not
-lift that limit.
+when one fails, and a probe that is not counted leaves it as it was. `refresh` takes a result that
+holds a probe's rejection only once a status rebuild has saved it in `state/current.json`, so a
+Fable probe whose rejection the status could not record is not counted, and the next `refresh`
+runs it again (6.4). `refresh --force` does not lift that limit.
 
 None of those keys names an account: readings are kept by label. `state/readings/<label>.json`
 holds the reading last saved under that label, and everything that reads one for an account (the
@@ -1657,18 +1666,27 @@ probe lock go, and once more at its end with the sign-in checks and each result 
 did not finish with `state/current.json` saved (section 13), so a refresh that the menu ends after
 its 300 second timeout keeps what its finished probes found, unless such a rebuild was skipped at
 its 30 second wait for the history lock, saved no `state/current.json` or failed, or the menu
-ended the refresh after a probe finished but before that probe's own rebuild did. The menu's end
-stops the process, so the last rebuild does not run, and those results are lost from the status:
-a reading that a working probe stored shows at the next rebuild, a token account's rejection that
-its own rebuild recorded still keeps the token out, since that rebuild records it apart from
-`state/current.json`, and any other error is lost until the account's next probe. A failed plain
-probe leaves the reading as old as it was, so the next refresh probes the account again; a Fable
-probe whose own rebuild had not finished is not counted as tried (6.3), so the next refresh runs
-it again, while one whose own rebuild was skipped or saved no `state/current.json` was counted
+ended the refresh after a probe finished but before that probe's own rebuild did. A token
+account's rejection it keeps in those cases too: as the probe answers, before that rebuild,
+`refresh` writes the rejection to `state/token-rejections.json` (section 13), dated as the rebuild
+would date it, and the terminate signal the menu sends waits until that write is done, then ends
+the process. The menu's end stops the process, so the last rebuild does not run, and those
+results are lost from the status: a reading that a working probe stored shows at the next
+rebuild, a token account's rejection still keeps the token out, since `refresh` wrote it apart
+from `state/current.json`, and any other error is lost until the account's next probe. A failed
+plain probe leaves the reading as old as it was, so the next refresh probes the account again; a
+Fable probe whose own rebuild had not finished is not counted as tried (6.3), nor is one whose
+rejection its own rebuild did not save in `state/current.json`, so the next refresh runs it
+again, while any other whose own rebuild was skipped or saved no `state/current.json` was counted
 and runs again once a day has passed. Until then `pick` and `run` judge the account as they did
-before that probe. This version has no command that schedules `refresh` for
-people who use only the CLI: `schedule install` and `schedule remove`, which would manage a user
-LaunchAgent, are parked for a later release.
+before that probe, except that a token account's kept rejection keeps the token out. Such a
+rejection is still lost when the signal comes in the moment between the probe's answer and the
+start of that write, or when the write still waits for `locks/token-records.lock` as the menu
+kills the process 2 seconds after the signal; a write that cannot take that lock within 30
+seconds is left to the probe's own rebuild, which saves no `state/current.json` either while that
+lock stays held (section 13). This version has no command that schedules `refresh`
+for people who use only the CLI: `schedule install` and `schedule remove`, which would manage a
+user LaunchAgent, are parked for a later release.
 
 ## 7. The picker
 
@@ -2107,7 +2125,11 @@ Field rules:
   `inUse` is `{ "count", "sessions" }`, or with
   an unreadable record `{ "count": null, "sessions": [], "unknown": true }` (section 8).
 - `state` is one of `ok | limited | error | ended`. `error` is null or
-  `{ "code": ..., "text": ... }`. `source` is one of `probe | estimate | none`.
+  `{ "code": ..., "text": ... }`. `source` is one of `probe | estimate | none`. A probe's result,
+  like a sign-in check (`planTier` below), counts only for the account it was made for: it carries
+  that account's `accountKey`, and a rebuild that finds the label holding another account, as
+  after a rename, or a `remove` and an `add`, while a `pick` or `refresh` probed, takes nothing
+  from it for the account there now, neither its error nor its working nor its duplicate check.
 - `reserve` is present only on `main` accounts:
   `{ "linePercent": 63.3, "marginPercent": 5, "launchAllowed": true, "daysLeft": 4.0 }`.
   `launchAllowed` is the reserve line's answer alone (7.2 rule 2); `pick` also applies rules 7
@@ -2342,8 +2364,8 @@ The record of state changes. It answers "what changed since I last looked": the 
   `error` for one that recovered) until the label's next event, and when the events step itself
   failed, the change gets no event at all. So after a failed save a label's last event and
   `status --json` can disagree, and either can be behind until the label's next event; `pick`
-  decides from live checks and, for a token account, from the probe rejection
-  `state/current.json` records.
+  decides from live checks and, for a token account, from the probe rejection that
+  `state/current.json` or `state/token-rejections.json` records.
 - Each answer carries `recordId`, a random id made when `events.jsonl` is created: `r-` and six
   lowercase hex digits. A caller that sees a `recordId` it does not know treats that as a gap too:
   the record was started over.
@@ -2532,7 +2554,8 @@ empty lists, and the events record keeps only each label's newest line.
     than the time the rejection is dated to (section 4) or, with no stored reading it can read,
     records a probe that works with a newer reading, which `refresh` keeps trying even while the
     reading is fresh (6.2), or, for a token account, until `login` saves a new token whose first
-    check works and whose rebuild saves `state/current.json` (4A.5), or until `login`
+    check works and the rebuild that records that check, or a later one that reads it as kept,
+    saves `state/current.json` (4A.5), or until `login`
     completes a new sign-in (the folder was signed out before the run, or `claude auth login`
     exited 0); a check that sees only the old sign-in, such as the one a refused
     `login <label> --browser` records, leaves it, so the folder does not read "Signed in" in
@@ -2904,10 +2927,11 @@ empty lists, and the events record keeps only each label's newest line.
      cannot be had within 30 seconds they stay and are counted.
   4. State, logs, backups and probe leftovers go, by these name rules, each taken from the code
      that writes the file:
-     - `state/`: `status.json`, `current.json` and `token-rejections.json` (the status
-       rebuild), `events.jsonl` and the
-       damaged records it sets aside, `events-damaged-<seconds>-<4 hex>.jsonl`, `leases.json`,
-       `picks.log`, `settings-seen.json`, `readings/<label>.json` and `history/<label>.jsonl`, and
+     - `state/`: `status.json`, `current.json`, `token-rejections.json` and `token-checks.json`
+       (the status rebuild; `refresh` also writes `token-rejections.json`, and `login` both),
+       `events.jsonl` and the damaged records it sets aside,
+       `events-damaged-<seconds>-<4 hex>.jsonl`, `leases.json`, `picks.log`, `settings-seen.json`,
+       `readings/<label>.json` and `history/<label>.jsonl`, and
        the writer's temporary files in `state/`, `readings/` and `history/` once they are a minute
        old. Their writers (the status rebuild, a reading save, the settings verdict save) hold
        another lock than the pick lock, or none, so a younger one, or one dated ahead of the
@@ -2922,7 +2946,8 @@ empty lists, and the events record keeps only each label's newest line.
        temporary files.
      - `probe/`: each `p-<16 hex>` folder a probe made, with every regular file in it and in its
        folders.
-     - `locks/`, in step 7: `pick.lock`, `links.lock`, `history.lock` and `probe-<label>.lock`,
+     - `locks/`, in step 7: `pick.lock`, `links.lock`, `history.lock`, `token-records.lock` and
+       `probe-<label>.lock`,
        and the writer's temporary files, as in `logs/`.
 
      `<label>` is a label the tool accepts (5.2), and `<16 hex>` and `<4 hex>` are 16 and 4 of the
@@ -3023,6 +3048,11 @@ empty lists, and the events record keeps only each label's newest line.
                                           only)
   state/token-rejections.json      0600   each token account's probe rejection that stands: its
                                           label, random account key and time; never a token
+  state/token-checks.json          0600   each token account's new token whose first check worked
+                                          while that check's rebuild saved no current.json: its
+                                          label, random account key and reading time, until a
+                                          rebuild that reads it and saves current.json folds it
+                                          (4A.5); never a token
   state/settings-seen.json         0600   the verdict a reader saved for `run`: hook entries,
                                           `disableAllHooks`, a key flag and the settings file's
                                           stamp (4A.5); no env name and no value
@@ -3033,6 +3063,9 @@ empty lists, and the events record keeps only each label's newest line.
                                           or deletes the label's reading (6.3)
   locks/pick.lock                  0600   one pick decision at a time (section 7.2 rule 7)
   locks/history.lock               0600   one writer at a time for the history and events files
+  locks/token-records.lock         0600   one writer at a time for token-rejections.json and
+                                          token-checks.json, taken after the history lock and
+                                          inside any probe lock held, never the other way
   locks/links.lock                 0600   one writer at a time for links.json
   logs/agent-balancer.log          0600   scrubbed lines from the status rebuild (rotation at 1 MB
                                           is not built yet)
@@ -3141,6 +3174,21 @@ The history and events files are append-only JSON lines with one writer, the sta
 which takes `locks/history.lock` before it reads any reading, lease or config file and holds it
 until `status.json` has been renamed into place, so rebuilds run one at a time from start to end.
 A rebuild that waits more than 30 seconds for the lock writes neither file and logs it. The
+rebuild also takes `locks/token-records.lock`, which guards the writes that keep a token account's
+rejection as its probe answers (6.4) and a new token's first check (4A.5), but holds it only for
+two short steps: right after the history lock, to read the kept checks and the rejections, and at
+the end, to save the rejections, clear the kept checks it folded and save `current.json`. So a
+rebuild that stalls in between holds up neither write, and a check or rejection kept after its
+read stays as it is for the next rebuild. Those writes take the records lock inside the label's
+probe lock and never take the history lock, so the records lock is the innermost lock: taken
+after the history lock and inside any probe lock the command holds, never the other way. Each of
+them waits up to 30 seconds for it and otherwise writes nothing. A rebuild that waits that long
+for it at its start, or cannot read `state/token-checks.json` then, writes nothing and logs it,
+like one that waits for the history lock; at its end it saves neither the token records nor
+`current.json`, and logs it. So no rebuild saves `current.json` without folding in every check
+kept before it read the records (4A.5). A rebuild clears the checks it folded before it saves
+`current.json`, and puts them back when that save fails; a process that ends between the two
+loses them, and the rejection each would have ended stands. The
 history step runs last, after the command's own result is written and printed; a failure in it is
 logged and never changes that output or the exit code, so a damaged record cannot stop a `pick`.
 When the events step fails, the rebuild keeps the old `current.json`, so the next rebuild finds
@@ -3244,7 +3292,7 @@ file deletion outside the no-follow writer.
 | T15 | Public docs or history leak private labels, paths or tooling details | This document is public-safe; issue bodies, PR text and release notes pass a local banned-string list before they are posted |
 | T16 | A same-user process, a chat included, edits files under `~/.agent-balancer/` to skip consent, pass `verify`, move the main role, drop the reserve, forge a reading, or make the tool run a program of its choosing | No executable path is read from any file in the data folder; the `verify` cache lives in process memory only; config changes that move protection (`set-main`, `set`, `remove`) refuse in a chat shell. Against code that runs as the user this is advisory, and these bounds are left: the probe starts `claude` in its probe folder by path, so a process that swaps that folder for a link in between chooses where it starts; a render that a change of a home's tool folder stops leaves the output folder it made, empty when the change came before the first file; and `remove` takes a label only, so an account removed and added again with the same label, kind and email between the window's read and the run is the one removed |
 | T17 | A planted symlink redirects one of the tool's writes or deletes | No-follow, handle-relative writes and symlink-only removal (section 13) |
-| T18 | The history and events files expose usage patterns, or a same-user process forges or deletes lines to mislead a caller | 0600 files that hold labels, percentages, times and scrubbed texts only; a retention cap; the leak test reads both files. The files are information, never authority: `pick` and `verify` decide from live checks (for a token account, `pick` also from the probe rejection `state/current.json` records) and never read the history |
+| T18 | The history and events files expose usage patterns, or a same-user process forges or deletes lines to mislead a caller | 0600 files that hold labels, percentages, times and scrubbed texts only; a retention cap; the leak test reads both files. The files are information, never authority: `pick` and `verify` decide from live checks (for a token account, `pick` also from the probe rejection that `state/current.json` or `state/token-rejections.json` records) and never read the history |
 | T19 | A chat uses the Manage accounts window to add, remove, re-date or sign in an account: it starts the app itself, or drives the window by scripting the screen | The window runs six command shapes only and none that shares hooks or moves protection; it turns management off when its environment carries the chat-shell variable; the app has no scripting surface |
 | T20 | A stored token is read by another process that runs as the user, by a backup or by a sync tool, and stays usable for up to a year | 0600 files in 0700 folders; `tokens/` and `launch/` are marked as excluded from backups; `doctor` warns when the data folder sits inside a synced folder. Against code that runs as the user this is advisory, and it is the same exposure as Claude Code's own fallback credential file |
 | T21 | A token reaches output: `pick`'s JSON, an error text, a log line, the history, the app, a crash report | Only the `Tokens` and `Launch` modules read a token, and they return paths, never values. `pick` prints the launch file's path only. The scrubber runs on every captured buffer; `TokenCapture` reads the `claude setup-token` child's raw output first |
@@ -3395,10 +3443,10 @@ public copy.
    (10.3): read each event as the state it reports for its label, never as a count, so a repeat
    changes nothing. After a failed save an event can also be missing, and a label's last event
    and `status --json` can disagree; either can be behind until the label's next event, and
-   `pick` decides from live checks and, for a token account, from the probe rejection
-   `state/current.json` records. `status --json` carries `stateSince` and `limited`
-   (`since`, `until`, `window`), and `agent-balancer history --json --label <label>` gives the
-   readings over time.
+   `pick` decides from live checks and, for a token account, from the probe rejection that
+   `state/current.json` or `state/token-rejections.json` records. `status --json` carries
+   `stateSince` and `limited` (`since`, `until`, `window`), and
+   `agent-balancer history --json --label <label>` gives the readings over time.
 9. **Information is not authority:** decide a launch from `pick`, never from `events`, `history`
    or an old `status`.
 10. **Stable in `schemaVersion: 1`** (new fields may appear, and none of these change or go away):

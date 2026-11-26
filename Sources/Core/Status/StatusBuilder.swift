@@ -33,7 +33,7 @@ public enum StatusBuilder {
         config: Config, readings: [String: Reading], previous: CurrentFile,
         observations: StatusObservations, sessions: SessionsSnapshot, tokens: [String: TokenInfo],
         launchExists: (LaunchRef) -> Bool, launchUnchecked: (LaunchRef) -> Bool = { _ in false },
-        now: Date, folders: [String: FolderInfo] = [:]
+        now: Date, folders: [String: FolderInfo] = [:], marks: [String: RejectionRecord] = [:]
     ) -> StatusBuild {
         var current = CurrentFile()
         current.prunedAt = previous.prunedAt
@@ -97,12 +97,20 @@ public enum StatusBuilder {
 
         let retention = config.history.retentionDays
         for account in config.accounts {
-            let known = byKey[account.accountKey]?.entry
+            var known = byKey[account.accountKey]?.entry
             let reading = readings[account.label]
+            // A new token's first check that worked, kept apart because its own rebuild saved no
+            // state, ends the rejection recorded before it, as that rebuild would have.
+            if let mark = marks[account.label], mark.accountKey == account.accountKey,
+                known?.probeError?.code == StateCode.loginRejected.rawValue
+            {
+                known?.probeError = nil
+                known?.lastReadingAt = reading?.readAt ?? mark.at
+            }
+            let probe = observations.probe(for: account)
             let entry = Transitions.observed(
                 known, account: account, auth: observations.auth[account.label],
-                probe: observations.probe[account.label],
-                duplicate: observations.duplicates[account.label] ?? .notRun,
+                probe: probe, duplicate: observations.duplicate(for: account),
                 storedReadAt: reading?.readAt,
                 newToken: observations.newToken.contains(account.label), now: now)
             let token = tokens[account.label]
@@ -171,7 +179,7 @@ public enum StatusBuilder {
             }
             let seen = known?.lastReadingAt
             next.lastReadingAt = reading?.readAt ?? seen
-            if observations.probe[account.label]?.error?.code == .loginRejected {
+            if probe?.error?.code == .loginRejected {
                 // Dated now with no usable reading, never before a reading the status had seen.
                 let second = Date(timeIntervalSince1970: floor(now.timeIntervalSince1970))
                 next.lastReadingAt = max(reading?.readAt ?? second, seen ?? .distantPast)
@@ -363,8 +371,12 @@ public enum StatusBuilder {
     /// Rebuilds `state/status.json`. Under `locks/history.lock`, taken before any reading, lease or
     /// config file is read and held until `status.json` is renamed into place, it appends to the
     /// readings history and the events record, then writes `current.json` and `status.json`.
-    /// Returns nil when the lock stayed held. A failure of the history step is logged and never
-    /// stops the document from being written.
+    /// Returns nil, saving nothing, when that lock stayed held, or when `locks/token-records.lock`,
+    /// taken right after it to read the token records, stayed held or
+    /// `state/token-checks.json` could not be read. It takes that lock again only to save the
+    /// token records and `current.json`; when it stays held then, or that file cannot be read,
+    /// the rebuild saves neither. A failure of the history step is logged and never stops the
+    /// document from being written.
     @discardableResult
     public static func rebuild(
         context: ToolContext, observations: StatusObservations = StatusObservations(),
@@ -374,28 +386,48 @@ public enum StatusBuilder {
             .document
     }
 
-    /// `rebuild`, with whether it saved `state/current.json`.
+    /// `rebuild`, with whether it saved `state/current.json`. `afterRecordsRead` runs once the
+    /// token records are read and their lock is let go, before anything else is read; tests
+    /// stall a rebuild there.
     static func rebuilt(
-        context: ToolContext, observations: StatusObservations, now: Date, lockWait: TimeInterval?
+        context: ToolContext, observations: StatusObservations, now: Date, lockWait: TimeInterval?,
+        afterRecordsRead: () -> Void = {}
     ) throws -> (document: StatusDocument, savedState: Bool)? {
         try NoFollowWriter.run(context.dataRoot, rebuildPlan(context: context)) {
             try rebuiltSteps(
-                context: context, observations: observations, now: now, lockWait: lockWait)
+                context: context, observations: observations, now: now, lockWait: lockWait,
+                afterRecordsRead: afterRecordsRead)
         }
     }
 
+    /// The token records as a rebuild read them at its start: the kept new-token checks, and
+    /// the durable rejections, nil when that file could not be read.
+    struct RecordsRead {
+        var checks: [String: RejectionRecord]
+        var rejections: [String: RejectionRecord]?
+    }
+
     private static func rebuiltSteps(
-        context: ToolContext, observations: StatusObservations, now: Date, lockWait: TimeInterval?
+        context: ToolContext, observations: StatusObservations, now: Date, lockWait: TimeInterval?,
+        afterRecordsRead: () -> Void
     ) throws -> (document: StatusDocument, savedState: Bool)? {
         let writer = NoFollowWriter(root: context.dataRoot)
+        let wait = lockWait ?? lockWaitSeconds
         guard
             let lock = try writer.acquireLock(
-                folders: Layout.locksFolders, name: lockName, wait: lockWait ?? lockWaitSeconds)
+                folders: Layout.locksFolders, name: lockName, wait: wait)
         else {
             Self.log(context, "status rebuild skipped: the history lock stayed held")
             return nil
         }
         defer { lock.release() }
+        // The token records also change outside this lock, as a probe's rejection or a new
+        // token's check is kept, so their own lock is held only while they are read here and
+        // saved at the end, and a rebuild that stalls in between does not hold up those writes.
+        guard let read = try readRecords(context: context, writer: writer, wait: wait) else {
+            return nil
+        }
+        afterRecordsRead()
 
         let config = try ConfigStore(context: context).loadRequired()
         let store = ReadingStore(context: context)
@@ -417,6 +449,7 @@ public enum StatusBuilder {
                 usable: usable, modified: facts?.modified, blocked: blocked)
         }
         let reader = NoFollowReader(root: context.dataRoot)
+        let marks = read.checks
         var previous = CurrentFile()
         if let data = try? reader.read(folders: Layout.stateFolders, name: currentName) {
             if let file = try? EventLog.decoder().decode(CurrentFile.self, from: data),
@@ -449,7 +482,7 @@ public enum StatusBuilder {
             sessions: sessions, tokens: tokens,
             launchExists: { presence($0) == .there },
             launchUnchecked: { presence($0) == .unchecked },
-            now: now, folders: folders)
+            now: now, folders: folders, marks: marks)
 
         var current = built.current
         let events = EventLog(context: context)
@@ -512,17 +545,111 @@ public enum StatusBuilder {
         } catch {
             Self.log(context, "history step failed: \((error as? ToolError)?.message ?? "unknown")")
         }
-        recordRejections(
-            context: context, config: config, current: current, observations: observations)
-        if eventsSaved {
-            try writer.put(
-                try EventLog.encoder().encode(current) + Data([0x0A]),
-                folders: Layout.stateFolders, name: currentName)
+        let savedState: Bool
+        if let records = try writer.acquireLock(
+            folders: Layout.locksFolders, name: recordsLockName, wait: wait)
+        {
+            defer { records.release() }
+            savedState = try saveRecords(
+                context: context, read: read, config: config, current: current,
+                observations: observations, eventsSaved: eventsSaved)
+        } else {
+            Self.log(context, "token records step skipped: the token records lock stayed held")
+            savedState = false
         }
         try writer.put(
             try StatusDocument.encoder().encode(built.document) + Data([0x0A]),
             folders: Layout.stateFolders, name: statusName)
-        return (built.document, eventsSaved)
+        return (built.document, savedState)
+    }
+
+    /// Reads the kept new-token checks and the durable rejections under the records lock, then
+    /// lets it go. Nil, logged, when that lock stayed held or the checks file could not be read:
+    /// state saved without a kept check folded lets a later fold end a newer rejection.
+    private static func readRecords(
+        context: ToolContext, writer: NoFollowWriter, wait: TimeInterval
+    ) throws -> RecordsRead? {
+        guard
+            let records = try writer.acquireLock(
+                folders: Layout.locksFolders, name: recordsLockName, wait: wait)
+        else {
+            Self.log(context, "status rebuild skipped: the token records lock stayed held")
+            return nil
+        }
+        defer { records.release() }
+        let reader = NoFollowReader(root: context.dataRoot)
+        let checks = loadRecords(reader, name: checksName)
+        guard checks.sound else {
+            Self.log(context, "status rebuild skipped: state/token-checks.json could not be read")
+            return nil
+        }
+        let rejections = loadRecords(reader, name: rejectionsName)
+        return RecordsRead(
+            checks: checks.file.tokens, rejections: rejections.sound ? rejections.file.tokens : nil)
+    }
+
+    /// Under the records lock, saves the durable rejections, clears the kept checks this rebuild
+    /// folded and saves `current.json`, and says whether it saved that file. A record another
+    /// command kept after the rebuild read the records stays as it is: that command's probe or
+    /// check came after every one the rebuild saw.
+    private static func saveRecords(
+        context: ToolContext, read: RecordsRead, config: Config, current: CurrentFile,
+        observations: StatusObservations, eventsSaved: Bool
+    ) throws -> Bool {
+        let writer = NoFollowWriter(root: context.dataRoot)
+        let reader = NoFollowReader(root: context.dataRoot)
+        let checks = loadRecords(reader, name: checksName)
+        guard checks.sound else {
+            Self.log(
+                context, "token records step skipped: state/token-checks.json could not be read")
+            return false
+        }
+        var settled = Set(checks.file.tokens.filter { read.checks[$0.key] != $0.value }.keys)
+        let rejections = loadRecords(reader, name: rejectionsName)
+        if rejections.sound {
+            let before = read.rejections ?? [:]
+            let found = rejections.file.tokens
+            settled.formUnion(Set(before.keys).union(found.keys).filter { before[$0] != found[$0] })
+        }
+        let folded = read.checks.filter {
+            config.account($0.key)?.accountKey == $0.value.accountKey
+        }
+        recordRejections(
+            context: context, config: config, current: current, observations: observations,
+            marked: Set(folded.keys), settled: settled)
+        guard eventsSaved else { return false }
+        // Only the checks this rebuild folded go, and with the state that holds them.
+        var left = checks.file
+        for (label, mark) in read.checks where left.tokens[label] == mark {
+            left.tokens[label] = nil
+        }
+        let clears = left.tokens.count < checks.file.tokens.count
+        if clears {
+            do {
+                try writer.put(
+                    try EventLog.encoder().encode(left) + Data([0x0A]),
+                    folders: Layout.stateFolders, name: checksName)
+            } catch {
+                Self.log(
+                    context,
+                    "token checks step failed: \((error as? ToolError)?.message ?? "unknown")")
+                return false
+            }
+        }
+        do {
+            try writer.put(
+                try EventLog.encoder().encode(current) + Data([0x0A]),
+                folders: Layout.stateFolders, name: currentName)
+        } catch {
+            // Nothing else writes the checks while the lock is held, so they go back as read.
+            if clears {
+                try? writer.put(
+                    try EventLog.encoder().encode(checks.file) + Data([0x0A]),
+                    folders: Layout.stateFolders, name: checksName)
+            }
+            throw error
+        }
+        return true
     }
 
     /// True while a probe's rejection of the sign-in of `account` stands, as `state/current.json`
@@ -533,8 +660,25 @@ public enum StatusBuilder {
     }
 
     static let rejectionsName = "token-rejections.json"
+    /// Each token account's new token whose first check worked while the rebuild that records
+    /// that check saved no `current.json`; the first rebuild that reads it and saves that file
+    /// folds and drops it.
+    static let checksName = "token-checks.json"
+    static let recordsLockName = "token-records.lock"
 
-    struct RejectionRecord: Codable {
+    /// What keeping a rejection or a new token's check does under the data folder, beside a
+    /// token account's check (`Refresher.checkPlan`).
+    static var tokenRecordTargets: [NoFollowWriter.Target] {
+        [
+            .file(Layout.locksFolders, recordsLockName, [.lock]),
+            .file(Layout.stateFolders, currentName, [.read]),
+            .file(Layout.stateFolders, rejectionsName, [.read, .replace]),
+            .file(Layout.stateFolders, checksName, [.read, .replace]),
+            .folder(Layout.stateFolders, [.create]),
+        ]
+    }
+
+    struct RejectionRecord: Codable, Equatable {
         var accountKey: String
         var at: Date
     }
@@ -544,14 +688,119 @@ public enum StatusBuilder {
         var tokens: [String: RejectionRecord] = [:]
     }
 
+    /// A records file and whether it read as one: a file that is missing reads as empty and
+    /// sound, one that cannot be read or decoded as empty and not sound.
+    static func loadRecords(_ reader: NoFollowReader, name: String) -> (
+        file: RejectionsFile, sound: Bool
+    ) {
+        let data: Data?
+        do {
+            data = try reader.read(folders: Layout.stateFolders, name: name)
+        } catch {
+            return (RejectionsFile(), false)
+        }
+        guard let data else { return (RejectionsFile(), true) }
+        guard let file = try? EventLog.decoder().decode(RejectionsFile.self, from: data),
+            file.schemaVersion == 1
+        else { return (RejectionsFile(), false) }
+        return (file, true)
+    }
+
+    /// Writes a token account's probe rejection to the durable record at once, under the records
+    /// lock and without the history lock, dated as the rebuild that records it would date it.
+    /// Returns whether the record keeps the token out afterwards.
+    @discardableResult
+    public static func keepRejection(context: ToolContext, account: Account) -> Bool {
+        guard account.kind == Kind.token else { return false }
+        return TerminateGate.shared.recording {
+            let writer = NoFollowWriter(root: context.dataRoot)
+            guard
+                let lock = try? writer.acquireLock(
+                    folders: Layout.locksFolders, name: recordsLockName, wait: lockWaitSeconds)
+            else { return false }
+            defer { lock.release() }
+            let reader = NoFollowReader(root: context.dataRoot)
+            let loaded = loadRecords(reader, name: rejectionsName)
+            // A record that cannot be read already keeps every token account out.
+            guard loaded.sound else { return true }
+            var file = loaded.file
+            // Never before a reading the status had seen for this token: a kept new token's
+            // check stands for the readings before it.
+            var seen: Date?
+            if let mark = loadRecords(reader, name: checksName).file.tokens[account.label],
+                mark.accountKey == account.accountKey
+            {
+                seen = mark.at
+            } else if let data = try? reader.read(folders: Layout.stateFolders, name: currentName),
+                let state = try? EventLog.decoder().decode(CurrentFile.self, from: data),
+                state.schemaVersion == CurrentFile.currentSchema, state.isSound,
+                let entry = state.accounts[account.label], entry.accountKey == account.accountKey
+            {
+                seen = entry.lastReadingAt
+            }
+            let stored = try? ReadingStore(context: context).load(label: account.label)
+            let second = Date(timeIntervalSince1970: floor(Date().timeIntervalSince1970))
+            let at = max(stored?.readAt ?? second, seen ?? .distantPast)
+            if let known = file.tokens[account.label], known.accountKey == account.accountKey,
+                known.at >= at
+            {
+                return true
+            }
+            file.tokens[account.label] = RejectionRecord(accountKey: account.accountKey, at: at)
+            guard let data = try? EventLog.encoder().encode(file),
+                (try? writer.put(
+                    data + Data([0x0A]), folders: Layout.stateFolders, name: rejectionsName))
+                    != nil
+            else { return false }
+            return true
+        }
+    }
+
+    /// Keeps a new token's first check that worked for the next rebuild that saves
+    /// `current.json`, when the one that recorded it saved none, and ends the durable record of
+    /// the rejection before it. Runs under the label's probe lock, so no later probe comes first.
+    @discardableResult
+    public static func markNewToken(context: ToolContext, account: Account, at: Date) -> Bool {
+        guard account.kind == Kind.token else { return false }
+        return TerminateGate.shared.recording {
+            let writer = NoFollowWriter(root: context.dataRoot)
+            guard
+                let lock = try? writer.acquireLock(
+                    folders: Layout.locksFolders, name: recordsLockName, wait: lockWaitSeconds)
+            else { return false }
+            defer { lock.release() }
+            let reader = NoFollowReader(root: context.dataRoot)
+            var marks = loadRecords(reader, name: checksName).file
+            marks.tokens[account.label] = RejectionRecord(accountKey: account.accountKey, at: at)
+            guard let data = try? EventLog.encoder().encode(marks),
+                (try? writer.put(
+                    data + Data([0x0A]), folders: Layout.stateFolders, name: checksName)) != nil
+            else { return false }
+            // Written after the mark, so while a mark stands every durable record postdates it.
+            let loaded = loadRecords(reader, name: rejectionsName)
+            var file = loaded.file
+            if loaded.sound, file.tokens[account.label]?.accountKey == account.accountKey {
+                file.tokens[account.label] = nil
+                if let data = try? EventLog.encoder().encode(file) {
+                    try? writer.put(
+                        data + Data([0x0A]), folders: Layout.stateFolders, name: rejectionsName)
+                }
+            }
+            return true
+        }
+    }
+
     /// Keeps token rejections in a file of their own, so deleting or damaging `current.json` does
     /// not make a rejected account eligible again. A label leaves the file only on positive
     /// evidence: a stored reading newer than the one the rejection saw, a new sign-in seen by a
     /// check, a new token's first probe that worked, a changed account key, or the account's
-    /// removal. An entry rebuilt from nothing is never such evidence.
+    /// removal. An entry rebuilt from nothing is never such evidence. Runs under the records
+    /// lock; a record of a label whose kept new-token check this rebuild folded came after it,
+    /// and the record of a `settled` label, which another command changed after the rebuild read
+    /// the records, stays as it is.
     static func recordRejections(
         context: ToolContext, config: Config, current: CurrentFile,
-        observations: StatusObservations
+        observations: StatusObservations, marked: Set<String> = [], settled: Set<String> = []
     ) {
         let reader = NoFollowReader(root: context.dataRoot)
         var file = RejectionsFile()
@@ -572,10 +821,13 @@ public enum StatusBuilder {
         }
         let before = file.tokens
         for label in Array(file.tokens.keys)
-        where !config.accounts.contains(where: { $0.label == label && $0.kind == Kind.token }) {
+        where !settled.contains(label)
+            && !config.accounts.contains(where: { $0.label == label && $0.kind == Kind.token })
+        {
             file.tokens[label] = nil
         }
-        for account in config.accounts where account.kind == Kind.token {
+        for account in config.accounts
+        where account.kind == Kind.token && !settled.contains(account.label) {
             if let record = file.tokens[account.label], record.accountKey != account.accountKey {
                 file.tokens[account.label] = nil
             }
@@ -594,9 +846,10 @@ public enum StatusBuilder {
                 let newSignIn = observations.auth[account.label]?.newSignIn ?? false
                 let newToken =
                     observations.newToken.contains(account.label)
-                    && observations.probe[account.label]?.worked(after: nil) == true
+                    && observations.probe(for: account)?.worked(after: nil) == true
                 let ended =
-                    previous?.accounts[account.label].map {
+                    !marked.contains(account.label)
+                    && previous?.accounts[account.label].map {
                         $0.accountKey == account.accountKey
                             && $0.probeError?.code == StateCode.loginRejected.rawValue
                     } ?? false
@@ -647,12 +900,13 @@ public enum StatusBuilder {
         return max(found ?? .distantPast, record.at)
     }
 
-    /// What a status rebuild does under the data folder (`rebuilt`): it opens the history lock;
-    /// reads the config and the files it writes again; reads the stored readings and the token
-    /// files; writes `current.json`, `status.json` and the token rejections over what is in
-    /// `state/`, rewrites or adds lines to the events record and each history file there now,
-    /// and sets a damaged events record aside and starts the history of a label that has none as
-    /// new files; and adds lines to the log. Its other reads, whether the launch file a session
+    /// What a status rebuild does under the data folder (`rebuilt`): it opens the history lock
+    /// and the token records lock; reads the config and the files it writes again; reads the
+    /// stored readings and the token files; writes `current.json`, `status.json`, the token
+    /// rejections and the new token checks over what is in `state/`, rewrites or adds lines to
+    /// the events record and each history file there now, and sets a damaged events record aside
+    /// and starts the history of a label that has none as new files; and adds lines to the log.
+    /// Its other reads, whether the launch file a session
     /// record names is there and whether a folder account's links are intact, answer without a
     /// refusal for a folder the checks refuse and change nothing, so they are not in the plan.
     static func rebuildPlan(context: ToolContext) -> NoFollowWriter.Plan {
@@ -667,6 +921,8 @@ public enum StatusBuilder {
                 .file(Layout.stateFolders, currentName, [.read, .replace]),
                 .file(Layout.stateFolders, statusName, [.replace]),
                 .file(Layout.stateFolders, rejectionsName, [.read, .replace]),
+                .file(Layout.locksFolders, recordsLockName, [.lock]),
+                .file(Layout.stateFolders, checksName, [.read, .replace]),
                 .file(
                     Layout.stateFolders, EventLog.fileName, [.read, .replace, .append],
                     readLimit: EventLog.readLimit),

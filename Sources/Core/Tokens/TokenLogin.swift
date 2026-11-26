@@ -116,7 +116,13 @@ public enum TokenLogin {
             .refresh(account: account, force: true, fable: .none) { checked in
                 // Recorded while the probe lock is held, so no later probe of the token comes first.
                 observations.add([checked])
-                StatusBuilder.rebuildQuietly(context: context, observations: observations)
+                let saved = StatusBuilder.rebuildQuietly(
+                    context: context, observations: observations)
+                // Kept for the next rebuild that saves state, which ends the old rejection then.
+                if !saved, case .probed(let reading) = checked.status {
+                    StatusBuilder.markNewToken(
+                        context: context, account: account, at: reading.readAt)
+                }
             }
         return Outcome(captured: captured, firstCheck: result, unfinished: captured.unfinished)
     }

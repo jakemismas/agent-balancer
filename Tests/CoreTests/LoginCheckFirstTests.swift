@@ -289,6 +289,10 @@ enum SeamRules {
         try writer.put(
             try EventLog.encoder().encode(rejections) + Data([0x0A]), folders: Layout.stateFolders,
             name: StatusBuilder.rejectionsName)
+        // A kept new-token check of the same shape, which the rebuild folds and rewrites.
+        try writer.put(
+            try EventLog.encoder().encode(rejections) + Data([0x0A]), folders: Layout.stateFolders,
+            name: StatusBuilder.checksName)
         try t.fake("setup-token.out", "Your token is \(Canaries.oauthRealShape())\n")
         return t
     }

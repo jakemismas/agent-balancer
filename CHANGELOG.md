@@ -208,6 +208,25 @@
   you ran the command from, and a `..` segment could move it through a link. An unset or empty
   HOME falls back to the home folder the user database names, checked by the same rule; it used to
   follow `CFFIXED_USER_HOME`, which can name a folder under the current one.
+- A new token whose first check works now ends the old token's rejection also when that check's
+  own status rebuild was skipped, as while another command held the history lock for 30 seconds,
+  saved no state or failed: `login` keeps the check, and the next rebuild that starts after it and
+  saves the state, such as the one `status --cached` runs, ends the rejection. Such a rejection
+  used to stand while it was dated ahead of the clock, so `pick` skipped the account as
+  `login rejected` and `run` refused it after `login` had shown the new token working.
+- A `refresh` that the menu ends after its 300 second timeout now keeps a token account's
+  rejection that a finished probe found, also when that probe's status rebuild had not finished:
+  `refresh` writes the rejection to `state/token-rejections.json` as the probe answers, and the
+  terminate signal waits for that write, so `pick` and `run` keep the token out. A reading that a
+  working probe stored still shows at the next rebuild, and another error is still lost until the
+  account's next probe. A Fable probe whose rejection the status could not record is no longer
+  counted as tried, so the next `refresh` runs it again. Such a rejection used to be lost, and
+  `pick` and `run` accepted a token whose sign-in failed.
+- A probe's result now counts only for the account it was made for. A `pick` or `refresh` that
+  probed an account while it was renamed, or removed and added again, no longer records that probe
+  for the account now under its label: a rejection of the old account no longer makes `pick` skip
+  the new account as `login rejected`, and a working probe of the old account cannot end the
+  rejection of a new token whose first check failed, so `run` still refuses that token.
 
 ## 1.1.0
 

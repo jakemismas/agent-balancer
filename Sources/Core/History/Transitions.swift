@@ -161,6 +161,9 @@ public struct ProbeObservation: Sendable {
     public var error: Issue?
     /// For a probe that worked, how new the reading it stored is. It is kept in memory only.
     public var readAt: ReadTime?
+    /// `Account.accountKey` of the account the probe was made for. Nil counts as made for the
+    /// account the rebuild folds it into.
+    public var accountKey: String?
 
     /// How new the reading of a probe that worked is.
     public enum ReadTime: Equatable, Sendable {
@@ -171,9 +174,10 @@ public struct ProbeObservation: Sendable {
         case after(Date)
     }
 
-    public init(error: Issue?, readAt: ReadTime? = nil) {
+    public init(error: Issue?, readAt: ReadTime? = nil, accountKey: String? = nil) {
         self.error = error
         self.readAt = readAt
+        self.accountKey = accountKey
     }
 
     /// True when the probe worked and its reading is newer than a stored reading of `seen`, or
@@ -230,21 +234,40 @@ public struct StatusObservations: Sendable {
         for result in results {
             // Only a probe that ran says anything; a stored or fresh reading, or a probe that never
             // began, leaves it unobserved.
+            let key = result.accountKey
             switch result.status {
-            case .failed(let issue): probe[result.label] = ProbeObservation(error: issue)
+            case .failed(let issue):
+                probe[result.label] = ProbeObservation(error: issue, accountKey: key)
             case .probed(let reading):
-                probe[result.label] = ProbeObservation(error: nil, readAt: .at(reading.readAt))
+                probe[result.label] = ProbeObservation(
+                    error: nil, readAt: .at(reading.readAt), accountKey: key)
             case .fresh, .usedStored, .notStarted: break
             }
             // A Fable probe runs last, so its rejection, or its working where no plain probe ran,
             // is the account's last probe; any other Fable failure says nothing on the sign-in.
             if case .failed(let issue) = result.fable, issue.code == .loginRejected {
-                probe[result.label] = ProbeObservation(error: issue)
+                probe[result.label] = ProbeObservation(error: issue, accountKey: key)
             } else if case .fresh(let reading) = result.status, result.fable == .probed {
-                probe[result.label] = ProbeObservation(error: nil, readAt: .after(reading.readAt))
+                probe[result.label] = ProbeObservation(
+                    error: nil, readAt: .after(reading.readAt), accountKey: key)
             }
             if result.duplicate != .notRun { duplicates[result.label] = result.duplicate }
         }
+    }
+
+    /// The probe of `account`'s label, unless it was made for another account that held the
+    /// label then, as after a rename or a remove and an add while the command ran.
+    func probe(for account: Account) -> ProbeObservation? {
+        guard let seen = probe[account.label] else { return nil }
+        return (seen.accountKey ?? account.accountKey) == account.accountKey ? seen : nil
+    }
+
+    /// The duplicate check of `account`'s label, unless its probe was another account's.
+    func duplicate(for account: Account) -> DuplicateCheck {
+        guard let seen = probe[account.label],
+            (seen.accountKey ?? account.accountKey) != account.accountKey
+        else { return duplicates[account.label] ?? .notRun }
+        return .notRun
     }
 }
 

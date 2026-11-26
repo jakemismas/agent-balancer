@@ -609,4 +609,284 @@ import Testing
             }
         }
     }
+
+    /// Each file a status rebuild writes that is there now, by name, with its file number and
+    /// bytes, so a rewrite shows even when the bytes stay the same.
+    func rebuildFiles(_ t: TestHome) throws -> [String: String] {
+        let places =
+            [
+                StatusBuilder.currentName, StatusBuilder.statusName, StatusBuilder.rejectionsName,
+                StatusBuilder.checksName, EventLog.fileName,
+            ].map { (Layout.stateFolders, $0) }
+            + [(ReadingHistory.folders, ReadingHistory.fileName("lab"))]
+        var files: [String: String] = [:]
+        for (folders, name) in places {
+            let url = (folders + [name]).reduce(t.context.dataRoot) {
+                $0.appendingPathComponent($1)
+            }
+            guard FileManager.default.fileExists(atPath: url.path) else { continue }
+            let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+            let number = (attributes[.systemFileNumber] as? NSNumber)?.uint64Value ?? 0
+            let data = try Data(contentsOf: url)
+            files[name] = "\(number) \(data.base64EncodedString())"
+        }
+        return files
+    }
+
+    @Test func aRebuildThatCannotTakeTheTokenRecordsLockSavesNothing() throws {
+        // lab's token was rejected, and a new token's first check stored a newer reading and
+        // worked while its own rebuild saved no state, so `login` kept that check.
+        let t = try rejectedLab(storing: labReading(secondsAgo: 600))
+        let checked = labReading(secondsAgo: 300)
+        try ReadingStore(context: t.context).save(checked, label: "lab")
+        try #require(
+            StatusBuilder.markNewToken(context: t.context, account: lab, at: checked.readAt))
+        let before = try rebuildFiles(t)
+        // A later probe of the new token, as a `pick` runs one, finds it rejected.
+        var later = StatusObservations()
+        later.add([AccountRefresh(label: "lab", status: .failed(rejection), fable: .notRun)])
+        let held = try #require(
+            try NoFollowWriter(root: t.context.dataRoot).acquireLock(
+                folders: Layout.locksFolders, name: StatusBuilder.recordsLockName, wait: 120))
+        let first = try StatusBuilder.rebuilt(
+            context: t.context, observations: later, now: Date(), lockWait: 0.2)
+        held.release()
+        #expect(first == nil)
+        #expect(try rebuildFiles(t) == before)
+        let log = try String(
+            contentsOf: t.context.dataRoot.appendingPathComponent("logs/agent-balancer.log"),
+            encoding: .utf8)
+        #expect(log.contains("status rebuild skipped: the token records lock stayed held"))
+        // A result whose rebuild saved no state goes to the next rebuild, as `refresh` does.
+        try StatusBuilder.rebuild(
+            context: t.context,
+            observations: first?.savedState == true ? StatusObservations() : later)
+        #expect(StatusBuilder.probeFoundSignInRejected(context: t.context, account: lab))
+        // The kept check went with the state that folded it, so a later rebuild keeps the rejection.
+        try StatusBuilder.rebuild(context: t.context)
+        #expect(StatusBuilder.probeFoundSignInRejected(context: t.context, account: lab))
+    }
+}
+
+// MARK: the token records a rebuild reads at its start and saves at its end
+
+extension ProbeRejectionRecordTests {
+    /// The bytes of `name` in `state/`, nil when it is not there.
+    func stateBytes(_ t: TestHome, _ name: String) throws -> Data? {
+        try NoFollowReader(root: t.context.dataRoot).read(folders: Layout.stateFolders, name: name)
+    }
+
+    /// True while `state/token-checks.json` keeps a new token's check of lab.
+    func labCheckKept(_ t: TestHome) -> Bool {
+        let reader = NoFollowReader(root: t.context.dataRoot)
+        return StatusBuilder.loadRecords(reader, name: StatusBuilder.checksName).file.tokens["lab"]
+            != nil
+    }
+
+    func logText(_ t: TestHome) -> String {
+        let log = t.context.dataRoot.appendingPathComponent("logs/agent-balancer.log")
+        return (try? String(contentsOf: log, encoding: .utf8)) ?? ""
+    }
+
+    /// The path of `name` in `state/`.
+    func statePath(_ t: TestHome, _ name: String) -> String {
+        t.context.dataRoot.appendingPathComponent("state").appendingPathComponent(name).path
+    }
+
+    /// lab rejected after a reading stored while the clock ran an hour ahead, then a new token
+    /// whose first check worked, kept by `login` because its own rebuild saved no state.
+    func labRejectedAheadWithAKeptCheck() throws -> TestHome {
+        let t = try rejectedLab(storing: labReading(secondsAgo: -3600))
+        let checked = labReading(secondsAgo: 1)
+        try ReadingStore(context: t.context).save(checked, label: "lab")
+        try #require(
+            StatusBuilder.markNewToken(context: t.context, account: lab, at: checked.readAt))
+        return t
+    }
+
+    /// Puts a folder in place of `state/token-checks.json`. Returns how to undo it.
+    func breakChecks(_ t: TestHome) throws -> () throws -> Void {
+        let path = statePath(t, StatusBuilder.checksName)
+        let aside = t.home.appendingPathComponent("aside-checks").path
+        try #require(rename(path, aside) == 0)
+        try FileManager.default.createDirectory(
+            atPath: path, withIntermediateDirectories: false)
+        return {
+            try FileManager.default.removeItem(atPath: path)
+            try #require(rename(aside, path) == 0)
+        }
+    }
+
+    @Test func aRejectionKeptWhileARebuildRunsOutlivesThatRebuild() throws {
+        // lab's token was rejected, and a probe that worked then stored a newer reading.
+        let t = try rejectedLab(storing: labReading(secondsAgo: 600))
+        try ReadingStore(context: t.context).save(labReading(secondsAgo: 300), label: "lab")
+        // While another command's rebuild runs, a later probe finds the token rejected again and
+        // `refresh` keeps that rejection.
+        let rebuilt = try StatusBuilder.rebuilt(
+            context: t.context, observations: StatusObservations(), now: Date(), lockWait: nil,
+            afterRecordsRead: {
+                #expect(StatusBuilder.keepRejection(context: t.context, account: lab))
+            })
+        #expect(rebuilt?.savedState == true)
+        // The newer reading ends the rejection that rebuild saw, not the one kept after it.
+        #expect(StatusBuilder.probeRejection(context: t.context, account: lab) != nil)
+        try StatusBuilder.rebuild(context: t.context)
+        #expect(StatusBuilder.probeRejection(context: t.context, account: lab) != nil)
+    }
+
+    @Test(arguments: [true, false])
+    func aNewTokenCheckKeptWhileARebuildRunsIsFoldedByTheNextRebuild(recordThere: Bool) throws {
+        // lab's token was rejected after a reading stored while the clock ran an hour ahead.
+        let t = try rejectedLab(storing: labReading(secondsAgo: -3600))
+        if !recordThere {
+            // Only `current.json` holds the rejection, as after its record could not be saved.
+            try NoFollowWriter(root: t.context.dataRoot).put(
+                try EventLog.encoder().encode(StatusBuilder.RejectionsFile()) + Data([0x0A]),
+                folders: Layout.stateFolders, name: StatusBuilder.rejectionsName)
+        }
+        // While another command's rebuild runs, a new token's first check works and `login`
+        // keeps it.
+        let rebuilt = try StatusBuilder.rebuilt(
+            context: t.context, observations: StatusObservations(), now: Date(), lockWait: nil,
+            afterRecordsRead: {
+                let checked = labReading(secondsAgo: 1)
+                #expect((try? ReadingStore(context: t.context).save(checked, label: "lab")) != nil)
+                #expect(
+                    StatusBuilder.markNewToken(
+                        context: t.context, account: lab, at: checked.readAt))
+            })
+        #expect(rebuilt?.savedState == true)
+        // That rebuild read the records before the check, so it leaves the check to the next.
+        #expect(labCheckKept(t))
+        try StatusBuilder.rebuild(context: t.context)
+        #expect(StatusBuilder.probeRejection(context: t.context, account: lab) == nil)
+        #expect(!labCheckKept(t))
+    }
+
+    @Test func aRebuildThatCannotReadTheKeptChecksSavesNothing() throws {
+        let t = try labRejectedAheadWithAKeptCheck()
+        // A later probe of the new token, as a `pick` runs one, finds it rejected.
+        var later = StatusObservations()
+        later.add([AccountRefresh(label: "lab", status: .failed(rejection), fable: .notRun)])
+        let before = try rebuildFiles(t)
+        let undo = try breakChecks(t)
+        let first = try StatusBuilder.rebuilt(
+            context: t.context, observations: later, now: Date(), lockWait: nil)
+        try undo()
+        #expect(first == nil)
+        #expect(try rebuildFiles(t) == before)
+        #expect(
+            logText(t).contains(
+                "status rebuild skipped: state/token-checks.json could not be read"))
+        // A result whose rebuild saved no state goes to the next rebuild, as `refresh` does.
+        try StatusBuilder.rebuild(context: t.context, observations: later)
+        #expect(StatusBuilder.probeFoundSignInRejected(context: t.context, account: lab))
+        try StatusBuilder.rebuild(context: t.context)
+        #expect(StatusBuilder.probeFoundSignInRejected(context: t.context, account: lab))
+    }
+
+    @Test func aRebuildThatCannotReadTheKeptChecksAtItsEndSavesNoState() throws {
+        let t = try labRejectedAheadWithAKeptCheck()
+        let current = try stateBytes(t, StatusBuilder.currentName)
+        let rejections = try stateBytes(t, StatusBuilder.rejectionsName)
+        let checks = try stateBytes(t, StatusBuilder.checksName)
+        var undo: (() throws -> Void)?
+        let rebuilt = try StatusBuilder.rebuilt(
+            context: t.context, observations: StatusObservations(), now: Date(), lockWait: nil,
+            afterRecordsRead: { undo = try? breakChecks(t) })
+        try #require(undo != nil)
+        try undo?()
+        #expect(rebuilt?.savedState == false)
+        #expect(
+            logText(t).contains(
+                "token records step skipped: state/token-checks.json could not be read"))
+        #expect(try stateBytes(t, StatusBuilder.currentName) == current)
+        #expect(try stateBytes(t, StatusBuilder.rejectionsName) == rejections)
+        #expect(try stateBytes(t, StatusBuilder.checksName) == checks)
+        try StatusBuilder.rebuild(context: t.context)
+        #expect(StatusBuilder.probeRejection(context: t.context, account: lab) == nil)
+    }
+
+    @Test func aKeptCheckStaysWhenTheRebuildThatFoldsItCannotSaveTheState() throws {
+        let t = try labRejectedAheadWithAKeptCheck()
+        let current = statePath(t, StatusBuilder.currentName)
+        try FileManager.default.setAttributes([.immutable: true], ofItemAtPath: current)
+        defer {
+            try? FileManager.default.setAttributes(
+                [.immutable: false], ofItemAtPath: statePath(t, StatusBuilder.currentName))
+        }
+        #expect(throws: (any Error).self) { try StatusBuilder.rebuild(context: t.context) }
+        try FileManager.default.setAttributes([.immutable: false], ofItemAtPath: current)
+        #expect(labCheckKept(t))
+        try StatusBuilder.rebuild(context: t.context)
+        #expect(StatusBuilder.probeRejection(context: t.context, account: lab) == nil)
+    }
+
+    @Test func aRebuildThatCannotClearAKeptCheckItFoldedSavesNoState() throws {
+        let t = try labRejectedAheadWithAKeptCheck()
+        let current = try stateBytes(t, StatusBuilder.currentName)
+        let checks = statePath(t, StatusBuilder.checksName)
+        try FileManager.default.setAttributes([.immutable: true], ofItemAtPath: checks)
+        defer {
+            try? FileManager.default.setAttributes(
+                [.immutable: false], ofItemAtPath: statePath(t, StatusBuilder.checksName))
+        }
+        let rebuilt = try StatusBuilder.rebuilt(
+            context: t.context, observations: StatusObservations(), now: Date(), lockWait: nil)
+        try FileManager.default.setAttributes([.immutable: false], ofItemAtPath: checks)
+        #expect(rebuilt?.savedState == false)
+        #expect(logText(t).contains("token checks step failed"))
+        #expect(try stateBytes(t, StatusBuilder.currentName) == current)
+        #expect(labCheckKept(t))
+        try StatusBuilder.rebuild(context: t.context)
+        #expect(StatusBuilder.probeRejection(context: t.context, account: lab) == nil)
+    }
+
+    @Test func aRejectionKeptAfterAKeptNewTokenCheckOutlivesTheFoldOfThatCheck() throws {
+        let t = try rejectedLab(storing: labReading(secondsAgo: 600))
+        let checked = labReading(secondsAgo: 300)
+        try ReadingStore(context: t.context).save(checked, label: "lab")
+        try #require(
+            StatusBuilder.markNewToken(context: t.context, account: lab, at: checked.readAt))
+        // The new token is rejected too, and `refresh` keeps that before any rebuild saves state.
+        try #require(StatusBuilder.keepRejection(context: t.context, account: lab))
+        try StatusBuilder.rebuild(context: t.context)
+        #expect(StatusBuilder.probeRejection(context: t.context, account: lab) != nil)
+    }
+
+    @Test func aKeptCheckOfAnotherAccountUnderTheLabelLeavesItsRejection() throws {
+        let t = try rejectedLab(storing: labReading(secondsAgo: 600))
+        // A check kept for the account the label held before, not yet folded.
+        let other = Account(label: "lab", kind: Kind.token, role: Role.pool)
+        try #require(other.accountKey != lab.accountKey)
+        try #require(
+            StatusBuilder.markNewToken(
+                context: t.context, account: other, at: labReading(secondsAgo: 300).readAt))
+        try StatusBuilder.rebuild(context: t.context)
+        #expect(StatusBuilder.probeRejection(context: t.context, account: lab) != nil)
+        #expect(StatusBuilder.probeFoundSignInRejected(context: t.context, account: lab))
+    }
+
+    @Test func aWorkingProbeOfTheLabelsFormerAccountLeavesTheNewAccountsRejection() throws {
+        // A new token account under the label, with no stored reading, whose first check was
+        // rejected.
+        let t = try TestHome()
+        try ConfigStore(context: t.context).save(Config(accounts: [lab]))
+        try StatusBuilder.rebuild(
+            context: t.context,
+            observations: StatusObservations(probe: [
+                "lab": ProbeObservation(error: rejection, accountKey: lab.accountKey)
+            ]))
+        try #require(StatusBuilder.probeFoundSignInRejected(context: t.context, account: lab))
+        // The probe of the account the label held before worked, with a reading dated after the
+        // rejection, as when the wall clock was set back in between.
+        let later = Date().addingTimeInterval(120)
+        try StatusBuilder.rebuild(
+            context: t.context,
+            observations: StatusObservations(probe: [
+                "lab": ProbeObservation(error: nil, readAt: .at(later), accountKey: "renamed")
+            ]))
+        #expect(StatusBuilder.probeFoundSignInRejected(context: t.context, account: lab))
+    }
 }

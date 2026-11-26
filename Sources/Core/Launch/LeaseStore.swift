@@ -89,6 +89,12 @@ public struct LeaseStore: Sendable {
         try writer.put(data, folders: Layout.stateFolders, name: Layout.leasesName)
     }
 
+    /// Throws, before a step that saves the lease file runs, the refusal that save would meet:
+    /// the writer's checks of `state/` and of the lease file there.
+    func requireSaveable() throws {
+        try writer.requireWritable(folders: Layout.stateFolders, replacing: [Layout.leasesName])
+    }
+
     /// Open leases per label.
     public static func counts(_ leases: [Lease]) -> [String: Int] {
         var out: [String: Int] = [:]

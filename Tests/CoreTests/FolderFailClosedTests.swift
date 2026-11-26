@@ -267,7 +267,7 @@ import Testing
             onOwnThread {
                 let hooks = HookRecord(context: context)
                 for i in 0..<30 {
-                    try? hooks.saveLinks(label: "\(prefix)\(i)", entries: [], linked: true)
+                    _ = try? hooks.saveLinks(label: "\(prefix)\(i)", entries: [], linked: true)
                 }
                 group.leave()
             }

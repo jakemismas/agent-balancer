@@ -462,7 +462,10 @@ public final class ManageViewModel {
                 text = "The command timed out."
             } else if output.status != 0 {
                 let raw = output.stderr.isEmpty ? output.stdout : output.stderr
-                let line = ManageViewModel.firstLine(raw)
+                var whole = false
+                // A remove stop names each command its rerun needs, so the bar keeps all of it.
+                if case .removeAccount = command { whole = true }
+                let line = ManageViewModel.firstLine(raw, whole: whole)
                 text = line.isEmpty ? "Failed (exit \(output.status))." : line
             } else {
                 ok = true
@@ -487,12 +490,13 @@ public final class ManageViewModel {
         return ok
     }
 
-    static func firstLine(_ text: String) -> String {
+    /// The first line of `text` that is not empty, cut at 240 characters unless `whole`.
+    static func firstLine(_ text: String, whole: Bool = false) -> String {
         let line =
             text.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }
             .first { !$0.isEmpty } ?? ""
         // A second guard: ChildProcess.run already cuts tokens, so no run's text reaches it whole.
-        return Display.safe(Scrubber.tokenPass(line), limit: 240)
+        return Display.safe(Scrubber.tokenPass(line), limit: whole ? Int.max : 240)
     }
 
     /// For `login <label> --browser`: on failure the first line, stdout then stderr, that starts

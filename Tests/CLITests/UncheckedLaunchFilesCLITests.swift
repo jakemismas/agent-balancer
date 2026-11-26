@@ -920,14 +920,14 @@ extension PersonCommandsCLITests {
         #expect(refused.status == 1)
         #expect(
             shown
-                == "Error: Refused `\(place)`: it is wider than 0700. Run `chmod 700 \(place)` in Terminal.\n"
+                == "Error: Refused `\(place)`: it is wider than 0700. Run `chflags nouchg,nouappnd \(place)` first if it is locked, then `chmod 700 \(place)` in Terminal.\n"
         )
         #expect(try ConfigStore(context: context).load()?.account("pool-b") == nil)
 
         // As written; then it sees the file and refuses as it refuses one it can see.
         let named = namedCommands(shown, "Refused", home: cli.home)
-        try #require(named.count == 1)
-        #expect(try runNamedCapturing(named[0]).status == 0)
+        try #require(named.count == 2)
+        try followRefusal(shown, cli)
         let seen = try cli.run(["add", "pool-b"])
         #expect(seen.status == 1)
         #expect(

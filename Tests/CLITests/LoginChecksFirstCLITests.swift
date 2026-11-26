@@ -320,10 +320,10 @@ extension AccessListPrivacyCLITests {
                 "Account 'work': its folder `\(place)` cannot be opened or searched. Run `chmod -N \(place)`, then `chmod 700 \(place)`, or run `agent-balancer remove work`."
         case .denyOpening:
             return
-                "Refused `\(place)`: it cannot be opened or searched. Run `chmod -N \(place)`, then `chmod 700 \(place)` in Terminal."
+                "Refused `\(place)`: it cannot be opened or searched. Run `chflags nouchg,nouappnd \(place)` first if it is locked, then `chmod -N \(place)`, then `chmod 700 \(place)` in Terminal."
         case .denyNewFiles, .inheritNoDelete:
             return
-                "Refused `\(place)`: the tool cannot make and delete what it writes in it. Run `chmod -N \(place)`, then `chmod 700 \(place)` in Terminal, and `chflags nouchg \(place)` first if it is locked."
+                "Refused `\(place)`: the tool cannot make and delete what it writes in it. Run `chflags nouchg,nouappnd \(place)` first if it is locked, then `chmod -N \(place)`, then `chmod 700 \(place)` in Terminal."
         case .denyWriting where step.path.last?.hasSuffix(".lock") == true:
             return
                 "Refused `\(place)`: the lock file cannot be opened. Run `chmod -N \(place)`, then `chmod 600 \(place)` in Terminal."
@@ -332,7 +332,7 @@ extension AccessListPrivacyCLITests {
                 "Refused `\(place)`: it cannot be opened to write. Run `chmod -N \(place)`, then `chmod 600 \(place)` in Terminal, and `chflags nouchg \(place)` first if it is locked."
         case .denyMarking:
             return
-                "Refused `\(place)`: it cannot be marked as excluded from backups. Run `chmod -N \(place)` in Terminal."
+                "Refused `\(place)`: it cannot be marked as excluded from backups. Run `chflags nouchg,nouappnd \(place)` first if it is locked, then `chmod -N \(place)` in Terminal."
         case .link, .folderInPlace:
             return
                 "Refused `\(place)`: it is not a regular file of yours, so the tool does not write it. Move it out of the way."
@@ -782,7 +782,7 @@ extension AccessListPrivacyCLITests {
         let elsewhere = cli.home.appendingPathComponent("moved-folder")
         let cases: [(String, () throws -> Void, () throws -> Void)] = [
             (
-                "Refused `\(place)`: it is wider than 0700. Run `chmod 700 \(place)` in Terminal.",
+                "Refused `\(place)`: it is wider than 0700. Run `chflags nouchg,nouappnd \(place)` first if it is locked, then `chmod 700 \(place)` in Terminal.",
                 { chmod(tokens.path, 0o755) }, { chmod(tokens.path, 0o700) }
             ),
             (
@@ -935,7 +935,7 @@ extension FolderAccountsCLITests {
         let cases: [(URL, String, String)] = [
             (
                 locks, "everyone allow list",
-                "Refused `~/.agent-balancer/locks`: its access list lets another user or group in, or cannot be read. Run `chmod -N ~/.agent-balancer/locks` in Terminal."
+                "Refused `~/.agent-balancer/locks`: its access list lets another user or group in, or cannot be read. Run `chflags nouchg,nouappnd ~/.agent-balancer/locks` first if it is locked, then `chmod -N ~/.agent-balancer/locks` in Terminal."
             ),
             (
                 pick, "\(me) deny write,append",

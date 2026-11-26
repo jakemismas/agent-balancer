@@ -49,7 +49,7 @@ import Testing
 
     /// What every command says when a folder's access list lets others in or cannot be read.
     func folderText(_ place: String) -> String {
-        "Refused `\(place)`: its access list lets another user or group in, or cannot be read. Run `chmod -N \(place)` in Terminal."
+        "Refused `\(place)`: its access list lets another user or group in, or cannot be read. Run `chflags nouchg,nouappnd \(place)` first if it is locked, then `chmod -N \(place)` in Terminal."
     }
 
     var tokensPlace: String { "~/.agent-balancer/" + TokenPaths.folderName }

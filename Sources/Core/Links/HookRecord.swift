@@ -426,9 +426,15 @@ public struct HookRecord: Sendable {
     }
 
     /// Replaces the links listed for one folder account and marks it linked or not. Every other
-    /// account's entries and the default folder's record stay as they are.
-    public func saveLinks(label: String, entries: [LinkEntry], linked: Bool) throws {
-        try locked { try saveLinksHeld(label: label, entries: entries, linked: linked) }
+    /// account's entries and the default folder's record stay as they are. Returns the account's
+    /// state it replaced, read under the same lock.
+    @discardableResult
+    public func saveLinks(label: String, entries: [LinkEntry], linked: Bool) throws -> LinkState {
+        try locked {
+            let replaced = linkState(for: label)
+            try saveLinksHeld(label: label, entries: entries, linked: linked)
+            return replaced
+        }
     }
 
     /// The caller holds the links lock.

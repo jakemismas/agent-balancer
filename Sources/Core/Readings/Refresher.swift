@@ -73,6 +73,8 @@ public struct AccountRefresh: Equatable, Sendable {
     public var status: RefreshStatus
     public var fable: FableRefreshStatus
     public var duplicate: DuplicateCheck = .notRun
+    /// `Account.accountKey` of the account refreshed, so the status binds the result to it.
+    public var accountKey: String? = nil
 
     public var failed: Bool {
         if case .failed = status { return true }
@@ -163,14 +165,27 @@ public final class RefreshWatch: @unchecked Sendable {
     private var latest: [String: AccountRefresh] = [:]
     private var order: [String] = []
     private var closed = false
-    private let onResult: (@Sendable (AccountRefresh) -> Void)?
+    private let onResult: (@Sendable (AccountRefresh) -> Bool)?
 
     /// `onResult` hears each result it takes, on the thread of that account's probe.
     public init(onResult: (@Sendable (AccountRefresh) -> Void)? = nil) {
-        self.onResult = onResult
+        guard let onResult else {
+            self.onResult = nil
+            return
+        }
+        self.onResult = { result in
+            onResult(result)
+            return true
+        }
     }
 
-    /// Takes `result` unless closed, and says whether it did.
+    /// `record` hears each result it takes, on the thread of that account's probe, and says
+    /// whether it recorded it.
+    public init(record: @escaping @Sendable (AccountRefresh) -> Bool) {
+        self.onResult = record
+    }
+
+    /// Takes `result` unless closed, and says whether it did and its `record` recorded it.
     func take(_ result: AccountRefresh) -> Bool {
         lock.lock()
         guard !closed else {
@@ -180,8 +195,7 @@ public final class RefreshWatch: @unchecked Sendable {
         if latest[result.label] == nil { order.append(result.label) }
         latest[result.label] = result
         lock.unlock()
-        onResult?(result)
-        return true
+        return onResult?(result) ?? true
     }
 
     /// The latest result of each account taken so far.
@@ -214,6 +228,9 @@ public struct Refresher: Sendable {
     /// The newest time the tool recorded before this refresher's probes began
     /// (`Upkeep.newestRecorded`), which the probe folder cleanup judges ages by.
     public var recorded: Date?
+    /// When true, a token account's probe rejection is written to the durable record as the
+    /// probe ends (`StatusBuilder.keepRejection`), before any status rebuild records it.
+    public var keepsRejections = false
     private let runner: ClaudeRunner
     private let writer: NoFollowWriter
 
@@ -293,7 +310,8 @@ public struct Refresher: Sendable {
             // Only a probe that ran says anything about the account.
             return AccountRefresh(
                 label: accounts[index].label,
-                status: begun.contains(index) ? .failed(missed) : .notStarted, fable: .notRun)
+                status: begun.contains(index) ? .failed(missed) : .notStarted, fable: .notRun,
+                accountKey: accounts[index].accountKey)
         }
     }
 
@@ -342,14 +360,20 @@ public struct Refresher: Sendable {
         begin: () -> Bool, report: (AccountRefresh) -> Void,
         finish: (AccountRefresh) -> Bool
     ) -> AccountRefresh {
-        var finished = false
-        let result = steps(
-            account: account, force: force, fable: mode, rejectedAt: rejectedAt, begin: begin,
-            report: report
-        ) {
-            finished = true
-            return finish($0)
+        func bound(_ result: AccountRefresh) -> AccountRefresh {
+            var result = result
+            result.accountKey = account.accountKey
+            return result
         }
+        var finished = false
+        let result = bound(
+            steps(
+                account: account, force: force, fable: mode, rejectedAt: rejectedAt, begin: begin,
+                report: { report(bound($0)) }
+            ) {
+                finished = true
+                return finish(bound($0))
+            })
         if !finished { _ = finish(result) }
         return result
     }
@@ -438,7 +462,9 @@ public struct Refresher: Sendable {
                     return AccountRefresh(label: account.label, status: .notStarted, fable: .notRun)
                 }
                 switch runProbe(account: account, probe: probe, fable: false) {
-                case .failed(let issue): status = .failed(issue)
+                case .failed(let issue):
+                    status = .failed(issue)
+                    keepRejection(issue, of: account)
                 case .reading(let reading):
                     // The clock read that dated the reading decides its merge: a later read, set
                     // back, would keep a passed reset time under a reading dated after it.
@@ -465,7 +491,9 @@ public struct Refresher: Sendable {
                 guard begin() else { return plain }
                 let tried = now
                 switch runProbe(account: account, probe: probe, fable: true) {
-                case .failed(let issue): fableStatus = .failed(issue)
+                case .failed(let issue):
+                    fableStatus = .failed(issue)
+                    keepRejection(issue, of: account)
                 case .reading(let reading):
                     // A Fable reply the store refuses fails only the Fable probe; the plain
                     // reading saved above stands. As for the plain one, the reply's own time
@@ -499,12 +527,23 @@ public struct Refresher: Sendable {
         }
     }
 
+    /// A token account's rejection is written to the record that keeps the token out before any
+    /// status rebuild, so a command ended while that rebuild waits still keeps it.
+    private func keepRejection(_ issue: Issue, of account: Account) {
+        guard keepsRejections, issue.code == .loginRejected, account.kind == Kind.token else {
+            return
+        }
+        _ = StatusBuilder.keepRejection(context: context, account: account)
+    }
+
     /// What a check of `account` does under the data folder (`steps`): it reads the config and
     /// the stored reading, opens the account's probe lock, makes its probe folder in `probe/` and
     /// removes it, as each probe does with its own, and writes the reading over the stored one;
     /// it also opens the token folder for a token account, or the account's folders for a folder
     /// account. The token file it reads is the one the token save makes in that folder, a new
-    /// file the save's own plan proves the reader can open there.
+    /// file the save's own plan proves the reader can open there. When it keeps rejections
+    /// (`keepsRejections`), for a token account it also takes the token records' lock, reads
+    /// `current.json`, and writes the token rejections (`StatusBuilder.keepRejection`).
     func checkPlan(account: Account) -> NoFollowWriter.Plan {
         var targets: [NoFollowWriter.Target] = [
             .file([], ConfigStore.fileName, [.read]),
@@ -514,6 +553,7 @@ public struct Refresher: Sendable {
         ]
         if account.kind == Kind.token {
             targets.append(.folder(TokenPaths.folders, [.open]))
+            targets += StatusBuilder.tokenRecordTargets
         } else if account.kind == Kind.folder {
             targets.append(.folder(FolderPaths.folders(label: account.label), [.open]))
         }

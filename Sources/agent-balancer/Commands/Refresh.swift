@@ -46,12 +46,16 @@ struct RefreshCommand: ParsableCommand {
                 rejected[account.label] = at
             }
         }
+        // The menu ends a refresh past its timeout with the terminate signal, which waits for a
+        // rejection being kept.
+        TerminateGate.shared.install()
         let recorder = ProbeRecorder(context: context)
         var refresher = Refresher(context: context, config: config)
         refresher.recorded = recorded
+        refresher.keepsRejections = true
         let results = refresher.refresh(
             accounts: accounts, force: force, reprobe: rejected,
-            watch: RefreshWatch(onResult: { recorder.record($0) }))
+            watch: RefreshWatch(record: { recorder.record($0) }))
         var failed = false
         for result in results {
             let name = Display.safe(result.label)
@@ -130,16 +134,20 @@ private final class ProbeRecorder: @unchecked Sendable {
         self.context = context
     }
 
-    func record(_ result: AccountRefresh) {
+    /// Says whether a Fable probe in the result may count as tried: false only for a rejection
+    /// whose rebuild saved no `state/current.json`, so the next refresh runs that probe again.
+    func record(_ result: AccountRefresh) -> Bool {
         var observations = StatusObservations()
         observations.add([result])
+        guard let probe = observations.probe[result.label] else { return true }
         // A rebuild that saved no `state/current.json` leaves the result to the refresh's last one.
-        guard !observations.probe.isEmpty,
-            StatusBuilder.rebuildQuietly(context: context, observations: observations)
-        else { return }
+        guard StatusBuilder.rebuildQuietly(context: context, observations: observations) else {
+            return probe.error?.code != .loginRejected
+        }
         lock.lock()
         recorded[result.label] = result
         lock.unlock()
+        return true
     }
 
     /// The results the status does not hold yet in their last form.

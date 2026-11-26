@@ -471,10 +471,10 @@ extension Uninstall {
     /// the events record and the copies it sets aside, the leases, the pick log, the settings
     /// verdict, and the readings and their history in `readings/` and `history/`, one file per
     /// label; `logs/` holds the log; `backups/` the config backups; `probe/` one `p-<16 hex>`
-    /// folder per probe, with whatever the probe left in it; `locks/` the pick, links, history and
-    /// per-label probe locks. The writer's temporary files count where a whole-file write goes,
-    /// and in `locks/` and `logs/`, where the check before a `login` sign-in makes one to test the
-    /// folder. Anything else in those folders the tool did not make.
+    /// folder per probe, with whatever the probe left in it; `locks/` the pick, links, history,
+    /// token records and per-label probe locks. The writer's temporary files count where a
+    /// whole-file write goes, and in `locks/` and `logs/`, where the check before a `login`
+    /// sign-in makes one to test the folder. Anything else in those folders the tool did not make.
     enum OwnNames {
         /// Whether the tool writes a regular file named `name` directly in the folder `path`.
         static func isFile(_ name: String, in path: [String]) -> Bool {
@@ -499,6 +499,7 @@ extension Uninstall {
             case Layout.locksFolders:
                 let fixed: [String] = [
                     Layout.pickLockName, Layout.linksLockName, StatusBuilder.lockName,
+                    StatusBuilder.recordsLockName,
                 ]
                 return fixed.contains(name) || isLabelName(name, prefix: "probe-", suffix: ".lock")
                     || temporary

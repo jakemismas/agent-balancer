@@ -87,9 +87,10 @@ the new zip.
    for example, when a sign-in check finds it signed out, or signed in as another email or on
    another plan than the tool expects. It runs that check itself at pick time, so a probe's earlier
    rejection alone does not skip a login or folder account whose check passes. A token account is in
-   error, for example, when its token file is missing or unusable, or while the status shows its
-   token rejected and has seen its latest reading (only a probe that works stores a newer one);
-   its email is a note that is never checked.
+   error, for example, when its token file is missing or unusable, while the status shows its token
+   rejected and has seen its latest reading (only a probe that works stores a newer one), or while
+   a rejection that `agent-balancer refresh` kept as the menu ended it stands, which the status
+   shows only after the account's next probe; its email is a note that is never checked.
 2. It keeps accounts with enough room in the weekly window (and the five-hour window when there is
    one), and keeps the main account only when it has a five-hour reading or you have set that its
    plan has no five-hour limit. For a Fable launch, it also needs room in the Fable allowance.

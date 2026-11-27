@@ -398,16 +398,16 @@ extension SignInChangeReadingCLITests {
         try SignInSwitch.reply(cli, week: 0.3, now: Date())
         try cli.fake("setup-token.out", Canary.realShapeToken() + "\n")
         #expect(try cli.run(["login", "main"]).status == 0)
-        var env = try launchEnv(file)
+        let env = try launchEnv(file)
         let carriesToken = env[ProtectedEnv.tokenVariable] != nil
         #expect(!carriesToken)
         #expect(env[LaunchFiles.accountVariable] as? String == "main")
 
-        // Its lease is open under the new label, so removing the new account keeps the file.
+        // Its lease is open under the new label, so removing the new account leaves the file as
+        // its pick wrote it.
+        let written = try Data(contentsOf: file)
         #expect(try cli.run(["remove", "main"]).status == 0)
-        env = try launchEnv(file)
-        let tombstoned = LaunchFiles.isTombstone(["env": env])
-        #expect(tombstoned)
+        #expect((try? Data(contentsOf: file)) == written)
         let leases = try LeaseStore(context: SignInState.context(cli))
             .current(now: Date(), leaseMinutes: 10)
         #expect(leases.map(\.label) == ["primary"])
@@ -418,12 +418,10 @@ extension SignInChangeReadingCLITests {
         defer { cli.cleanup() }
         try self.store(cli, "main", week: 10)
         let file = try pickedFile(cli)
+        let written = try Data(contentsOf: file)
         #expect(try cli.run(["config", "set", "main", "label", "primary"]).status == 0)
         #expect(try cli.run(["remove", "main"]).status == 0)
-        #expect(FileManager.default.fileExists(atPath: file.path))
-        let env = try launchEnv(file)
-        let tombstoned = LaunchFiles.isTombstone(["env": env])
-        #expect(tombstoned)
+        #expect((try? Data(contentsOf: file)) == written)
         let leases = try LeaseStore(context: SignInState.context(cli))
             .current(now: Date(), leaseMinutes: 10)
         #expect(leases.map(\.label) == ["primary"])

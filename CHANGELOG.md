@@ -250,6 +250,30 @@
   longer counts as covered. It also says why the menu app judges no folder of the command line tool.
   Tests pin that `pick` and `run --print-command` go on when no binary of the fixed list exists, and
   that the native installer, a Homebrew cask and an npm install pass.
+- `remove` of an account added under a label that a renamed `login` account used now leaves the
+  launch file that account's recent pick left there as the pick wrote it, while its lease is open,
+  for a `folder` and a `token` account alike. It used to delete that file, or overwrite it with a
+  tombstone that set the token variable to `invalid`, so the renamed account's pending session did
+  not start. When such a file does not have the shape a pick writes, cannot be read, or holds the
+  label's token, or when `remove` cannot read the token from the token file to check it, it may hold
+  a token, so `remove` stops before it changes anything, keeps the token file and the account, and
+  names the file to move out of the folder once that pick no longer needs it.
+- `remove` now stops before it deletes anything when the folder checks refuse `launch/` or the
+  label's launch folder, such as a `launch/` you cannot search or a label folder that is a link or
+  wider than 0700, so a folder account keeps its links, and when the lease file cannot be saved, so
+  a refusal that check can see no longer comes after the token file is deleted. That check may
+  leave an empty file in `state/`, which its text names. A lease save that still fails after the
+  token file is deleted, such as on a full disk, says that the token file was deleted and the
+  account was kept, and to run `agent-balancer remove <label>` again once the lease file can be
+  saved. A stop after a folder account's links were forgotten says so and that
+  `agent-balancer link <label>` records them again. The stop for a launch file `remove` cannot
+  overwrite or delete names the `chflags` and `chmod` commands that let a rerun clear it, and each
+  of the writer's folder refusals that names a `chmod` names `chflags nouchg,nouappnd` first, but
+  for two that a locked folder never meets, so the commands for a locked folder no longer fail with
+  Operation not permitted. The Manage accounts window shows a `remove` stop whole instead of cutting
+  it at 240 characters. The architecture and the guide say what `remove` does in each case, and that
+  no command it names clears a lock a program set on an entry whose access list denies you
+  `readattr`.
 
 ## 1.1.0
 

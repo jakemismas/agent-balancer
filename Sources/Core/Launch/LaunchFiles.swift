@@ -210,18 +210,110 @@ extension LaunchFiles {
     /// The most bytes of a launch file the tool reads.
     static let launchFileLimit = 65_536
 
+    /// The bytes of one launch file, or nil when it cannot be read.
+    private static func contents(context: ToolContext, label: String, name: String) -> Data? {
+        try? NoFollowReader(root: context.dataRoot).read(
+            folders: folders(label: label), name: name, limit: launchFileLimit)
+    }
+
     /// The JSON object of one launch file, or nil when it cannot be read or does not parse.
     private static func object(context: ToolContext, label: String, name: String) -> [String: Any]?
     {
-        guard
-            let data = try? NoFollowReader(root: context.dataRoot).read(
-                folders: folders(label: label), name: name, limit: launchFileLimit)
-        else { return nil }
+        guard let data = contents(context: context, label: label, name: name) else { return nil }
         return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
     }
 
     static func isTombstone(_ object: [String: Any]) -> Bool {
         (object["env"] as? [String: Any])?[ProtectedEnv.tokenVariable] as? String == tombstoneValue
+    }
+
+    /// Whether a launch file in the folder of `label` has the shape a pick of a `login` or
+    /// `folder` account writes (`create`, `CallerSettings.merged`): no top-level key but the
+    /// caller settings keys and the hooks key, the hooks key `false` and `crossSessionInbound` a
+    /// string where either is there, an `env` of strings, the account variable `label` where it
+    /// is there, and no other `env` name that caller settings refuse but the token variable set
+    /// to `invalid`, as a tombstone holds it. Any other file may hold a token.
+    static func hasPickShape(_ object: [String: Any], label: String) -> Bool {
+        let keys = CallerSettings.allowedSettingsKeys.union([CallerSettings.hooksKey])
+        guard Set(object.keys).isSubset(of: keys),
+            object[CallerSettings.hooksKey].map(isFalse) ?? true,
+            object["crossSessionInbound"].map({ $0 is String }) ?? true,
+            let env = object["env"] as? [String: Any],
+            env.values.allSatisfy({ $0 is String }),
+            env[accountVariable].map({ $0 as? String == label }) ?? true
+        else { return false }
+        return env.allSatisfy { name, value in
+            name == accountVariable || !CallerSettings.isForbiddenEnvName(name)
+                || (name == ProtectedEnv.tokenVariable && value as? String == tombstoneValue)
+        }
+    }
+
+    /// Whether `value` is the JSON `false` that `merged` writes; a number such as 0 is not.
+    private static func isFalse(_ value: Any) -> Bool {
+        guard let number = value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() else {
+            return false
+        }
+        return !number.boolValue
+    }
+
+    /// The token of a label, which `remove` deletes, for the check of a launch file of another
+    /// label's open pick in the label's folder.
+    enum RemovedToken {
+        /// No token file is there, so a pick's shape alone clears such a file.
+        case absent
+        /// A token file is there that gives no token, such as one its mode or an access list
+        /// keeps you from reading, so no such file can be cleared.
+        case unread
+        /// The token, which such a file must not hold.
+        case token(TokenSecret)
+    }
+
+    /// The token of `label` from its token file, held in memory for the check alone.
+    static func removedToken(context: ToolContext, label: String) -> RemovedToken {
+        switch try? TokenStore.checkFile(context: context, label: label) {
+        case .there(false)?: return .absent
+        case .there(true)?:
+            guard let token = try? TokenStore.read(context: context, label: label) else {
+                return .unread
+            }
+            return .token(token)
+        default: return .unread
+        }
+    }
+
+    /// Whether `data` holds `token` anywhere: as written, or in a JSON string with some of its
+    /// characters escaped, a key and a repeated key's earlier value included.
+    static func holds(_ data: Data, _ token: TokenSecret) -> Bool {
+        let needle = Data(token.reveal().utf8)
+        return data.range(of: needle) != nil || unescaped(data).range(of: needle) != nil
+    }
+
+    /// `data` with each JSON escape replaced by the byte it stands for. A character outside
+    /// ASCII, which no token holds, becomes a zero byte, and so does a control character.
+    private static func unescaped(_ data: Data) -> Data {
+        let bytes = [UInt8](data)
+        var out = Data(capacity: bytes.count)
+        var index = 0
+        while index < bytes.count {
+            let byte = bytes[index]
+            index += 1
+            guard byte == UInt8(ascii: "\\"), index < bytes.count else {
+                out.append(byte)
+                continue
+            }
+            let escape = bytes[index]
+            index += 1
+            switch escape {
+            case UInt8(ascii: "u"):
+                let hex = bytes[index..<min(index + 4, bytes.count)]
+                let unit = UInt16(String(decoding: hex, as: UTF8.self), radix: 16) ?? 0
+                out.append(unit < 0x80 ? UInt8(unit) : 0)
+                index += 4
+            case UInt8(ascii: "\""), UInt8(ascii: "\\"), UInt8(ascii: "/"): out.append(escape)
+            default: out.append(0)
+            }
+        }
+        return out
     }
 
     private static func put(
@@ -343,6 +435,9 @@ extension LaunchFiles {
         var skipped = 0
         /// Names of the writer's temporary shape still in the label's folder after the delete.
         var temporariesLeft = 0
+        /// Files of another label's open pick, such as a renamed `login` account's. They are left
+        /// as their pick wrote them, and upkeep removes them once nothing needs them.
+        var othersKept = 0
     }
 
     /// Deletes the temporary files the no-follow writer left in the label's folder when a write
@@ -366,21 +461,26 @@ extension LaunchFiles {
     }
 
     /// Clears every launch file of `label` (docs/ARCHITECTURE.md section 4A.4, Removing). A file
-    /// that a session record names, or whose lease in `leased` is open, or any file when the
-    /// records cannot be read cleanly, becomes a tombstone and is kept; every other file is
-    /// deleted. The folder is listed again after each pass, so a file written meanwhile is handled
-    /// too. The writer's leftover temporary files go, entries the tool did not make are counted
-    /// and left alone, and the label's folder goes when nothing else is in it. A name of a launch
-    /// file's shape that `lstat` cannot check is not counted as one the tool did not make: it may
-    /// be a launch file, and the caller's read-back stops on it. Callers hold the pick lock.
+    /// whose lease is in `othersLeased`, the open picks of other labels, is left as its pick wrote
+    /// it, and the caller stops on one that may hold a token (`requireOthersAsWritten`), before
+    /// and after this call. A file that a session record names, or whose lease in `leased`
+    /// is open, or any file when the records cannot be read cleanly, becomes a tombstone and is
+    /// kept; every other file is deleted. A file that cannot be overwritten or deleted stays as
+    /// it is, and the caller's read-back stops on it. The folder is listed again after each pass,
+    /// so a file written meanwhile is handled too. The writer's leftover temporary files go,
+    /// entries the tool did not make are counted and left alone, and the label's folder goes when
+    /// nothing else is in it. A name of a launch file's shape that `lstat` cannot check is not
+    /// counted as one the tool did not make: it may be a launch file, and the caller's read-back
+    /// stops on it. Callers hold the pick lock.
     static func removeAll(
         context: ToolContext, label: String, snapshot: SessionsSnapshot, leased: Set<String>,
-        keepModifiedAfter: Date? = nil
+        othersLeased: Set<String> = [], keepModifiedAfter: Date? = nil
     ) throws -> RemovalCount {
         let writer = NoFollowWriter(root: context.dataRoot)
         var count = try clearFiles(
             context: context, label: label, snapshot: snapshot, leased: leased,
-            keepModifiedAfter: keepModifiedAfter, keepAll: false)
+            othersLeased: othersLeased, keepModifiedAfter: keepModifiedAfter, keepAll: false,
+            readBack: true)
         count.temporariesLeft = try deleteWriterLeftovers(context: context, label: label)
         count.skipped = try strayCount(context: context, label: label, leavingOutUnchecked: true)
         try writer.removeEmptyFolder(parent: [folder], name: label)
@@ -388,11 +488,14 @@ extension LaunchFiles {
     }
 
     /// The pass of `removeAll` over the launch files themselves: each is deleted or kept as a
-    /// tombstone, and with `keepAll` every one is kept. The folder is listed again after each
-    /// pass, so a file written meanwhile is handled too.
+    /// tombstone, and with `keepAll` every one is kept. A file of `othersLeased` is never changed
+    /// and counts as kept. The folder is listed again after each pass, so a file written
+    /// meanwhile is handled too. With `readBack`, a file the writer refuses to overwrite with a
+    /// tombstone stays as it is for the caller's read-back; otherwise the error is thrown.
     private static func clearFiles(
         context: ToolContext, label: String, snapshot: SessionsSnapshot, leased: Set<String>,
-        keepModifiedAfter: Date?, keepAll: Bool
+        othersLeased: Set<String> = [], keepModifiedAfter: Date?, keepAll: Bool,
+        readBack: Bool = false
     ) throws -> RemovalCount {
         let writer = NoFollowWriter(root: context.dataRoot)
         var count = RemovalCount()
@@ -405,16 +508,26 @@ extension LaunchFiles {
             if names.isEmpty { break }
             for name in names {
                 handled.insert(name)
+                let id = String(name.dropLast(5))
+                // A renamed account's session may still start from the file its pick left here.
+                if othersLeased.contains(id) {
+                    count.othersKept += 1
+                    continue
+                }
                 let young =
                     keepModifiedAfter.map { limit in
                         ((try? writer.info(folders: dir, name: name))?.modified ?? .distantFuture)
                             > limit
                     } ?? false
                 if keepAll || isNamed(name, label: label, snapshot: snapshot)
-                    || leased.contains(String(name.dropLast(5))) || young
+                    || leased.contains(id) || young
                 {
-                    try writeTombstone(context: context, label: label, name: name)
-                    count.tombstoned += 1
+                    do {
+                        try writeTombstone(context: context, label: label, name: name)
+                        count.tombstoned += 1
+                    } catch is ToolError where readBack {
+                        // The read-back stops on the file while it may still hold the token.
+                    }
                 } else if try writer.removeOwnRegularFile(
                     folders: folders(label: label), name: name)
                 {
@@ -442,14 +555,48 @@ extension LaunchFiles {
     }
 
     /// How many launch files of `label` may still carry a token: every one that is not a
-    /// tombstone, a file that cannot be read included. Nothing but the count leaves this call.
-    static func filesHoldingAToken(context: ToolContext, label: String) throws -> Int {
+    /// tombstone, a file that cannot be read included, except a file of `othersLeased`, the open
+    /// picks of other labels, which `requireOthersAsWritten` judges. Nothing but the count leaves
+    /// this call.
+    static func filesHoldingAToken(
+        context: ToolContext, label: String, othersLeased: Set<String> = []
+    ) throws -> Int {
         try ownFileNames(context: context, label: label).filter { name in
+            if othersLeased.contains(String(name.dropLast(5))) { return false }
             guard let object = object(context: context, label: label, name: name) else {
                 return true
             }
             return !isTombstone(object)
         }.count
+    }
+
+    /// Throws when a launch file of `othersLeased`, the open picks of other labels, in the
+    /// label's folder may hold a token: it does not have the shape a pick writes, cannot be read,
+    /// or holds the label's token, which `remove` deletes, anywhere in its bytes. While the
+    /// label's token file gives no token to compare, every such file may hold it. `remove` never
+    /// changes another account's file, so it stops there. `kept` says what the stop kept.
+    /// Callers hold the pick lock.
+    static func requireOthersAsWritten(
+        context: ToolContext, label: String, othersLeased: Set<String>, kept: TokenAccounts.Kept
+    ) throws {
+        guard !othersLeased.isEmpty else { return }
+        let others = try ownFileNames(context: context, label: label).filter {
+            othersLeased.contains(String($0.dropLast(5)))
+        }
+        guard !others.isEmpty else { return }
+        let token = removedToken(context: context, label: label)
+        let names = others.filter { name in
+            if case .unread = token { return true }
+            guard let data = contents(context: context, label: label, name: name),
+                let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+            else { return true }
+            if case .token(let secret) = token, holds(data, secret) { return true }
+            return !hasPickShape(object, label: label)
+        }
+        if !names.isEmpty {
+            throw ToolError(
+                othersNotAsWrittenText(label: label, names: names, kept: kept, token: token))
+        }
     }
 
     /// How many names of a launch file's shape in the label's folder `lstat` cannot check, such
@@ -585,6 +732,60 @@ extension LaunchFiles {
         let place = typedFolder(label: label)
         return
             "\(count) launch files of '\(label)' could not be checked and may hold a token.\(kept.sentence) Run `chmod -h -N \(place)`, and run `chmod -h -N` on each file directly in it, or `chmod -N` where that says Permission denied. Run `chflags -h nouchg,nouappnd \(place)` first if it is locked. Then run `agent-balancer remove \(label)` again."
+    }
+
+    /// What `remove` stops with at its read-back when a launch file of `label` it can check is
+    /// still there and may hold a token: it could not be overwritten with a tombstone or deleted,
+    /// as a lock or an append-only flag on the label's launch folder or on the file, an entry that
+    /// denies you `delete_child` on the folder or `delete` on the file, or a folder at 0500 makes
+    /// it, or it cannot be read. A lock or an append-only flag keeps `chmod` off an entry, so
+    /// `chflags` goes first; the folder passed the folder checks, so `chmod -h -N` opens it.
+    static func notClearedForRemoveText(label: String, kept: TokenAccounts.Kept) -> String {
+        let place = typedFolder(label: label)
+        return
+            "A launch file of '\(label)' could not be cleared.\(kept.sentence) Run `chflags -h nouchg,nouappnd \(place)` first if it is locked, and `chflags -h nouchg,nouappnd` on each file directly in it that is locked. Then run `chmod -h -N \(place)` and `chmod -h 700 \(place)`, and run `chmod -h -N` on each file directly in it, or `chmod -N` where that says Permission denied. Then run `agent-balancer remove \(label)` again."
+    }
+
+    /// What `remove` stops with when launch files of other labels' open picks in its label's
+    /// folder, `names`, may hold a token: each does not have the shape a pick writes, holds the
+    /// label's token when `token` gives one, or cannot be read, or the label's token file gives
+    /// no token to compare. The file is another account's, so the text names no command for it:
+    /// moving it out of the folder once its pick no longer needs it lets a rerun go on. No part
+    /// of the token is in it.
+    static func othersNotAsWrittenText(
+        label: String, names: [String], kept: TokenAccounts.Kept, token: RemovedToken
+    ) -> String {
+        let place = typedFolder(label: label)
+        let paths = Messages.listed(names.map { "`" + place + "/" + $0 + "`" })
+        let one = names.count == 1
+        let why: String
+        switch token {
+        case .unread:
+            let files =
+                one
+                ? "a launch file of another account's open pick holds it"
+                : "\(names.count) launch files of other accounts' open picks hold it"
+            why =
+                "`remove` cannot read the token of '\(label)' from its token file, so it cannot check whether \(files): \(paths)."
+        case .absent, .token:
+            let files =
+                one
+                ? "A launch file of another account's open pick may hold a token: \(paths) does not have the shape a pick writes, "
+                : "\(names.count) launch files of other accounts' open picks may hold a token: \(paths) do not have the shape a pick writes, "
+            let holds: String
+            if case .token = token {
+                holds = (one ? "holds" : "hold") + " the token of '\(label)', "
+            } else {
+                holds = ""
+            }
+            why = files + holds + "or cannot be read."
+        }
+        guard one else {
+            return why
+                + " `remove` left them as they are.\(kept.sentence) Once those picks no longer need the files, move them out of `\(place)`, then run `agent-balancer remove \(label)` again."
+        }
+        return why
+            + " `remove` left it as it is.\(kept.sentence) Once that pick no longer needs the file, move it out of `\(place)`, then run `agent-balancer remove \(label)` again."
     }
 }
 

@@ -24,25 +24,35 @@ struct RemoveCommand: ParsableCommand {
         }
         let kind = index.map { config.accounts[$0].kind }
         let key = index.map { config.accounts[$0].accountKey }
-        let removed = try TokenAccounts.removeAccount(
-            context: context, label: label, config: config,
-            keepsRecentPicks: kind != Kind.folder
-        ) { fresh in
-            // Again under the pick lock, which every registry writer takes, before anything is
-            // written.
-            let account = fresh?.account(label)
-            if let account { try Self.requireConsent(account) }
-            // Only another account under the label stops it; a gone entry finishes as leftovers.
-            if let account, account.accountKey != key {
-                throw ToolError(
-                    "'\(Display.safe(label))' changed while remove waited, so nothing was changed. Run `agent-balancer remove \(Display.safe(label))` again."
-                )
+        var forgot = false
+        let removed: TokenAccounts.Removed
+        do {
+            removed = try TokenAccounts.removeAccount(
+                context: context, label: label, config: config,
+                keepsRecentPicks: kind != Kind.folder
+            ) { fresh in
+                // Again under the pick lock, which every registry writer takes, before anything
+                // is written.
+                let account = fresh?.account(label)
+                if let account { try Self.requireConsent(account) }
+                // Only another account under the label stops it; a gone entry finishes as
+                // leftovers.
+                if let account, account.accountKey != key {
+                    throw ToolError(
+                        "'\(Display.safe(label))' changed while remove waited, so nothing was changed. Run `agent-balancer remove \(Display.safe(label))` again."
+                    )
+                }
+                if kind == Kind.folder {
+                    // Forgotten first: a stop part way leaves a folder that counts as not linked,
+                    // which fails closed, never one that looks linked after it is added again.
+                    let had = try HookRecord(context: context).saveLinks(
+                        label: label, entries: [], linked: false)
+                    forgot = had.linked || !had.entries.isEmpty
+                }
             }
-            if kind == Kind.folder {
-                // Forgotten first: a stop part way leaves a folder that counts as not linked,
-                // which fails closed, never one that looks linked after it is added again.
-                try HookRecord(context: context).saveLinks(label: label, entries: [], linked: false)
-            }
+        } catch let error where forgot {
+            // A later stop keeps the account, so it says how to record those links again.
+            throw ToolError.adding(Self.linksForgottenText(label), to: error)
         }
         if index != nil {
             print("Removed '\(Display.safe(label))'.")
@@ -82,6 +92,12 @@ struct RemoveCommand: ParsableCommand {
             )
         }
         Shared.rebuildStatus(context)
+    }
+
+    /// What a stop of `remove` adds once it forgot a folder account's links: the account it kept
+    /// counts as not linked until `link` records them again.
+    static func linksForgottenText(_ label: String) -> String {
+        "The links of '\(Display.safe(label))' were forgotten, so the account counts as not linked until `agent-balancer link \(Display.safe(label))` records them again."
     }
 
     /// Removing the main account takes its reserve away, so it keeps its typed consent: only a

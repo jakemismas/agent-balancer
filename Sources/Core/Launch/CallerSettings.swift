@@ -21,6 +21,8 @@ public struct CallerSettings: Sendable {
     ]
     /// No key here can switch hooks off, run a command or change permissions.
     static let allowedSettingsKeys: Set<String> = ["env", "crossSessionInbound"]
+    /// The key `merged` writes beside the caller's keys.
+    static let hooksKey = "disableAllHooks"
     static let forbiddenNestedKeys: Set<String> = ["__proto__", "constructor", "prototype"]
     static let maxDepth = 8
 
@@ -130,7 +132,7 @@ public struct CallerSettings: Sendable {
         object["env"] = env
         // Written by the tool, so a project or local settings file cannot switch hooks off for a
         // session this file launches.
-        object["disableAllHooks"] = false
+        object[Self.hooksKey] = false
         return try JSONSerialization.data(
             withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
     }

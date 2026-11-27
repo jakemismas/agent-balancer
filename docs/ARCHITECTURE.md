@@ -720,29 +720,75 @@ where that says Permission denied, which also clears an entry the folder would p
 tombstone written in it, with `chflags -h nouchg,nouappnd` on the folder first if it is locked. A
 rerun after those commands goes on with the remove: it finishes, stops on the next entry it cannot
 check or delete with that entry's text, or, when nothing of the label is left, says that no account
-is labelled so. When the folder checks refuse `tokens/` for another reason, such as a link, a file,
-another user's folder or one wider than 0700, the remove also stops before it writes or deletes
-anything, with the writer's refusal; the label's launch folder in such a state stops it the same way
-at the first listing of (a), before anything is deleted. A rerun with no config entry left also goes
-ahead while such a file is there, and stops on it. Then it works in this order: (a) a launch file of
-the label that a session record names, or whose lease has not ended, or any launch file when the
-records cannot be read cleanly, is overwritten with a tombstone, and every other launch file of the
-label is deleted; (b) the launch files are listed again and (a) is repeated for any file a `pick`
-wrote meanwhile; (c) every remaining file is read back, and the remove stops when one still holds a
-token, or, with the text of the check before any delete, when a launch file it cannot check is
-there, such as a tombstone that took an access list from its folder; (d) the writer's leftover
-temporary files in `tokens/` and `tokens/<label>.json` are deleted, and when the token file is still
-there, such as a locked one or one whose access list denies you `delete`, the remove stops, and its
-text names the token file and says to run `chmod -h -N` and `chmod -h 700` on `tokens/` and `chmod
--h -N` on the file, or `chmod -N` if that says Permission denied, with `chflags -h nouchg,nouappnd`
-first on either of them that is locked; when it can no longer check the token file or `tokens/` by
-then, it stops with the text of the check before any delete; (e) the label's leases and then the
-stored reading are deleted; (f) the config entry is deleted last, still under the pick lock, and the
-rebuild that follows writes the `account_removed` event. A stop at (c) or (d) keeps the leases, so a
-rerun still keeps a recent pick's file as a tombstone, and its text says it kept the token file or
-the config entry only when that one is there. A crash after any step leaves a state that `remove
-<label>` finishes on a rerun, also when the config entry is already gone, and `doctor` lists a token
-file that has no account. A tombstone is valid JSON, mode 0600, in the launch file's shape, with the
+is labelled so. When the folder checks refuse `tokens/`, `launch/` or the label's launch folder for
+another reason, such as a link, a file, another user's folder, one wider than 0700 or a `launch/`
+that cannot be searched, the remove also stops before it writes or deletes anything, with the
+writer's refusal, so a `folder` account keeps its links. So does a lease file that cannot be read. A
+launch file has the shape a pick writes when its top-level keys are only among `env`,
+`crossSessionInbound` and `disableAllHooks`, `disableAllHooks` is `false` and `crossSessionInbound`
+is a string where either is there, its `env` values are strings, and each `env` name is
+`AGENT_BALANCER_ACCOUNT` set to the label of the folder the file is in, one that 4A.2 does not list
+as never allowed, or the token variable set to `invalid`, as a tombstone holds it. A launch file in
+the label's folder whose open lease names another label, such as one a renamed `login` account's
+pick left under its old label (Renaming, below), also stops the remove before it writes or deletes
+anything when it does not have that shape, cannot be read, or holds the label's token anywhere, as a
+key, a value or part of one, also written with JSON escapes: it may hold a token, also under another
+credential name or a top-level key such as `apiKeyHelper`, and `remove` never changes another
+account's file, so the stop keeps the token file and the account, names the file, and says to move
+it out of the label's launch folder once that pick no longer needs it, then to run
+`agent-balancer remove <label>` again. It names no command that acts on that file. While the label's
+token file is there but `remove` cannot read a token from it, such as one at mode 000 or one whose
+access list denies you `read`, it cannot check such a file for that token, so each one stops the
+remove the same way, with a text that says why; with none in the folder, the remove goes on. The
+token is read into memory for that check alone, and no text holds any part of it. When the label has
+leases, a lease file or a `state/` folder in which the writer could not save it, such as a locked
+one, stops it before it deletes anything too, with the writer's refusal for it, and a `folder`
+account keeps its links there as well. That check makes and deletes an empty file in `state/`, and
+where it cannot delete that file, its text names it. So a refusal the check can see never comes
+after the token file is deleted; (e) says what a save that fails anyway says. Each of the writer's
+folder refusals that names a `chmod` names `chflags nouchg,nouappnd` first on the folder that
+`chmod` changes, if it is locked, since a lock or an append-only flag keeps `chmod` from changing it
+(section 13), except two that come only after the tool made an entry in that folder, which a lock
+prevents: those for a folder whose new entries take an access list that keeps the tool out and for
+one in which a probe folder cannot be locked, which name `chmod -N` alone. A rerun with no config
+entry left also goes ahead while such a file is there, and stops on it. Then it works in this order:
+(a) a launch file of the label that a session record names, or whose lease has not ended, or any
+launch file when the records cannot be read cleanly, is overwritten with a tombstone, and every
+other launch file of the label is deleted, except that a launch file whose open lease names another
+label, such as one a renamed `login` account's pick left under its old label (Renaming, below), is
+left as its pick wrote it; (b) the launch files are listed again and (a) is repeated for any file a
+`pick` wrote meanwhile; (c) every remaining file is read back, and the remove stops when one still
+holds a token, or, with the text of the check before any delete, when a launch file it cannot check
+is there, such as a tombstone that took an access list from its folder; a file of another label's
+open pick passes only while it still passes the check before any change, and one that no longer
+does, such as after another program's edit since that check, stops the remove with that stop's text,
+which then says what it kept; a launch file that (a) could not overwrite or delete, as a lock or an
+append-only flag on the label's launch folder or on the file, an access list entry that denies you
+`delete_child` on the folder or `delete` on the file, or a folder at 0500 makes it, is still there,
+and the text of that stop says what it kept and names `chflags -h nouchg,nouappnd` first on the
+folder and on each file directly in it that is locked, then `chmod -h -N` and `chmod -h 700` on the
+folder and `chmod -h -N` on each file directly in it, or `chmod -N` where that says Permission
+denied, after which a rerun clears the file; (d) the writer's leftover temporary files in `tokens/`
+and `tokens/<label>.json` are deleted, and when the token file is still there, such as a locked one
+or one whose access list denies you `delete`, the remove stops, and its text names the token file
+and says to run `chmod -h -N` and `chmod -h 700` on `tokens/` and `chmod -h -N` on the file, or
+`chmod -N` if that says Permission denied, with `chflags -h nouchg,nouappnd` first on either of them
+that is locked; when it can no longer check the token file or `tokens/` by then, it stops with the
+text of the check before any delete; (e) the label's leases and then the stored reading are deleted,
+and a lease save that fails after its check passed, such as on a full disk or after a change to
+`state/` made since the check, stops the remove there with a text that says what it deleted and kept
+by then, such as the token file and the account, and to run `agent-balancer remove <label>` again
+once the lease file can be saved; (f) the config entry is deleted last, still under the pick lock,
+and the rebuild that follows writes the `account_removed` event. A `folder` account that was linked
+has its links forgotten just before (a) (5.1), so each stop from (a) on also says that they were
+forgotten and that `agent-balancer link <label>` records them again. A stop at (c) or (d) keeps the
+leases, so a rerun still keeps a recent pick's file as a tombstone, and its text says it kept the
+token file or the config entry only when that one is there. The texts name no command that clears a
+lock a program set on an entry whose access list denies you `readattr`: `chflags` cannot check that
+entry, and `chmod` cannot change it while it is locked, so both fail on it, and the remove stops on
+it again until the lock is gone. A crash after any step leaves a state that `remove <label>`
+finishes on a rerun, also when the config entry is already gone, and `doctor` lists a token file
+that has no account. A tombstone is valid JSON, mode 0600, in the launch file's shape, with the
 token variable set to the literal `invalid` and no other secret: a session that reads it fails to
 sign in instead of falling back to the stored login. This keeps a launch file in place while any
 session record names it, live or not, and still leaves no file holding the old token; upkeep deletes
@@ -807,14 +853,13 @@ anything, and it prints the reader's refusal, such as `Refused to read main.json
 regular file.` for a folder where `main.json` belongs. A launch file that a pick made before the
 rename stays where it was written while its lease is open, and a session started from it keeps the
 old label in its environment. A token saved later under the old label is never written into such
-a file, which carries none (Replacing, above), and `remove <old label>` keeps it as a tombstone
-while its lease is open, as it keeps the label's own (Removing, above), so a session that starts
-from it after that fails to sign in. When the account removed under the old label is a `folder`
-account, whose remove keeps no launch file for an open lease (5.1), that file goes with the
-label's own unless a session record names it or the records cannot be read cleanly, and a session
-that would start from it finds no settings file. The account's history lines follow its
-`accountKey` (10.4), and an account added later under the old label starts with no reading, no
-lease and none of those lines.
+a file, which carries none (Replacing, above), and `remove <old label>` of an account of any kind
+added later under that label leaves it as its pick wrote it, with no token variable added, while its
+lease is open (Removing, above), so a session that starts from it still runs on the renamed account.
+When such a file does not have the shape a pick writes, or may hold the label's token (Removing,
+above), that remove stops before it changes anything and keeps the token file and the account. The
+account's history lines follow its `accountKey` (10.4), and an account added later under the old
+label starts with no reading, no lease and none of those lines.
 
 Where a token may be: the token file, the launch files of that label, and nowhere else, except a
 writer's temporary file that a write killed before its rename leaves in `tokens/` or
@@ -1011,6 +1056,13 @@ because the hook record covers that folder's settings; any other value makes `li
 folder is also refused when it is a link or is not owned by the user. `remove` on a folder account
 deletes the registry entry, the label's launch files (a recent pick's file included, because none
 holds a token) and its leases, forgets the label's manifest entries, and never touches the folder.
+It forgets the entries before it deletes anything, so a stop part way leaves an account that counts
+as not linked, which fails closed, and when the account was linked, the stop's text says its links
+were forgotten and that `agent-balancer link <label>` records them again. A launch file under the
+label whose open lease names another label, such as one a renamed `login` account's pick left
+there, is not the account's: that remove leaves it as its pick wrote it, and when the file does not
+have the shape a pick writes, it stops before it changes anything, keeping the account and its links
+(4A.4).
 
 Consent commands (`link`, `unlink`, `link --repair`, `link --accept-source-change`, `uninstall`,
 `config set-main`, `config clear-main`, `config set`, `remove`) refuse to run in a chat
@@ -2567,7 +2619,7 @@ empty lists, and the events record keeps only each label's newest line.
     closes the sheet, and shows the Terminal command with a Copy button for a main account, or
     says the account is no longer listed or is another account now. A `remove` that runs and
     fails, such as one another `remove` got to first, also closes the sheet, and the bar shows
-    the CLI's text. Every other change reads the
+    the CLI's text whole. Every other change reads the
     status again before it runs: the
     end choice runs only for an account still listed whose kind is not `login`, Sign in and the
     Add sheet's step buttons check the kind, the link and the sign-in state, and `add` and `login`
@@ -2576,7 +2628,8 @@ empty lists, and the events record keeps only each label's newest line.
   - **No file writes:** every change is one CLI command, run with an argument array; a bar at the
     bottom of the window shows the last command and its result or error text: the first line of
     its error output (of its output when it failed with none, or when it worked), with tokens
-    scrubbed and through the display-safe pass. For `login <label> --browser`, which prints
+    scrubbed and through the display-safe pass, cut at 240 characters, except a failed
+    `remove`'s, which the bar shows whole and wrapped. For `login <label> --browser`, which prints
     its one-account-per-folder advice first, the bar shows the first line that starts with
     "Error " when the command failed, or the "Signed in." line when it worked, and the first line
     when there is no such line. For a token account's `login <label>`, which prints its opening
@@ -2714,7 +2767,8 @@ empty lists, and the events record keeps only each label's newest line.
   - **Display-safe text:** every string from `status.json` that the menu or the window shows
     (labels, emails, end dates, error and warning codes and texts, the banner, the next-launch
     labels and reasons) passes the display-safe pass, so a control or bidi character shows as an
-    escape and an over-long value is cut, and so does the tool's output in the bar. The window
+    escape and an over-long value is cut, and so does the tool's output in the bar, cut at 240
+    characters except a failed `remove`'s, which the bar shows whole and wrapped. The window
     lists only accounts whose label is a plain label, shows a plan tier only in the plain tier
     shape, and shows and copies a folder path it makes from the label and the data folder, never
     the status file's `configDir`. A signed-out account shows when the tool first saw it signed
@@ -3175,7 +3229,10 @@ tool's with such an entry is refused, with a message that names it and `chmod -N
 its fix: `chmod 700` for a mode wider than 0700, `chmod -N` then `chmod 700` for one that cannot
 be opened or searched, `chmod -N` then `chmod 700` on the folder above for one below the data
 folder that is missing and could not be made there (for the data folder itself, whose folder
-above is the home folder, it names none), for a link, which is never followed and never given a
+above is the home folder, it names none), each after `chflags nouchg,nouappnd` on that folder
+first if it is locked, as it does before `chmod -N` for an access list and for a folder in which
+the tool cannot make and delete a file, since a lock or an append-only flag keeps `chmod` from
+changing it; for a link, which is never followed and never given a
 `chmod`, the
 folder to move back in its place, and for a file or another user's folder, a move out of the way.
 A folder account's folder is named with its account the same way (section 5). Under the data

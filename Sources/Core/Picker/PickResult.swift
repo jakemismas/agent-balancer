@@ -77,7 +77,8 @@ public struct PickResult: Encodable, Equatable, Sendable {
 }
 
 /// The one renderer of the typed strings. They are built only from values that passed the
-/// validators: a launch file path under the data folder.
+/// validators: a folder and a launch file path that pass the path pattern of docs/ARCHITECTURE.md
+/// section 5.2.
 public enum Recipe {
     /// The names a launcher removes from the child's environment (section 4A.3).
     public static let unsetNames = ProtectedEnv.baselineUnset
@@ -91,7 +92,7 @@ public enum Recipe {
         for name in ambient.keys.sorted()
         where (ProtectedEnv.isProtected(name) || ChildEnvironment.dropsForLaunch(name))
             && !names.contains(name)
-            && name.range(of: "^[A-Za-z_][A-Za-z0-9_]*$", options: .regularExpression) != nil
+            && name.range(of: #"\A[A-Za-z_][A-Za-z0-9_]*\z"#, options: .regularExpression) != nil
         {
             names.append(name)
         }
@@ -107,15 +108,13 @@ public enum Recipe {
         return "\(ProtectedEnv.configDirVariable)='\(configDir)' "
     }
 
-    /// `--settings '<path>'`. A path with a quote or a control character is refused, because the
-    /// string is typed into a shell line.
+    /// `--settings '<path>'`. The path must pass the same pattern as the folder in
+    /// `launchPrefix`, because the string is typed into a shell line.
     public static func launchArgs(settingsPath: String) throws -> String {
-        let safe =
-            settingsPath.hasPrefix("/")
-            && settingsPath.unicodeScalars.allSatisfy { $0.value >= 0x20 && $0.value != 0x7F }
-            && !settingsPath.contains("'") && !settingsPath.contains("\\")
-        guard safe else {
-            throw ToolError("The launch file path cannot be written safely into a command line.")
+        guard FolderPaths.isValidPath(settingsPath) else {
+            throw ToolError(
+                "The launch file path cannot be written safely into a command line. Move your home data to a path of letters, digits, dots, hyphens and underscores."
+            )
         }
         return "--settings '\(settingsPath)'"
     }

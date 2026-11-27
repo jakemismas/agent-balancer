@@ -201,7 +201,7 @@ private func text(_ data: Data) -> String { String(decoding: data, as: UTF8.self
         let pick = try cli.run(["pick", "--json", "--exclude", "main"])
         #expect(pick.status == 1)
         let launchPlace = "~/.agent-balancer/" + LaunchFiles.folder + "/lab"
-        #expect(text(pick.stderr).contains("Run `chmod -N \(launchPlace)` in Terminal"))
+        #expect(text(pick.stderr).contains("then `chmod -N \(launchPlace)` in Terminal"))
         let after = Set(try FileManager.default.contentsOfDirectory(atPath: folder.path))
         #expect(after == before)
         #expect(sharedEntries(cli) == [folder.lastPathComponent])
@@ -287,7 +287,7 @@ private func text(_ data: Data) -> String { String(decoding: data, as: UTF8.self
         let place = "~/.agent-balancer"
         let status = try cli.run(["status", "--cached", "--json"])
         #expect(status.status == 1)
-        #expect(text(status.stderr).contains("Run `chmod -N \(place)` in Terminal"))
+        #expect(text(status.stderr).contains("then `chmod -N \(place)` in Terminal"))
         #expect(try cli.run(["pick", "--json", "--exclude", "main"]).status != 0)
         let doctor = try cli.run(["doctor"])
         #expect(doctor.status == 1)

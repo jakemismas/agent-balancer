@@ -58,8 +58,9 @@ struct PickCommand: ParsableCommand {
             print("account: none")
         }
         print("reason: \(Display.safe(result.reason, limit: 800))")
+        // Both strings print as the JSON holds them, so a caller may copy either form.
         if let prefix = result.launchPrefix, let args = result.launchArgs {
-            print("launch prefix: '\(prefix)'")
+            print("launch prefix: \(prefix)")
             print("launch args: \(args)")
         }
         if let args = result.args { print("args: \(args.joined(separator: " "))") }

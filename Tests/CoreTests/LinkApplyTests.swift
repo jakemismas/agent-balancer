@@ -85,6 +85,23 @@ extension FolderAccountsTests {
         try expectNothingLinked(context, record: bytes)
     }
 
+    /// A verdict an earlier release saved judged env names by exact name, so a link plan built on
+    /// it after the update stops until a reader saves the verdict again.
+    @Test func aVerdictOfTheEarlierSchemaStopsALinkPlanAndItsApply() throws {
+        let (t, context) = try setUp()
+        defer { withExtendedLifetime(t) {} }
+        let seen = context.dataRoot.appendingPathComponent("state/settings-seen.json")
+        let saved = try String(contentsOf: seen, encoding: .utf8)
+        #expect(saved.contains("\"schemaVersion\":2"))
+        try saved.replacingOccurrences(of: "\"schemaVersion\":2", with: "\"schemaVersion\":1")
+            .write(to: seen, atomically: true, encoding: .utf8)
+        let bytes = try recordBytes(context)
+        let built = try plan(context)
+        #expect(built.verdict.issue == Messages.settingsNotChecked)
+        #expect(throws: ToolError.self) { _ = try Linker.apply(context: context, plan: built) }
+        try expectNothingLinked(context, record: bytes)
+    }
+
     // MARK: The linked flag alone
 
     @Test func aChangeToTheLinkedFlagAloneBetweenPlanAndApplyIsRefused() throws {

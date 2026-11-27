@@ -107,6 +107,16 @@ extension PickService {
         }
     }
 
+    /// The printed launch line is typed as a literal, so every argument must be plain or fit in
+    /// single quotes.
+    static func checkTypedArguments(_ arguments: [String]) throws {
+        if arguments.contains(where: { Display.safe($0, limit: Int.max) != $0 }) {
+            throw ToolError(
+                "An argument holds a control or other non-display character, so no line is printed for it. Run the command without --print-command to pass it to claude."
+            )
+        }
+    }
+
     private func checkedAccount(label: String, arguments: [String]) throws -> (Config, Account) {
         let config = try ConfigStore(context: context).loadRequired()
         guard ConfigValidator.isValidLabel(label),
@@ -139,6 +149,7 @@ extension PickService {
             try Self.checkHooksOff(ambient)
             try Self.checkStoredLogin(ambient)
             try Self.checkPrintableArguments(arguments)
+            try Self.checkTypedArguments(arguments)
             if ambient.key {
                 throw ToolError(
                     "A token or API key is set in this shell, so a line typed here would not use '\(label)'. Run `agent-balancer run \(label)` without --print-command."

@@ -212,13 +212,24 @@ why and names each copy that is still there.
   reading, so that the reading its first check saves comes from the new token alone, also after
   a restore from a backup that brought the reading back without the token file.
   `agent-balancer remove <label>` deletes the token file and the stored reading, and deletes the
-  label's launch files except one a session may still read, which stays with no token in it.
-  When an access list or a folder mode keeps it from checking the token file or a launch file of
-  the label, or from listing or searching their folders, it stops before it deletes anything and
-  names that folder or file and the commands that let it check them again. When a lock, an access
-  list or a folder mode keeps it from deleting the token file, it stops, keeps the account, and
-  names the commands that let it delete the file. Run the commands it names, then run
-  `agent-balancer remove <label>` again.
+  label's launch files except one a session may still read, which stays with no token in it, and one
+  a renamed account's recent pick left under the label, which stays as that pick wrote it. When that
+  file does not have the shape a pick writes, cannot be read, or holds the label's token, or when
+  the remove cannot read the token from the token file to check it, it may hold a token, so the
+  remove stops before it changes anything, keeps the token file and the account, and names the file.
+  Once that pick no longer needs the file, move it out of its folder, then run
+  `agent-balancer remove <label>` again. When an access list, a folder mode or a lock keeps it from
+  checking the token file, a launch file of the label or their folders, or from saving the lease
+  file, it stops before it deletes anything and names that folder or file and the commands that let
+  it go on, the one that unlocks a locked entry first. The check of the lease file's folder may
+  leave an empty file there, which the text names, and a refusal that check can see never comes
+  after the token file is deleted. When a lock, an access list or a folder mode keeps it from
+  deleting the token file or clearing a launch file, it stops, keeps the token file and the account,
+  and names the commands that let it finish. When the lease file still cannot be saved after the
+  token file is deleted, such as on a full disk, it says that the token file was deleted and the
+  account was kept. Run the commands it names, then run `agent-balancer remove <label>` again. The
+  Manage accounts window shows its whole text. Those commands cannot clear a lock that a program set
+  on a file or folder whose access list keeps you from reading its attributes.
 - The tool treats a launch file or a token file that it cannot check, such as one whose access
   list keeps it from reading the file's attributes, as one that may hold a token.
   `agent-balancer login <label>` stops before the sign-in when it cannot check, rewrite or delete

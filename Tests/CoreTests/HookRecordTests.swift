@@ -63,6 +63,8 @@ import Testing
             "CLAUDE_CODE_SUBAGENT_MODEL", "ANTHROPIC_MODEL", "ANTHROPIC_SMALL_FAST_MODEL",
             "CLAUDE_CODE_MAX_OUTPUT_TOKENS", "CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS",
             "CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT", "CLAUDE_BG_AUTO_MEMORY_OFF",
+            "CLAUDE_CODE_RESUME_SESSIONSTART_HOOKS_WAIT_MS", "CLAUDE_CODE_HOOKS_SAME_THREAD",
+            "CLAUDE_CODE_ENABLE_FUNCTION_HOOKS", "CLAUDE_CODE_FLEETVIEW_SIMPLE",
         ] {
             let facts = try HookRecord.parse(Data("{\"env\":{\"\(name)\":\"v\"}}".utf8))
             #expect(!facts.carriesKey, "\(name)")
@@ -85,6 +87,25 @@ import Testing
             Issue.record("a settings source in env must read as hooks off")
             return
         }
+    }
+
+    /// The settings scan and a typed line judge every name by the one predicate.
+    @Test func theSettingsScanAndATypedLineJudgeEveryNameAlike() throws {
+        let names =
+            ProtectedEnv.behaviorNames + ProtectedEnv.settingsSourceNames
+            + ChildEnvironmentTests.namesThatLeaveHooksOn + [
+                "CLAUDE_CODE_DISABLE_PERMISSION_PROMPT_NOTIFY_HOOKS", "CLAUDE_CODE_NEW_HOOKS_X",
+                "CLAUDE_CODE_NEW_NAME_X", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_SUBAGENT_MODEL",
+            ]
+        for name in names {
+            let facts = try HookRecord.parse(Data("{\"env\":{\"\(name)\":\"1\"}}".utf8))
+            let typed = PickService.AmbientState([name: "1"]).hooksOffName != nil
+            #expect(facts.hooksOffEnvNames == (ProtectedEnv.mayDisableHooks(name) ? [name] : []))
+            #expect(facts.hooksOff == typed, "\(name)")
+        }
+        let worded = try HookRecord.parse(
+            Data(#"{"env":{"CLAUDE_CODE_NEW_HOOKS_X":"1"}}"#.utf8))
+        #expect(worded.hooksOffEnvNames == ["CLAUDE_CODE_NEW_HOOKS_X"])
     }
 
     @Test func signInKeysOtherThanTheKeyHelperAreNeverRead() throws {

@@ -211,4 +211,11 @@ import Testing
         c.launch.envNames = [name]
         #expect(message(c)?.contains("envNames") == true, "\(name)")
     }
+
+    @Test(arguments: CallerSettingsTests.codeLoadingNames + CallerSettingsTests.refusedClaudeNames)
+    func aCodeLoadingOrUnsettledNameIsRefusedAtLoad(name: String) {
+        var c = config([login()])
+        c.launch.envNames = ["CLAUDE_ROLE", name]
+        #expect(message(c) == "launch.envNames holds a name that is never allowed.", "\(name)")
+    }
 }

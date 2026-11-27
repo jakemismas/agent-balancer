@@ -336,10 +336,11 @@ import Testing
         #expect(launchFiles(t).isEmpty)
     }
 
-    @Test(arguments: [
-        "CLAUDE_CODE_SUBAGENT_MODEL", "ANTHROPIC_MODEL", "CLAUDE_CODE_MAX_OUTPUT_TOKENS",
-        "CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS",
-    ])
+    @Test(
+        arguments: [
+            "CLAUDE_CODE_SUBAGENT_MODEL", "ANTHROPIC_MODEL", "CLAUDE_CODE_MAX_OUTPUT_TOKENS",
+            "CLAUDE_CODE_NEW_NAME_X",
+        ] + ChildEnvironmentTests.namesThatLeaveHooksOn)
     func aHarmlessNameInSettingsEnvSkipsNoAccount(name: String) throws {
         let (t, service) = try setUp([login(), token("pool-a")])
         _ = try t.makeTokenFile(label: "pool-a", secret: Canaries.oauth())
@@ -359,6 +360,32 @@ import Testing
         let result = try service.pick(PickRequest())
         #expect(result.label == nil)
         #expect(result.candidates.allSatisfy { $0.reason == Messages.settingsChanged })
+    }
+
+    @Test(arguments: [
+        "CLAUDE_CODE_NEW_HOOKS_X", "CLAUDE_CODE_DISABLE_PERMISSION_PROMPT_NOTIFY_HOOKS",
+    ])
+    func aWordedUnlistedNameInSettingsEnvSkipsEveryAccountAsHooksOff(name: String) throws {
+        let (t, service) = try setUp([login(), token("pool-a")])
+        _ = try t.makeTokenFile(label: "pool-a", secret: Canaries.oauth())
+        try writeDefaultSettings(t, "{\"env\":{\"\(name)\":\"1\"}}")
+        for request in [PickRequest(), PickRequest(caller: .launcher)] {
+            let result = try service.pick(request)
+            #expect(result.label == nil, "\(name)")
+            #expect(result.candidates.count == 2)
+            #expect(result.candidates.allSatisfy { $0.reason == Messages.settingsChanged })
+        }
+        #expect(launchFiles(t).isEmpty)
+    }
+
+    @Test(arguments: ChildEnvironmentTests.namesThatLeaveHooksOn)
+    func theSixNamesThatLeaveHooksOnGiveATypedLine(name: String) throws {
+        let (t, service) = try setUp([login()], ambient: [name: "1"])
+        let typed = try service.pick(PickRequest())
+        #expect(typed.label == "main", "\(name)")
+        #expect(!typed.backgroundOnly)
+        #expect(typed.launchArgs != nil)
+        withExtendedLifetime(t) {}
     }
 
     @Test func harmlessNamesAChatShellCarriesChangeNoTypedAnswer() throws {
@@ -399,10 +426,19 @@ import Testing
         #expect(launcher.unsetEnv?.contains(name) == true)
     }
 
-    @Test(arguments: ProtectedEnv.settingsSourceNames)
+    @Test(
+        arguments: ProtectedEnv.behaviorNames + ProtectedEnv.settingsSourceNames + [
+            "CLAUDE_CODE_NEW_HOOKS_X"
+        ])
     func aSettingsSourceNameRefusesATypedPickAndALauncherUnsetsIt(name: String) throws {
         let (t, service) = try setUp([login()], ambient: [name: "/elsewhere"])
-        #expect(throws: ToolError.self) { try service.pick(PickRequest()) }
+        do {
+            _ = try service.pick(PickRequest())
+            Issue.record("a typed pick was not refused under \(name)")
+        } catch let error as ToolError {
+            #expect(error.message.hasPrefix("\(name) is set in this shell"), "\(name)")
+            #expect(!error.message.contains("/elsewhere"))
+        }
         #expect(launchFiles(t).isEmpty)
         let launcher = try service.pick(PickRequest(caller: .launcher))
         #expect(launcher.label == "main")
@@ -928,6 +964,57 @@ import Testing
         // A launcher has no typed string, so the same path works.
         let launcher = try service.pick(PickRequest(caller: .launcher))
         #expect(launcher.label == "pool-a")
+    }
+
+    /// The launch file path must pass the folder pattern, as a folder account's folder does, so a
+    /// home path with a space, `$(` or a letter outside ASCII gets no typed string and no run.
+    @Test(arguments: ["a b", "x$(id)", "caf\u{E9}"])
+    func aHomePathOutsideTheFolderPatternGetsNoTypedStringAndNoRun(folder: String) throws {
+        let t = try TestHome()
+        try t.installFake()
+        try t.fakeFixture(auth: "logged_in")
+        try t.fakeProbe("ok.jsonl")
+        var config = Config(accounts: [token("pool-a")])
+        config.fable.probe = false
+        let odd = t.home.appendingPathComponent(folder)
+        try FileManager.default.createDirectory(at: odd, withIntermediateDirectories: true)
+        let context = ToolContext(home: odd, ambient: [:])
+        try FileManager.default.createDirectory(
+            at: odd.appendingPathComponent(".local/bin"), withIntermediateDirectories: true)
+        try FileManager.default.copyItem(
+            at: t.fakePath, to: odd.appendingPathComponent(".local/bin/claude"))
+        try FileManager.default.copyItem(
+            at: t.home.appendingPathComponent(".ab-fake"),
+            to: odd.appendingPathComponent(".ab-fake"))
+        try ConfigStore(context: context).save(config)
+        let hooks = HookRecord(context: context)
+        try hooks.record(.empty)
+        _ = try hooks.readSettings()
+        let oddHome = TestHome.wrapping(odd, fixtures: t.fixtures)
+        _ = try oddHome.makeTokenFile(label: "pool-a", secret: Canaries.oauth())
+        let service = PickService(context: context)
+        let attempts: [() throws -> Void] = [
+            { _ = try service.pick(PickRequest()) },
+            { _ = try service.prepareRun(label: "pool-a", arguments: []) },
+            { _ = try service.prepareRun(label: "pool-a", arguments: [], printOnly: true) },
+        ]
+        for attempt in attempts {
+            do {
+                try attempt()
+                Issue.record("a launch path outside the pattern was given out")
+            } catch let error as ToolError {
+                #expect(error.message.hasPrefix("The launch file path cannot be written safely"))
+            }
+        }
+        #expect(launchFiles(oddHome).isEmpty)
+        let state = context.dataRoot.appendingPathComponent("state")
+        for file in ["leases.json", "picks.log"] {
+            #expect(
+                !FileManager.default.fileExists(atPath: state.appendingPathComponent(file).path))
+        }
+        let launcher = try service.pick(PickRequest(caller: .launcher))
+        #expect(launcher.label == "pool-a")
+        #expect(launcher.args?.last?.hasPrefix(odd.path) == true)
     }
 
     // MARK: Fable

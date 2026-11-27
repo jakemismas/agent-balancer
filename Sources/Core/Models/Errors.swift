@@ -56,7 +56,7 @@ public struct ToolError: Error, LocalizedError, Equatable, Sendable {
 
     /// `error` with `more` after its text and with its code, for a step that failed and left
     /// something with a fix of its own.
-    static func adding(_ more: String, to error: Error) -> ToolError {
+    public static func adding(_ more: String, to error: Error) -> ToolError {
         let tool = error as? ToolError
         return ToolError(
             (tool?.message ?? error.localizedDescription) + " " + more, code: tool?.code)
@@ -238,7 +238,15 @@ public enum Messages {
     /// plain `chmod -N` acts on it. It names the fix and no next command, since after a saved
     /// token the next one is not the one that ran.
     public static func folderSharedByAccessList(_ place: String) -> String {
-        "Refused `\(place)`: its access list lets another user or group in, or cannot be read. Run `chmod -N \(place)` in Terminal."
+        "Refused `\(place)`: its access list lets another user or group in, or cannot be read. "
+            + unlockingFirst(place, then: "`chmod -N \(place)` in Terminal.")
+    }
+
+    /// The start of a fix for a folder of the tool's whose commands a lock or an append-only
+    /// flag on it would refuse with Operation not permitted: the `chflags` that clears both,
+    /// then `rest`.
+    static func unlockingFirst(_ place: String, then rest: String) -> String {
+        "Run `chflags nouchg,nouappnd \(place)` first if it is locked, then " + rest
     }
 
     /// What every command that would start `claude`, and the menu app's lookup of the command
@@ -293,20 +301,22 @@ public enum Messages {
             return
                 "Refused `\(place)`: it is a link or not a folder, and the tool never follows a link. Move what is there out of the way, or move the folder a link points to back in its place."
         case .cannotOpen:
-            return
-                "Refused `\(place)`: it cannot be opened or searched. Run `chmod -N \(place)`, then `chmod 700 \(place)` in Terminal."
+            return "Refused `\(place)`: it cannot be opened or searched. "
+                + unlockingFirst(
+                    place, then: "`chmod -N \(place)`, then `chmod 700 \(place)` in Terminal.")
         case .cannotMake:
             guard let cut = place.lastIndex(of: "/"), place != NoFollowWriter.dataFolderPlace
             else { return "Refused `\(place)`: it is missing and could not be made." }
             let above = String(place[..<cut])
-            return
-                "Refused `\(place)`: it is missing and could not be made in `\(above)`. Run `chmod -N \(above)`, then `chmod 700 \(above)` in Terminal."
+            return "Refused `\(place)`: it is missing and could not be made in `\(above)`. "
+                + unlockingFirst(
+                    above, then: "`chmod -N \(above)`, then `chmod 700 \(above)` in Terminal.")
         case .notYours:
             return
                 "Refused `\(place)`: it belongs to another user, so the tool does not use it. Move it out of the way."
         case .widerThanPrivate:
-            return
-                "Refused `\(place)`: it is wider than 0700. Run `chmod 700 \(place)` in Terminal."
+            return "Refused `\(place)`: it is wider than 0700. "
+                + unlockingFirst(place, then: "`chmod 700 \(place)` in Terminal.")
         case .sharedByAccessList:
             return folderSharedByAccessList(place)
         }
@@ -316,13 +326,16 @@ public enum Messages {
     /// and delete what it writes there, as an entry that denies the user adding or deleting
     /// files makes.
     public static func folderNotWritable(_ place: String) -> String {
-        "Refused `\(place)`: the tool cannot make and delete what it writes in it. Run `chmod -N \(place)`, then `chmod 700 \(place)` in Terminal, and `chflags nouchg \(place)` first if it is locked."
+        "Refused `\(place)`: the tool cannot make and delete what it writes in it. "
+            + unlockingFirst(
+                place, then: "`chmod -N \(place)`, then `chmod 700 \(place)` in Terminal.")
     }
 
     /// What a command says about a folder of the tool's it cannot mark as excluded from backups,
     /// as an entry that denies the user writing its extended attributes makes.
     static func notExcludedFromBackup(_ place: String) -> String {
-        "Refused `\(place)`: it cannot be marked as excluded from backups. Run `chmod -N \(place)` in Terminal."
+        "Refused `\(place)`: it cannot be marked as excluded from backups. "
+            + unlockingFirst(place, then: "`chmod -N \(place)` in Terminal.")
     }
 
     /// What a probe says about its folder when it holds something the tool did not make there.

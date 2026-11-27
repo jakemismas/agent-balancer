@@ -342,6 +342,22 @@ import Testing
         #expect(loaded.sevenDay?.usedPercent == 41)
     }
 
+    @Test func aStoredWindowWhoseNameFailsTheProbesShapeIsDroppedOnLoad() throws {
+        let t = try TestHome()
+        let store = ReadingStore(context: t.context)
+        var r = reading(week: 41, at: t0)
+        for name in [
+            "five_hour\n", "seven_day\r", "five_hour\r\n", "Monthly Extra", "monthly_extra",
+        ] {
+            r.windows[name] = WindowReading(usedPercent: 20, resetsAt: reset, readAt: t0)
+        }
+        try store.save(r, label: "a")
+        let loaded = try #require(try store.load(label: "a"))
+        #expect(Set(loaded.windows.keys) == [WindowName.sevenDay, "monthly_extra"])
+        #expect(loaded.sevenDay?.usedPercent == 41)
+        #expect(loaded.fiveHour == nil)
+    }
+
     @Test func aFileThatIsNotJSONLoadsAsNoReading() throws {
         let t = try TestHome()
         let store = ReadingStore(context: t.context)

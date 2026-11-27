@@ -49,13 +49,15 @@ public enum ProbeReader {
                 // Every entry with a usage value is checked, whatever its name and whether the
                 // cap below keeps it: a value the tool cannot trust fails the whole reply.
                 for (name, raw) in found {
-                    guard isValidName(name) else { continue }
+                    let named = WindowName.isValid(name)
                     if name == WindowName.fiveHour { namedFiveHour = true }
                     guard let entry = raw as? [String: Any], let utilization = entry["utilization"]
                     else { continue }
                     guard let percent = percent(from: utilization) else {
                         return .failed(Issue(.checkFailed, .error, badUsage))
                     }
+                    // A name of another shape is dropped once its value passes.
+                    guard named else { continue }
                     let resetsAt: Date?
                     switch resetTime(entry["resetsAt"], window: name, readAt: readAt) {
                     case .absent: resetsAt = nil
@@ -184,9 +186,5 @@ public enum ProbeReader {
     /// A reset time to the minute, so the same window always compares equal.
     static func minute(_ date: Date?) -> Date? {
         date.map { Date(timeIntervalSince1970: ($0.timeIntervalSince1970 / 60).rounded() * 60) }
-    }
-
-    static func isValidName(_ name: String) -> Bool {
-        name.range(of: "^[a-z0-9_]{1,40}$", options: .regularExpression) != nil
     }
 }

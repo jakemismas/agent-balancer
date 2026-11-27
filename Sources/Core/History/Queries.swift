@@ -119,7 +119,7 @@ extension EventLog {
         let limit = try QueryInput.limit(query.limit, default: 200)
         let since = try query.since.map { try QueryInput.time($0, now: now) }
         if let type = query.type,
-            type.range(of: "^[a-z_]{1,32}$", options: .regularExpression) == nil
+            type.range(of: #"\A[a-z_]{1,32}\z"#, options: .regularExpression) == nil
         {
             throw ToolError("--type must be an event type such as limited.")
         }

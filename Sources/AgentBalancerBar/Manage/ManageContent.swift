@@ -139,9 +139,10 @@ struct ManageContent: View {
                     Spacer(minLength: 0)
                 }
             }
+            // Wrapped whole, so a stop text keeps every command it names.
             if let bar, !bar.ok, !bar.text.isEmpty {
                 Text(bar.text).font(.ui(11)).foregroundStyle(palette.crit)
-                    .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                    .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

@@ -326,6 +326,55 @@ import Testing
         #expect(leases.count == 1)
         #expect(cli.read("state/picks.log").split(separator: "\n").count == 2)
     }
+
+    /// The value after `key: ` on its own line of the text form.
+    static func textField(_ out: Support.Output, _ key: String) -> String? {
+        String(decoding: out.stdout, as: UTF8.self)
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .first { $0.hasPrefix(key + ": ") }.map { String($0.dropFirst(key.count + 2)) }
+    }
+
+    /// The text with each lease id masked, since two picks never share one.
+    static func leaseMasked(_ text: String) -> String {
+        text.replacingOccurrences(
+            of: #"l-[0-9a-f]{8}"#, with: "l-<lease>", options: .regularExpression)
+    }
+
+    @Test func theTextFormPrintsTheTypedStringsAsTheJsonHoldsThem() throws {
+        let cli = try setUp([login()])
+        defer { cli.cleanup() }
+        let json = try cli.run(["pick", "--json"])
+        #expect(json.status == 0)
+        let answer = try object(json)
+        let prefix = try #require(answer["launchPrefix"] as? String)
+        let args = try #require(answer["launchArgs"] as? String)
+        let plain = try cli.run(["pick"])
+        #expect(plain.status == 0)
+        #expect(Self.textField(plain, "launch prefix") == prefix)
+        let printed = try #require(Self.textField(plain, "launch args"))
+        #expect(Self.leaseMasked(printed) == Self.leaseMasked(args))
+        #expect(printed.hasPrefix("--settings '/"))
+    }
+
+    @Test func runPrintCommandRefusesANewlineOrATabThatRunPassesToClaude() throws {
+        let cli = try setUp([login()])
+        defer { cli.cleanup() }
+        let context = ToolContext(home: cli.home, ambient: [:])
+        _ = try HookRecord(context: context).readSettings()
+        for argument in ["two\nlines", "a\ttab"] {
+            let out = try cli.run(["run", "--print-command", "main", "--", "-p", argument])
+            #expect(out.status == 1)
+            #expect(out.stdout.isEmpty)
+            let error = String(decoding: out.stderr, as: UTF8.self)
+            #expect(error.contains("non-display character"))
+        }
+        #expect(cli.read("state/leases.json").isEmpty && cli.read("state/picks.log").isEmpty)
+        try cli.fake("default.exit", "0")
+        let run = try cli.run(["run", "main", "--", "-p", "a\ttab"])
+        #expect(run.status == 0)
+        let started = try #require(cli.fakeRecord("args.log").split(separator: "\n").last)
+        #expect(started.hasPrefix("--settings ") && started.hasSuffix(" -p a\ttab"))
+    }
 }
 
 final class PickOutputs: @unchecked Sendable {

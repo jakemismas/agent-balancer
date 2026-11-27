@@ -768,4 +768,19 @@ private func text(_ data: Data) -> String { String(decoding: data, as: UTF8.self
         #expect(!rest.contains(Self.email))
         #expect(privateModes(cli).isEmpty)
     }
+
+    @Test func aFolderPicksTextFormPrintsThePrefixAsTheJsonHoldsIt() throws {
+        let cli = try setUp()
+        defer { cli.cleanup() }
+        try linked(cli)
+        let answer = try json(try cli.run(["pick", "--json", "--exclude", "main"]))
+        let prefix = try #require(answer["launchPrefix"] as? String)
+        let args = try #require(answer["launchArgs"] as? String)
+        #expect(prefix == "CLAUDE_CONFIG_DIR='\(try folderPath(cli))' ")
+        let plain = try cli.run(["pick", "--exclude", "main"])
+        #expect(plain.status == 0)
+        #expect(PickCLITests.textField(plain, "launch prefix") == prefix)
+        let printed = try #require(PickCLITests.textField(plain, "launch args"))
+        #expect(PickCLITests.leaseMasked(printed) == PickCLITests.leaseMasked(args))
+    }
 }

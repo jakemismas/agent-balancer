@@ -4,7 +4,7 @@ import Foundation
 /// docs/ARCHITECTURE.md section 4A.2. A refusal names the offending key and never a value.
 public struct CallerSettings: Sendable {
     public static let maxBytes = 16_384
-    static let envNamePattern = "^[A-Z][A-Z0-9_]{0,63}$"
+    static let envNamePattern = #"\A[A-Z][A-Z0-9_]{0,63}\z"#
     /// Names that are never allowed in `env`, whatever the config lists. The protected group and
     /// the prefix and suffix rules are checked in `isForbiddenEnvName`.
     static let forbiddenEnvNames: Set<String> = [
@@ -12,15 +12,18 @@ public struct CallerSettings: Sendable {
         "ZDOTDIR", "SHELL", "NODE_PATH", "NODE_TLS_REJECT_UNAUTHORIZED", "SSL_CERT_DIR",
         "CURL_CA_BUNDLE", "REQUESTS_CA_BUNDLE", "TMPDIR", "PYTHONSTARTUP", "PYTHONPATH",
         "RUBYOPT", "RUBYLIB", "PERL5OPT", "PERL5LIB", "XDG_CONFIG_HOME", "XDG_DATA_HOME",
-        "IFS", "PS4", "PROMPT_COMMAND", "EDITOR", "VISUAL", "PAGER",
+        "IFS", "PS4", "PROMPT_COMMAND", "EDITOR", "VISUAL", "PAGER", "SSLKEYLOGFILE",
+        "JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "_JAVA_OPTIONS",
     ]
     /// These could run code beside the token or point a tool at another credential.
     static let forbiddenEnvPrefixes = [
         "DYLD_", "LD_", "GIT_", "NODE_", "BASH_", "LC_", "NPM_", "BUN_", "DENO_", "SSH_", "AWS_",
-        "GOOGLE_", "AZURE_", "OTEL_",
+        "GOOGLE_", "AZURE_", "OTEL_", "OPENSSL_",
     ]
     /// No key here can switch hooks off, run a command or change permissions.
     static let allowedSettingsKeys: Set<String> = ["env", "crossSessionInbound"]
+    /// The key `merged` writes beside the caller's keys.
+    static let hooksKey = "disableAllHooks"
     static let forbiddenNestedKeys: Set<String> = ["__proto__", "constructor", "prototype"]
     static let maxDepth = 8
 
@@ -36,6 +39,8 @@ public struct CallerSettings: Sendable {
             || name.hasPrefix(LaunchFiles.accountVariablePrefix)
             || forbiddenEnvNames.contains(name) || name.uppercased().hasSuffix("_PROXY")
             || forbiddenEnvPrefixes.contains { name.hasPrefix($0) }
+            || ProtectedEnv.launchRefusedNames.contains(name)
+            || ProtectedEnv.launchRefusedPrefixes.contains { name.hasPrefix($0) }
     }
 
     /// True when `key` may be listed in `launch.settingsKeys`.
@@ -130,7 +135,7 @@ public struct CallerSettings: Sendable {
         object["env"] = env
         // Written by the tool, so a project or local settings file cannot switch hooks off for a
         // session this file launches.
-        object["disableAllHooks"] = false
+        object[Self.hooksKey] = false
         return try JSONSerialization.data(
             withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
     }

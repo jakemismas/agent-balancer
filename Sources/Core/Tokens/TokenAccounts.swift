@@ -21,9 +21,9 @@ public enum TokenAccounts {
     public struct Removed: Equatable, Sendable {
         public let tokenFile: Bool
         public let launchFiles: Int
-        /// Launch files kept as tombstones: a session record names them, their lease is open, or
-        /// the records could not be read cleanly. They hold no token and go once nothing needs
-        /// them.
+        /// Launch files kept: tombstones (a session record names them, their lease is open, or the
+        /// records could not be read cleanly) and files of another label's open pick, left as
+        /// written. They hold no token and go once nothing needs them.
         public let launchFilesKept: Int
         /// Entries among the label's launch files that the tool did not make, left alone.
         public let launchEntriesSkipped: Int
@@ -296,16 +296,26 @@ public enum TokenAccounts {
     /// the writer's leftover temporary files in the label's launch folder, a read-back that no
     /// launch file of the label holds a token, the writer's leftover temporary files in `tokens/`,
     /// the token file, the label's leases, the stored reading, and last `finish`, where the caller
-    /// deletes the registry entry while the lock is still held. A crash at any step leaves a state
-    /// that a rerun finishes. Works for an account of any kind. First, before anything is written
-    /// or deleted, the token file or a launch file of the label that the remove cannot check stops
-    /// it, since it may hold the token, and so does a token folder the folder checks refuse. Then
-    /// `before` runs, under the lock; when it throws, nothing is deleted. The launch files are
-    /// checked again at the read-back, and a token file still there after its delete, such as a
-    /// locked one, stops the remove before `finish`, so the account stays with it. Each of these
-    /// stops keeps the leases, so a rerun still keeps a recent pick's file as a tombstone.
-    /// `hasAccount` says, once `before` ran, whether the label has a registry entry, for the words
-    /// of a stop.
+    /// deletes the registry entry while the lock is still held. A launch file of another label's
+    /// open pick, such as one a renamed `login` account's pick left under its old label, is never
+    /// changed. A crash at any step leaves a state that a rerun finishes. Works for an account of
+    /// any kind. First, before anything is written or deleted, the token file or a launch file of
+    /// the label that the remove cannot check stops it, since it may hold the token, and so do a
+    /// token folder or a launch folder the folder checks refuse, a lease file that cannot be
+    /// read, and a launch file of another label's open pick that may hold a token: one without
+    /// the shape a pick writes or with the label's token in it, or any while the token file gives
+    /// no token to compare. Then, when the label has leases, a lease file the writer could not
+    /// save stops it, and that check may leave an empty file in `state/` that its text names.
+    /// Then `before` runs, under the lock; when it throws, nothing is deleted. The launch files
+    /// are checked again at the read-back, which stops on a file that could not be overwritten or
+    /// deleted and names the commands that let a rerun do so, and on a file of another label's
+    /// open pick that may hold a token by then, and a token file still there after its delete,
+    /// such as a locked one, stops the remove before `finish`, so the account stays with it.
+    /// Each of these stops keeps the leases, so a rerun still keeps a recent pick's file as a
+    /// tombstone. A lease save that fails after its check passed, such as on a full disk, stops
+    /// after the token file's delete, and its text says what was deleted and kept and to run the
+    /// remove again once the lease file can be saved. `hasAccount` says, once `before` ran,
+    /// whether the label has a registry entry, for the words of a stop.
     public static func removeFiles(
         context: ToolContext, label: String,
         leaseMinutes: Int = PickerSettings().leaseMinutes, snapshot: SessionsSnapshot? = nil,
@@ -318,27 +328,38 @@ public enum TokenAccounts {
             context: context, label: label, kept: .nothingDeleted)
         try LaunchFiles.requireCheckedForRemove(
             context: context, label: label, kept: .nothingDeleted)
-        try before()
+        // Before `before`, which may write, so these stops change nothing.
+        try LaunchFiles.requireOpenable(context: context, label: label)
         let now = Date()
         let leaseStore = LeaseStore(context: context)
         let leases = try leaseStore.current(now: now, leaseMinutes: 525_600)
         let span = Double(max(1, leaseMinutes)) * 60
+        let recent = leases.filter { now.timeIntervalSince($0.at) < span }
+        let others = Set(recent.filter { $0.label != label }.map(\.id))
+        try LaunchFiles.requireOthersAsWritten(
+            context: context, label: label, othersLeased: others, kept: .nothingDeleted)
+        let dropsLeases = leases.contains(where: { $0.label == label })
+        if dropsLeases { try leaseStore.requireSaveable() }
+        try before()
         // A recent pick's file is kept as a tombstone so its session can still start. A folder
         // account's files hold no token, so its remove drops them and the leases together.
-        let open =
-            keepsRecentPicks
-            ? Set(leases.filter { now.timeIntervalSince($0.at) < span }.map(\.id)) : []
+        let open = keepsRecentPicks ? Set(recent.map(\.id)) : []
         let launch = try LaunchFiles.removeAll(
             context: context, label: label,
-            snapshot: snapshot ?? SessionsReader.read(context: context), leased: open)
+            snapshot: snapshot ?? SessionsReader.read(context: context), leased: open,
+            othersLeased: others)
         let kept = Kept.after(
             tokenFile: TokenStore.isThere(context: context, label: label), account: hasAccount())
         // A tombstone written since may have taken an access list from its folder.
         try LaunchFiles.requireCheckedForRemove(context: context, label: label, kept: kept)
-        guard try LaunchFiles.filesHoldingAToken(context: context, label: label) == 0 else {
-            throw ToolError(
-                "A launch file of '\(Display.safe(label))' could not be cleared.\(kept.sentence) Run `agent-balancer remove \(label)` again."
-            )
+        // The first check's rule again, for a file another program changed since.
+        try LaunchFiles.requireOthersAsWritten(
+            context: context, label: label, othersLeased: others, kept: kept)
+        guard
+            try LaunchFiles.filesHoldingAToken(
+                context: context, label: label, othersLeased: others) == 0
+        else {
+            throw ToolError(LaunchFiles.notClearedForRemoveText(label: label, kept: kept))
         }
         let temporaries = try TokenStore.deleteWriterLeftovers(context: context)
         let token = try TokenStore.delete(context: context, label: label)
@@ -346,15 +367,37 @@ public enum TokenAccounts {
         try TokenStore.requireDeletedForRemove(
             context: context, label: label, account: hasAccount())
         // Only now, so a stop above keeps a recent pick's file a tombstone on the rerun.
-        if leases.contains(where: { $0.label == label }) {
-            try leaseStore.save(leases.filter { $0.label != label })
+        if dropsLeases {
+            do {
+                try leaseStore.save(leases.filter { $0.label != label })
+            } catch {
+                // The check above passed, so this failure comes after the token file's delete.
+                throw ToolError.adding(
+                    leasesNotSavedText(label: label, tokenFile: token, account: hasAccount()),
+                    to: error)
+            }
         }
         try ReadingStore(context: context).delete(label: label)
         try finish()
         return Removed(
-            tokenFile: token, launchFiles: launch.deleted, launchFilesKept: launch.tombstoned,
+            tokenFile: token, launchFiles: launch.deleted,
+            launchFilesKept: launch.tombstoned + launch.othersKept,
             launchEntriesSkipped: launch.skipped,
             temporariesLeft: temporaries + launch.temporariesLeft)
+    }
+
+    /// What `remove` adds to the error of a lease save that failed after its check passed: what
+    /// it deleted and kept by then, and to run it again once the lease file can be saved.
+    static func leasesNotSavedText(label: String, tokenFile: Bool, account: Bool) -> String {
+        let done: String
+        switch (tokenFile, account) {
+        case (true, true): done = "The token file was deleted and the account was kept. "
+        case (true, false): done = "The token file was deleted. "
+        case (false, true): done = "The account was kept. "
+        case (false, false): done = ""
+        }
+        return done
+            + "Once the lease file can be saved, run `agent-balancer remove \(label)` again to finish the remove."
     }
 
     /// `remove`: everything `removeFiles` deletes, then the registry entry of `label`, dropped from

@@ -140,7 +140,8 @@ import Testing
             good.range(of: #"[0-9a-f]{64}"#, options: .regularExpression).map { String(good[$0]) })
         try put(good.replacingOccurrences(of: hash, with: "not-a-hash"))
         refuses(service, t, code: .settingsChanged)
-        try put(good.replacingOccurrences(of: "\"schemaVersion\":1", with: "\"schemaVersion\":2"))
+        #expect(good.contains("\"schemaVersion\":2"))
+        try put(good.replacingOccurrences(of: "\"schemaVersion\":2", with: "\"schemaVersion\":1"))
         refuses(service, t, code: .settingsChanged)
         try put(good.replacingOccurrences(of: "\"readable\":true", with: "\"readable\":false"))
         refuses(service, t, code: .settingsChanged)
@@ -367,7 +368,9 @@ import Testing
     }
 
     @Test func printOnlyRefusesUnderAStoredLoginOrSettingsSourceNameButNotAHarmlessOne() throws {
-        for name in ProtectedEnv.storeNames + ProtectedEnv.settingsSourceNames {
+        for name in ProtectedEnv.storeNames + ProtectedEnv.settingsSourceNames + [
+            "CLAUDE_CODE_NEW_HOOKS_X"
+        ] {
             let (t, service) = try setUp(settings: hookBody, ambient: [name: "/x"])
             try installToken(t)
             refuses(service, t, printOnly: true)
@@ -375,11 +378,72 @@ import Testing
             // Starting the session drops the name from the child, so run itself goes ahead.
             _ = try service.prepareRun(label: "pool-a", arguments: [])
         }
-        for name in ["CLAUDE_CODE_SUBAGENT_MODEL", "ANTHROPIC_MODEL", "CLAUDE_CODE_ENTRYPOINT"] {
+        let harmless =
+            ["CLAUDE_CODE_SUBAGENT_MODEL", "ANTHROPIC_MODEL", "CLAUDE_CODE_ENTRYPOINT"]
+            + ChildEnvironmentTests.namesThatLeaveHooksOn + ["CLAUDE_CODE_NEW_NAME_X"]
+        for name in harmless {
             let (t, service) = try setUp(settings: hookBody, ambient: [name: "x"])
             _ = try service.prepareRun(label: "main", arguments: [], printOnly: true)
             withExtendedLifetime(t) {}
         }
+    }
+
+    /// The verdict a reader saves carries the rule of 4A.3 rule 6 for a settings `env` name.
+    @Test func aWordedNameInSettingsEnvReadByPickMakesRunRefuse() throws {
+        let notify = "CLAUDE_CODE_DISABLE_PERMISSION_PROMPT_NOTIFY_HOOKS"
+        let (t, service) = try setUp(settings: hookBody)
+        // The same hooks as recorded, so only the env name can make the run refuse.
+        try writeSettings(t, String(hookBody.dropLast()) + #","env":{"\#(notify)":"1"}}"#)
+        _ = try service.pick(PickRequest(dryRun: true))
+        refuses(service, t, code: .settingsChanged)
+        refuses(service, t, label: "pool-a", code: .settingsChanged)
+    }
+
+    /// A verdict an earlier release saved judged env names by exact name, so after the update
+    /// neither `run` nor `link <label>` may take it.
+    @Test func aVerdictOfTheEarlierSchemaNeverCarriesTheOldRule() throws {
+        let notify = "CLAUDE_CODE_DISABLE_PERMISSION_PROMPT_NOTIFY_HOOKS"
+        let (t, service) = try setUp(settings: #"{"env":{"\#(notify)":"1"}}"#)
+        let seen = t.context.dataRoot.appendingPathComponent("state/settings-seen.json")
+        let saved = try String(contentsOf: seen, encoding: .utf8)
+        #expect(saved.contains("\"schemaVersion\":2") && saved.contains("\"disableAllHooks\":true"))
+        refuses(service, t, code: .settingsChanged)
+        // What the earlier release saved for the same file: schema 1, hooks on.
+        let older = saved.replacingOccurrences(
+            of: "\"schemaVersion\":2", with: "\"schemaVersion\":1"
+        )
+        .replacingOccurrences(of: "\"disableAllHooks\":true", with: "\"disableAllHooks\":false")
+        try older.write(to: seen, atomically: true, encoding: .utf8)
+        let verdict = HookRecord(context: t.context).seenVerdict()
+        #expect(verdict.issue == Messages.settingsNotChecked)
+        refuses(service, t, code: .settingsChanged)
+        // The same file with no hooks-off name and its older verdict refuses as well.
+        let (u, other) = try setUp(settings: hookBody)
+        let url = u.context.dataRoot.appendingPathComponent("state/settings-seen.json")
+        let current = try String(contentsOf: url, encoding: .utf8)
+        try current.replacingOccurrences(of: "\"schemaVersion\":2", with: "\"schemaVersion\":1")
+            .write(to: url, atomically: true, encoding: .utf8)
+        refuses(other, u, code: .settingsChanged)
+    }
+
+    /// The printed line is typed as a literal, so it takes no control or non-display character.
+    @Test(arguments: ["a\nb", "a\tb", "a\u{1B}[0m", "a\u{202E}b", "line\r"])
+    func printOnlyRefusesAControlCharacterThatRunStillPasses(argument: String) throws {
+        let (t, service) = try setUp(settings: hookBody)
+        do {
+            _ = try service.prepareRun(label: "main", arguments: [argument], printOnly: true)
+            Issue.record("the line was printed")
+        } catch let error as ToolError {
+            #expect(error.message.contains("non-display character"))
+            #expect(!error.message.contains(argument))
+        }
+        refuses(service, t, arguments: ["-p", argument], printOnly: true)
+        let launch = try service.prepareRun(label: "main", arguments: ["-p", argument])
+        #expect(launch.arguments.suffix(2) == ["-p", argument])
+        let printed = try service.prepareRun(
+            label: "main", arguments: ["-p", "plain text", "it's"], printOnly: true)
+        #expect(printed.line.hasSuffix(" -p 'plain text' 'it'\\''s'"))
+        #expect(!printed.line.contains("$'"))
     }
 
     @Test func aStoredKeyNameRefusesRunButAHarmlessNameDoesNot() throws {

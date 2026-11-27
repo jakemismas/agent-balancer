@@ -59,16 +59,25 @@ public enum ProtectedEnv {
         "CLAUDE_CODE_MOCK_REMOTE_SETTINGS",
     ]
 
+    /// Names with a hooks-off word that claude 2.1.332 reads for something that leaves hooks on.
+    public static let hooksStayOnNames: Set<String> = [
+        "CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS", "CLAUDE_CODE_RESUME_SESSIONSTART_HOOKS_WAIT_MS",
+        "CLAUDE_CODE_HOOKS_SAME_THREAD", "CLAUDE_CODE_ENABLE_FUNCTION_HOOKS",
+        "CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT", "CLAUDE_CODE_FLEETVIEW_SIMPLE",
+    ]
+
     /// Words as well as names, so a hooks-off name that a later version adds is still refused.
     public static func mayDisableHooks(_ name: String) -> Bool {
-        guard name.hasPrefix(codePrefix), name != childSessionVariable else { return false }
+        guard name.hasPrefix(codePrefix), name != childSessionVariable,
+            !hooksStayOnNames.contains(name)
+        else { return false }
         return switchesHooksOff(name)
             || ["SIMPLE", "SAFE", "RESTRICT", "HOOKS"].contains {
                 name.contains($0)
             }
     }
 
-    /// Exact names only, so a timing knob whose name holds one of the words blocks no pick.
+    /// The listed hooks-off names and settings sources, without the words.
     public static func switchesHooksOff(_ name: String) -> Bool {
         behaviorNames.contains(name) || settingsSourceNames.contains(name)
     }
@@ -82,6 +91,23 @@ public enum ProtectedEnv {
                 "CLAUDE_CODE_USE_FOUNDRY", "CLAUDE_CODE_USE_MANTLE",
             ] + storeNames + behaviorNames + settingsSourceNames + ["CLAUDE_JOB_DIR", "CLAUDE_PID"]
     }
+
+    /// `CLAUDE_` families outside the protected group that a launch file's `env` never takes, by
+    /// the rule of `launchRefusedNames`.
+    public static let launchRefusedPrefixes = [
+        "CLAUDE_PTY_", "CLAUDE_SSH_", "CLAUDE_PLUGIN_", "CLAUDE_REMOTE_WORKFLOW_",
+        "CLAUDE_GATEWAY_", "CLAUDE_CHROME_", "CLAUDE_COWORK_", "CLAUDE_INTERNAL_",
+    ]
+
+    /// Names claude 2.1.332 holds to load code, start a program, open a path, change permissions,
+    /// route requests, join another session or bill a project, or whose use was not found.
+    public static let launchRefusedNames: Set<String> = [
+        "CLAUDE_DEV_MODS_DIR", "CLAUDE_PROJECT_DIR", "CLAUDE_SKILL_DIR", "CLAUDE_TMPDIR",
+        "CLAUDE_STAGE_FILE_ROOT", "CLAUDE_CLIENT_PRESENCE_FILE", "CLAUDE_RELAUNCH_SESSION_ADD_DIRS",
+        "CLAUDE_MEMORY_STORES", "CLAUDE_ARTIFACT_HOST_GRANT", "CLAUDE_PROJECT_UUID",
+        "CLAUDE_WORKFLOW_NAME_ONLY", "CLAUDE_SNIP", "CLAUDE_SERVE_DRAIN_TIMEOUT_MS",
+        "CLAUDE_AGENTS_AUTO_RELAUNCHED_AT", "CLAUDE_MOD_MADE", "CLAUDE_SCRIPT_HOOK_ACK",
+    ]
 
     /// The two key and token names, besides the Claude Code token, that a settings file may carry.
     public static let keyNames = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"]
